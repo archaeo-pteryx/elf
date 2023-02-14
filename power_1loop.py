@@ -79,7 +79,11 @@ class PowerSpectrum1loop:
     def compute_matrix(self, names=[]):
         # precompute the PT matrices for appropriate FFT settings.
         for name in names:
-            name_dec = utils_loop.kernel_to_decomp_dict[name]
+            if name in utils_loop.kernel_to_decomp_dict.keys():
+                name_dec = utils_loop.kernel_to_decomp_dict[name]
+            else:
+                name_dec = ['plin nu=-1.6','plin nu=-1.6']
+
             if '22' in name or 'I' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
@@ -249,26 +253,6 @@ class PowerSpectrum1loop:
         # pk = Dgrowth**4 * pk
         return pk
 
-    def get_pk_rsd_1loop_data(self, name):
-        if '22' in name or 'I' in name:
-            kn = self.decomp['plin nu=-1.6'].kn
-            p1_q = self.decomp['plin nu=-1.6'].func_q
-            p2_q = self.decomp['plin nu=-1.6'].func_q
-            pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
-        elif '13' in name or 'F' in name:
-            kn = self.decomp['plin nu=-1.6'].kn
-            p1_q = self.decomp['plin nu=-1.6'].func_q
-            p13_int = np.dot(self.matrix[name], p1_q).real
-            if name == '13':
-                p13_int += self.alpha['UV13'] / kn
-            if name == 'F_G2_LPNG':
-                pk_data = kn**3 * self.get_pk_lin(kn) / self.get_M(kn) * p13_int
-            else:
-                pk_data = kn**3 * self.get_pk_lin(kn) * p13_int
-        else:
-            raise KeyError('PT kernel name is invalid.')
-        return kn, pk_data
-
     def get_pkmu_gg_lin(self, k, mu):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
@@ -306,6 +290,26 @@ class PowerSpectrum1loop:
         pk_lin = self.get_pk_lin(k)
         return b1**2 * kaiser[int(l/2)] * pk_lin
 
+    def get_pk_rsd_1loop_data(self, name):
+        if '22' in name or 'I' in name:
+            kn = self.decomp['plin nu=-1.6'].kn
+            p1_q = self.decomp['plin nu=-1.6'].func_q
+            p2_q = self.decomp['plin nu=-1.6'].func_q
+            pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
+        elif '13' in name or 'F' in name:
+            kn = self.decomp['plin nu=-1.6'].kn
+            p1_q = self.decomp['plin nu=-1.6'].func_q
+            p13_int = np.dot(self.matrix[name], p1_q).real
+            if name == '13':
+                p13_int += self.alpha['UV13'] / kn
+            if name == 'F_G2_LPNG':
+                pk_data = kn**3 * self.get_pk_lin(kn) / self.get_M(kn) * p13_int
+            else:
+                pk_data = kn**3 * self.get_pk_lin(kn) * p13_int
+        else:
+            raise KeyError('PT kernel name is invalid.')
+        return kn, pk_data
+
     def get_pkmu_gg_1loop(self, k, mu):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
@@ -325,5 +329,14 @@ class PowerSpectrum1loop:
 
         pkmu_data = np.sum(pkmu_tab, axis=0)
         pkmu_interp = rbs(kn, mu, pkmu_data)
-        pkmu_data = pkmu_interp(k,mu)
+        pkmu = pkmu_interp(k, mu)
         return pkmu
+
+    def get_pl_gg_1loop(self, l, k):
+        k = np.atleast_1d(k)
+        mu = np.linspace(0.,1.,2**8+1)
+        dmu = mu[1]-mu[0]
+        pkmu = self.get_pkmu_gg_1loop(k,mu)
+        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pl
