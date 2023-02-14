@@ -22,14 +22,14 @@ class PowerSpectrum1loop:
         self.params = None
         if config_fft == None:
             config_fft = {
-                'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'plin nu=-0.3 (LO IR-res)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'plin nu=-1.6 (LO IR-res)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'p1phi nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
-                'M nu=0.2': {'nu':0.2, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
+                'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-0.3 (LO IR-res)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-1.6 (LO IR-res)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'p1phi nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'M nu=0.2': {'nu':0.2, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
             }
         self.config_fft = config_fft
         self.set_power_law_decomp(config_fft)
@@ -334,7 +334,7 @@ class PowerSpectrum1loop:
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
 
-    def get_pkmu_gg_irres(self, k, mu, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
+    def get_pkmu_gg_irres(self, k, mu, mode='full', Sigma2=None, dSigma2=None, ks=0.2):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
@@ -377,7 +377,7 @@ class PowerSpectrum1loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pl_gg_irres(self, l, k, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
+    def get_pl_gg_irres(self, l, k, mode='full', Sigma2=None, dSigma2=None, ks=0.2):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
