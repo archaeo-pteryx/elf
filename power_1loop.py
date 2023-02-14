@@ -24,6 +24,10 @@ class PowerSpectrum1loop:
             config_fft = {
                 'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
                 'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
+                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
+                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
+                'plin nu=-0.3 (LO IR-res)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
+                'plin nu=-1.6 (LO IR-res)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
                 'p1phi nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
                 'M nu=0.2': {'nu':0.2, 'kmin':1e-6, 'kmax':1e+4, 'nmax':512},
             }
@@ -101,8 +105,12 @@ class PowerSpectrum1loop:
         if irres:
             self.irres = IRResum(self.get_pk_lin, rbao=110, kmin=7e-5, kmax=7, n_min=175, n_max=275, kwarg={'z':z})
             Sigma2_ref = self.irres.get_Sigma2(ks=0.2)
-            self.decomp['plin nu=-0.3'].compute(self.get_pk_mm_irres, kwarg={'Sigma2': Sigma2_ref})
-            self.decomp['plin nu=-1.6'].compute(self.get_pk_mm_irres, kwarg={'Sigma2': Sigma2_ref})
+            self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
+            self.decomp['plin nu=-1.6'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
+            self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
+            self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
+            self.decomp['plin nu=-0.3 (LO IR-res)'].compute(self.get_pk_mm_irres, kwarg={'Sigma2': Sigma2_ref})
+            self.decomp['plin nu=-1.6 (LO IR-res)'].compute(self.get_pk_mm_irres, kwarg={'Sigma2': Sigma2_ref})
             self.decomp['p1phi nu=-1.6'].compute(self.get_pk_1phi, kwarg={'z':z, 'khigh':khigh})
             self.decomp['M nu=0.2'].compute(self.get_M, kwarg={'z':z})
         else:
@@ -183,8 +191,11 @@ class PowerSpectrum1loop:
         res = quad(lambda k: self.get_pk_lin(k, khigh=khigh) * k**alpha, kmin, kmax, limit=limit)
         return res[0] / (2*np.pi)**2
 
-    def get_pk_1loop_data(self, name='22', sub_k0=False):
+    def get_pk_1loop_data(self, name='22', sub_k0=False, mode='full'):
         name_dec = utils_loop.kernel_to_decomp_dict[name]
+        if mode != 'full':
+            for i in range(len(name_dec)):
+                if 'plin' in name_dec[i]: name_dec[i] += ' (%s)' % (mode)
 
         if '22' in name or 'I' in name:
             kn = self.decomp[name_dec[0]].kn
@@ -263,46 +274,23 @@ class PowerSpectrum1loop:
         pk_lin = self.get_pk_lin(k)
         return b1**2 * kaiser[int(l/2)] * pk_lin
 
-    def get_pkmu_mm_irres(self, k, mu, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+    def get_pk_rsd_1loop_data(self, name, mode='full'):
 
-        plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
-        plin_w = plin - plin_nw
-        if Sigma2 == None:
-            Sigma2 = self.irres.get_Sigma2(ks=ks)
-        if dSigma2 == None:
-            dSigma2 = self.irres.get_dSigma2(ks=ks)
-
-        fgrowth = self.fgrowth
-        Sigma2_1 = (1+mu**2*fgrowth*(2+fgrowth)) * Sigma2
-        Sigma2_2 = fgrowth**2*mu**2*(mu**2-1) * dSigma2
-        Sigma2_tot = Sigma2_1 + Sigma2_2
-
-        Z1 = b1 + fgrowth * mu**2
-        Z1_tile = np.tile(Z1, (len(k), 1))
-        plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-        plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-        damping = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
-        if mode == 'LO':
-            pkmu = Z1_tile**2 * (plin_nw_tile + np.exp(-damping) * plin_w_tile)
-        elif mode == 'tree':
-            pkmu = Z1_tile**2 * plin_nw_tile + np.exp(-damping) * plin_w_tile * (1 + damping)
-
-        if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
-        return pkmu
-
-    def get_pk_rsd_1loop_data(self, name, ):
         if '22' in name or 'I' in name:
-            kn = self.decomp['plin nu=-1.6'].kn
-            p1_q = self.decomp['plin nu=-1.6'].func_q
-            p2_q = self.decomp['plin nu=-1.6'].func_q
+            name_dec = 'plin nu=-1.6'
+            if mode != 'full':
+                name_dec += ' (%s)' % (mode)
+            kn = self.decomp[name_dec].kn
+            p1_q = self.decomp[name_dec].func_q
+            p2_q = self.decomp[name_dec].func_q
             pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
+
         elif '13' in name or 'F' in name:
-            kn = self.decomp['plin nu=-1.6'].kn
-            p1_q = self.decomp['plin nu=-1.6'].func_q
+            name_dec = 'plin nu=-1.6'
+            if mode != 'full':
+                name_dec += ' (%s)' % (mode)
+            kn = self.decomp[name_dec].kn
+            p1_q = self.decomp[name_dec].func_q
             p13_int = np.dot(self.matrix[name], p1_q).real
             if name == '13':
                 p13_int += self.alpha['UV13'] / kn
@@ -310,11 +298,12 @@ class PowerSpectrum1loop:
                 pk_data = kn**3 * self.get_pk_lin(kn) / self.get_M(kn) * p13_int
             else:
                 pk_data = kn**3 * self.get_pk_lin(kn) * p13_int
+
         else:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
-    def get_pkmu_gg_1loop(self, k, mu):
+    def get_pkmu_gg_1loop(self, k, mu, mode='full'):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
@@ -325,7 +314,7 @@ class PowerSpectrum1loop:
 
             bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
             fac = bias_fac * self.fgrowth**nf
-            kn, pk_data = self.get_pk_rsd_1loop_data(name)
+            kn, pk_data = self.get_pk_rsd_1loop_data(name, mode=mode)
 
             pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
@@ -341,6 +330,58 @@ class PowerSpectrum1loop:
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
         pkmu = self.get_pkmu_gg_1loop(k,mu)
+        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pl
+
+    def get_pkmu_gg_irres(self, k, mu, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+
+        plin = self.get_pk_lin(k)
+        plin_nw = self.irres.get_pk_nw(k)
+        plin_w = plin - plin_nw
+        if Sigma2 == None:
+            Sigma2 = self.irres.get_Sigma2(ks=ks)
+        if dSigma2 == None:
+            dSigma2 = self.irres.get_dSigma2(ks=ks)
+
+        b1 = self.bias['b1']
+        fgrowth = self.fgrowth
+
+        Sigma2_1 = (1+mu**2*fgrowth*(2+fgrowth)) * Sigma2
+        Sigma2_2 = fgrowth**2*mu**2*(mu**2-1) * dSigma2
+        Sigma2_tot = Sigma2_1 + Sigma2_2
+
+        Z1 = b1 + fgrowth * mu**2
+        Z1_tile = np.tile(Z1, (len(k), 1))
+        plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
+        plin_w_tile = np.tile(plin_w, (len(mu),1)).T
+        damping = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+
+        if mode == 'LO':
+            pkmu = Z1_tile**2 * (plin_nw_tile + np.exp(-damping) * plin_w_tile)
+        elif mode == 'tree':
+            pkmu = Z1_tile**2 * (plin_nw_tile + np.exp(-damping) * plin_w_tile * (1 + damping))
+        elif mode == '1loop no-wiggle':
+            pkmu = self.get_pkmu_gg_1loop(k, mu, mode='no-wiggle')
+        elif mode == '1loop wiggle':
+            pkmu = self.get_pkmu_gg_1loop(k, mu) - self.get_pkmu_gg_1loop(k, mu, mode='no-wiggle')
+        elif mode == 'full':
+            pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu_1loop_w = self.get_pkmu_gg_1loop(k, mu) - pkmu_1loop_nw
+            pkmu = pkmu_tree + pkmu_1loop_nw + np.exp(-damping) * pkmu_1loop_w
+
+        if len(k) == 1 or len(mu) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+
+    def get_pl_gg_irres(self, l, k, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
+        k = np.atleast_1d(k)
+        mu = np.linspace(0.,1.,2**8+1)
+        dmu = mu[1]-mu[0]
+        pkmu = self.get_pkmu_gg_irres(k, mu, mode=mode, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
