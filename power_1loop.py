@@ -160,33 +160,6 @@ class PowerSpectrum1loop:
             pk = plin_nw + np.exp(-k**2 * Sigma2) * plin_w * (1 + k**2 * Sigma2)
         return pk
 
-    def get_pkmu_mm_irres(self, k, mu, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
-
-        plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
-        plin_w = plin - plin_nw
-        if Sigma2 == None:
-            Sigma2 = self.irres.get_Sigma2(ks=ks)
-
-        fgrowth = self.fgrowth
-        Sigma2_1 = (1+mu**2*fgrowth*(2+fgrowth)) * Sigma2
-        Sigma2_2 = fgrowth**2*mu**2*(mu**2-1) * dSigma2
-        Sigma2_tot = Sigma2_1 + Sigma2_2
-
-        if mode == 'LO':
-            kaiser = (b1 + fgrowth * mu**2)**2
-            kaiser_tile = np.tile(kaiser, (len(k), 1))
-            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.exp(-np.kron(k**2, Sigma2_tot)).reshape(len(k),len(mu))
-            pkmu = kaiser_tile * (plin_nw_tile + damp_fac * plin_w_tile)
-
-        if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
-        return pkmu
-
     def get_M(self, k, z=0):
         h = self.params['h']
         Omega_m0 = self.params['Omega_m0']
@@ -290,7 +263,38 @@ class PowerSpectrum1loop:
         pk_lin = self.get_pk_lin(k)
         return b1**2 * kaiser[int(l/2)] * pk_lin
 
-    def get_pk_rsd_1loop_data(self, name):
+    def get_pkmu_mm_irres(self, k, mu, mode='LO', Sigma2=None, dSigma2=None, ks=0.2):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+
+        plin = self.get_pk_lin(k)
+        plin_nw = self.irres.get_pk_nw(k)
+        plin_w = plin - plin_nw
+        if Sigma2 == None:
+            Sigma2 = self.irres.get_Sigma2(ks=ks)
+        if dSigma2 == None:
+            dSigma2 = self.irres.get_dSigma2(ks=ks)
+
+        fgrowth = self.fgrowth
+        Sigma2_1 = (1+mu**2*fgrowth*(2+fgrowth)) * Sigma2
+        Sigma2_2 = fgrowth**2*mu**2*(mu**2-1) * dSigma2
+        Sigma2_tot = Sigma2_1 + Sigma2_2
+
+        Z1 = b1 + fgrowth * mu**2
+        Z1_tile = np.tile(Z1, (len(k), 1))
+        plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
+        plin_w_tile = np.tile(plin_w, (len(mu),1)).T
+        damping = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+        if mode == 'LO':
+            pkmu = Z1_tile**2 * (plin_nw_tile + np.exp(-damping) * plin_w_tile)
+        elif mode == 'tree':
+            pkmu = Z1_tile**2 * plin_nw_tile + np.exp(-damping) * plin_w_tile * (1 + damping)
+
+        if len(k) == 1 or len(mu) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+
+    def get_pk_rsd_1loop_data(self, name, ):
         if '22' in name or 'I' in name:
             kn = self.decomp['plin nu=-1.6'].kn
             p1_q = self.decomp['plin nu=-1.6'].func_q
