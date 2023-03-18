@@ -19,7 +19,13 @@ kernel_to_decomp_dict = {
     'I_G2_LPNG': ['p1phi nu=-1.6','plin nu=-0.3'],
     'I_d2_phi-d': ['p1phi nu=-1.6','plin nu=-1.6'],
     'I_G2_phi-d': ['p1phi nu=-1.6','plin nu=-0.3'],
-    'F_G2_LPNG': ['plin nu=-1.6']
+    'F_G2_LPNG': ['plin nu=-1.6'],
+    # redshift space
+    '22_rsd': ['plin nu=-1.6','plin nu=-1.6'],
+    '13_rsd': ['plin nu=-1.6'],
+    # redshift space & local PNG
+    '22_rsd_lpng': ['plin nu=-1.6', 'p1phi nu=-1.6'],
+    '13_rsd_lpng': ['p1phi nu=-1.6']
 }
 
 kernel_name_dict = {
@@ -46,7 +52,8 @@ kernel_name_dict = {
 }
 
 def get_deg_info(name):
-    str_list = re.split('_', name)[2:]
+    deg_name = re.split('=', name)[-1]
+    str_list = re.split('_', deg_name)
     deg_dict = {}
     for s in str_list:
         string = re.split('-', s)
