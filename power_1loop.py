@@ -34,12 +34,12 @@ class PowerSpectrum1loop:
 
         self.name_pkmu_gg_terms = {}
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M22_*.txt')
-        self.name_pkmu_gg_terms['22'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
+        self.name_pkmu_gg_terms['22_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M13_*.txt')
-        self.name_pkmu_gg_terms['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        self.name_pkmu_gg_terms['tot'] = self.name_pkmu_gg_terms['22'] + self.name_pkmu_gg_terms['13']
+        self.name_pkmu_gg_terms['13_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
+        self.name_pkmu_gg_terms['tot'] = self.name_pkmu_gg_terms['22_gg'] + self.name_pkmu_gg_terms['13_gg']
 
-    def set_camb(self, cparam, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+5):
+    def set_camb(self, cparam, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7):
         self.cosmo = CambWrapper(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0)
         self.params = self.cosmo.params
         self.cosmo.set_matter_power(z=0.)
@@ -71,15 +71,13 @@ class PowerSpectrum1loop:
 
     def set_matrix(self, names=[]):
         for name in names:
-            dirname = 'redshift_space' if 'rsd' in name else 'real_space'
-            if '22' in name or 'I' in name:
-                matfile = os.path.dirname(__file__)+'/pt_matrix/%s/gauss/%s.txt' % (dirname, name)
+            matfile = glob.glob(os.path.dirname(__file__)+'/pt_matrix/*/*/%s.txt' % (name))[0]
+            if '22' in name or 'I' in name or '12' in name:
                 self.mat[name] = pt_matrix.PTMatrix22(matfile)
             elif '13' in name or 'F' in name:
-                matfile = os.path.dirname(__file__)+'/pt_matrix/%s/gauss/%s.txt' % (dirname, name)
                 self.mat[name] = pt_matrix.PTMatrix13(matfile)
             else:
-                raise KeyError('PT kernel name is invalid.')
+                raise KeyError('PT kernel name %s is invalid.' % (name))
 
     def compute_matrix(self, names=[]):
         # precompute the PT matrices for appropriate FFT settings.
@@ -87,9 +85,14 @@ class PowerSpectrum1loop:
             if name in utils_loop.kernel_to_decomp_dict.keys():
                 name_dec = utils_loop.kernel_to_decomp_dict[name]
             else:
-                name_dec = ['plin nu=-1.6','plin nu=-1.6']
+                species_list = list(self.name_pkmu_gg_terms.keys())
+                species_list.remove('tot')
+                for species in species_list:
+                    if name in self.name_pkmu_gg_terms[species]:
+                        name_dec = utils_loop.kernel_to_decomp_dict[species]
+                        break
 
-            if '22' in name or 'I' in name:
+            if '22' in name or 'I' in name or '12' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
                 nu_m1, nu_m2 = np.meshgrid(nu_m1, nu_m2)
@@ -97,8 +100,10 @@ class PowerSpectrum1loop:
             elif '13' in name or 'F' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 self.matrix[name] = self.mat[name](nu_m1)
+            else:
+                raise KeyError('PT kernel name %s is invalid.' % (name))
 
-    def set_cosmology(self, cparam, z=0, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+5, khigh=40.):
+    def set_cosmology(self, cparam, z=0, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7, khigh=40.):
         # run CAMB
         self.set_camb(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(z, mode='z')
@@ -108,7 +113,7 @@ class PowerSpectrum1loop:
         self.decomp['plin nu=-1.6'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, rbao=110, kmin=7e-5, kmax=7, n_min=175, n_max=275, kwarg={'z':z})
+        self.irres = IRResum(self.get_pk_lin, self.params['h'], rbao=110, kmin=7e-5, kmax=7, n_min=120, n_max=240, kwarg={'z':z})
         Sigma2_ref = self.irres.get_Sigma2(ks=0.2)
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -116,14 +121,14 @@ class PowerSpectrum1loop:
         self.decomp['plin nu=-1.6 (LO IR-res)'].compute(self.get_pk_mm_irres, kwarg={'Sigma2': Sigma2_ref})
 
         # compute IR and UV parts of P13 and P22
-        plin_int = self.get_pk_lin_int(khigh=khigh, kmin=1e-7, kmax=1e7, limit=1000)
-        plin_int2 = self.get_pk_lin_int2(khigh=khigh, kmin=1e-7, kmax=1e7, limit=1000)
+        self.plin_int = self.get_pk_lin_int(khigh=khigh, kmin=1e-7, kmax=1e+7, limit=1000)
+        self.plin_int2 = self.get_pk_lin_int2(khigh=khigh, kmin=1e-7, kmax=1e+7, limit=1000)
         self.alpha = {}
-        self.alpha['UV13'] = -(122/315) * plin_int
-        self.alpha['IR13'] = -(2/3) * plin_int
-        self.alpha['UV22'] = (9/49) * plin_int2
-        self.alpha['IR22'] = (2/3) * plin_int
-        self.sigma2_v = plin_int / 3
+        self.alpha['UV13'] = -(122/315) * self.plin_int
+        self.alpha['IR13'] = -(2/3) * self.plin_int
+        self.alpha['UV22'] = (9/49) * self.plin_int2
+        self.alpha['IR22'] = (2/3) * self.plin_int
+        self.sigma2_v = self.plin_int / 3
 
     def set_bias(self, bias={}):
         self.bias = bias
@@ -133,7 +138,7 @@ class PowerSpectrum1loop:
         As = self.params['As']
         ns = self.params['ns']
         k_pivot = self.params['k_pivot']
-        pk_prim = As * (kh/k_pivot)**(ns-1)
+        pk_prim = As * (kh / k_pivot)**(ns-1)
         return pk_prim
 
     def get_pk_lin(self, k, z=0, khigh=None): # in unit of [h^{-3} Mpc^3]
@@ -155,11 +160,11 @@ class PowerSpectrum1loop:
 
     def get_pk_lin_int(self, khigh=None, kmin=1e-7, kmax=1e7, limit=1000):
         res = quad(lambda logk: self.get_pk_lin(np.exp(logk), khigh=khigh) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit)
-        return res[0] / (2*np.pi)**2
+        return res[0] / (2*np.pi**2)
 
     def get_pk_lin_int2(self, khigh=None, kmin=1e-7, kmax=1e7, limit=1000):
         res = quad(lambda logk: self.get_pk_lin(np.exp(logk), khigh=khigh)**2 / np.exp(logk), np.log(kmin), np.log(kmax), limit=limit)
-        return res[0] / (2*np.pi)**2
+        return res[0] / (2*np.pi**2)
 
     def get_pk_mm_irres(self, k, mode='LO', Sigma2=None, ks=0.2):
         plin = self.get_pk_lin(k)
@@ -173,7 +178,7 @@ class PowerSpectrum1loop:
             pk = plin_nw + np.exp(-k**2 * Sigma2) * plin_w * (1 + k**2 * Sigma2)
         return pk
 
-    def get_pk_1loop_data(self, name='22', sub_k0=True, mode='full'):
+    def get_pk_1loop_data(self, name, sub_k0=True, mode='full'):
         name_dec = utils_loop.kernel_to_decomp_dict[name]
         if mode != 'full':
             for i in range(len(name_dec)):
@@ -194,11 +199,12 @@ class PowerSpectrum1loop:
         elif '13' in name or 'F' in name:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
+            p2_k = self.decomp[name_dec[1]].func_rec.real
             p13_int = np.dot(self.matrix[name], p1_q).real
             if name == '13':
                 p13_int += self.alpha['UV13'] / kn
-            pk_data = kn**3 * self.get_pk_lin(kn) * p13_int
-            
+            pk_data = kn**3 * p2_k * p13_int
+
         else:
             raise KeyError('PT kernel name is invalid.')
 
@@ -287,39 +293,63 @@ class PowerSpectrum1loop:
         pk_lin = self.get_pk_lin(k)
         return b1**2 * kaiser[int(l/2)] * pk_lin
 
-    def get_pk_rsd_1loop_data(self, name, sub_k0=True, mode='full'):
+    def get_pkmu_13_UV(self, k, mu):
+        Z1_g = self.bias['b1'] + self.fgrowth * mu**2
 
-        if '22' in name or 'I' in name:
-            name_dec = 'plin nu=-1.6'
+        Z3_g_UV = - 61./315. * self.bias['b1'] - 64./21. * self.bias['bG2'] - 128./105. * self.bias['bGamma3']
+        Z3_g_UV += (- 3./5. + 2./105. * self.bias['b1']) * self.fgrowth * mu**2
+        Z3_g_UV += (- 16./35. - 1./3. * self.bias['b1']) * self.fgrowth**2 * mu**2
+        Z3_g_UV += (- 46./105.) * self.fgrowth**2 * mu**4
+        Z3_g_UV += (- 1./3.) * self.fgrowth**3 * mu**4
+        
+        pk_lin = self.get_pk_lin(k)
+        pkmu_13 = np.kron(k**2 * pk_lin * self.plin_int, Z1_g * Z3_g_UV).reshape(len(k),len(mu))
+        
+        return pkmu_13
+
+    def get_pk_rsd_1loop_data(self, name, sub_k0=True, mode='full'):
+        if '22' in name:
+            name_dec = utils_loop.kernel_to_decomp_dict['22_gg']
             if mode != 'full':
-                name_dec += ' (%s)' % (mode)
-            kn = self.decomp[name_dec].kn
-            p1_q = self.decomp[name_dec].func_q
-            p2_q = self.decomp[name_dec].func_q
+                for i in range(len(name_dec)):
+                    if 'plin' in name_dec[i]: name_dec[i] += ' (%s)' % (mode)
+
+            kn = self.decomp[name_dec[0]].kn
+            p1_q = self.decomp[name_dec[0]].func_q
+            p2_q = self.decomp[name_dec[1]].func_q
             pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
             if sub_k0:
-                kmin = self.decomp[name_dec].kmin
-                p1_k0 = self.decomp[name_dec].func_k0
-                p2_k0 = self.decomp[name_dec].func_k0
+                kmin = self.decomp[name_dec[0]].kmin
+                p1_k0 = self.decomp[name_dec[0]].func_k0
+                p2_k0 = self.decomp[name_dec[1]].func_k0
                 pk_data_k0 = kmin**3 * np.dot(p1_k0, np.dot(self.matrix[name], p2_k0)).real
                 pk_data = pk_data - pk_data_k0
 
-        elif '13' in name or 'F' in name:
-            name_dec = 'plin nu=-1.6'
+        elif '13' in name:
+            name_dec = utils_loop.kernel_to_decomp_dict['13_gg']
             if mode != 'full':
-                name_dec += ' (%s)' % (mode)
-            kn = self.decomp[name_dec].kn
-            p1_q = self.decomp[name_dec].func_q
+                for i in range(len(name_dec)):
+                    if 'plin' in name_dec[i]: name_dec[i] += ' (%s)' % (mode)
+
+            kn = self.decomp[name_dec[0]].kn
+            p1_q = self.decomp[name_dec[0]].func_q
+            p2_q = self.decomp[name_dec[1]].func_rec.real
             p13_int = np.dot(self.matrix[name], p1_q).real
-            pk_data = kn**3 * self.get_pk_lin(kn) * p13_int
+            pk_data = kn**3 * p2_q * p13_int
 
         else:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
-    def get_pkmu_gg_1loop_raw(self, k, mu, name='22', mode='full'):
+    def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
+
+        if name == 'tot':
+            pkmu_22 = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg', mode=mode)
+            pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
+            pkmu = pkmu_22 + pkmu_13
+            return pkmu
 
         term_names = self.name_pkmu_gg_terms[name]
         pkmu_tab = []
@@ -334,8 +364,18 @@ class PowerSpectrum1loop:
             pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
         pkmu_tab = np.array(pkmu_tab)
-
         pkmu_data = np.sum(pkmu_tab, axis=0)
+
+        if name == '13_gg':
+            fgrowth = self.fgrowth
+            b1 = self.bias['b1']
+            Z1_g = b1 + fgrowth * mu**2
+            Z1_g = np.tile(Z1_g, (len(kn), 1))
+            pkmu_data = Z1_g * pkmu_data
+
+            pkmu_UV = self.get_pkmu_13_UV(kn, mu)
+            pkmu_data += pkmu_UV
+
         if len(mu) == 1:
             pkmu_interp = ius(kn, np.ravel(pkmu_data))
             pkmu = pkmu_interp(k)
@@ -343,18 +383,9 @@ class PowerSpectrum1loop:
             pkmu_interp = rbs(kn, mu, pkmu_data)
             pkmu = pkmu_interp(k, mu)
 
-        if name == '13':
-            fgrowth = self.fgrowth
-            b1 = self.bias['b1']
-            Z1_g = b1 + fgrowth * mu**2
-            Z1_g = np.tile(Z1_g, (len(k), 1))
-            if len(mu) == 1:
-                Z1_g = np.ravel(Z1_g)
-            pkmu = Z1_g * pkmu
-
         return pkmu
 
-    def get_pl_gg_1loop_raw(self, l, k, name='22', mode='full'):
+    def get_pl_gg_1loop_raw(self, l, k, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
@@ -388,6 +419,12 @@ class PowerSpectrum1loop:
         plin_w_tile = np.tile(plin_w, (len(mu),1)).T
         damping = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
 
+        if len(k) == 1 or len(mu) == 1:
+            Z1_tile = np.ravel(Z1_tile)
+            damping = np.ravel(damping)
+            plin_nw_tile = np.ravel(plin_nw_tile)
+            plin_w_tile = np.ravel(plin_w_tile)
+
         if mode == 'LO':
             pkmu = Z1_tile**2 * (plin_nw_tile + np.exp(-damping) * plin_w_tile)
         elif mode == 'tree':
@@ -409,3 +446,12 @@ class PowerSpectrum1loop:
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
+
+    def get_pl_gg_irres(self, l, k, mode='full', Sigma2=None, dSigma2=None, ks=0.2):
+        k = np.atleast_1d(k)
+        mu = np.linspace(0.,1.,2**8+1)
+        dmu = mu[1]-mu[0]
+        pkmu = self.get_pkmu_gg_irres(k, mu, mode=mode, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pl
