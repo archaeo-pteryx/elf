@@ -5,12 +5,12 @@ from scipy.integrate import quad, romb
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
-import fftlog
 from camb_wrapper import CambWrapper
 
 from power_law_decomp import PowerLawDecomp
 import pt_matrix
 import utils_loop
+from utils_loop import get_log_extrap
 from ir_resum import IRResum
 
 
@@ -21,11 +21,12 @@ class PowerSpectrum1loop:
         if config_fft == None:
             config_fft = {
                 'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-0.7': {'nu':-0.7, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
                 'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
                 'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
                 'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
                 'plin nu=-0.3 (LO IR-res)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-1.6 (LO IR-res)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256}
+                'plin nu=-1.6 (LO IR-res)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
             }
         self.config_fft = config_fft
         self.set_power_law_decomp(config_fft)
@@ -47,14 +48,8 @@ class PowerSpectrum1loop:
         k, Tk = self.cosmo.get_matter_transfer_data()
         Tk[1] = Tk[0]
         self.Tk_lowk = Tk[0]
-
-        dlnk_low = np.log(k[1]/k[0])
-        dlnk_high = np.log(k[-1]/k[-2])
-        N_extrap_low = int(np.log(k[0]/kmin) / dlnk_low) + 1
-        N_extrap_high = int(np.log(kmax/k[-1]) / dlnk_high) + 1
-        k_extrap = fftlog.log_extrap(k, N_extrap_low, N_extrap_high)
-        Tk_extrap = fftlog.log_extrap(Tk, N_extrap_low, N_extrap_high)
-        self.matter_transfer_spl = ius(np.log(k_extrap),Tk_extrap/self.Tk_lowk)
+        k_extrap, Tk_extrap = get_log_extrap(k, Tk, kmin, kmax)
+        self.matter_transfer_spl = ius(np.log(k_extrap), Tk_extrap / self.Tk_lowk)
 
     def get_matter_transfer(self, k): # normalized as T(k) -> 1 (k -> 0)
         return self.matter_transfer_spl(np.log(k))
@@ -110,10 +105,11 @@ class PowerSpectrum1loop:
 
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
+        self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
         self.decomp['plin nu=-1.6'].compute(self.get_pk_lin, kwarg={'z':z, 'khigh':khigh})
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, self.params['h'], rbao=110, kmin=7e-5, kmax=7, n_min=120, n_max=240, kwarg={'z':z})
+        self.irres = IRResum(self.get_pk_lin, self.params['h'], rbao=110, khmin=7e-5, khmax=7, n_min=120, n_max=240, kwarg={'z':z})
         Sigma2_ref = self.irres.get_Sigma2(ks=0.2)
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -130,8 +126,12 @@ class PowerSpectrum1loop:
         self.alpha['IR22'] = (2/3) * self.plin_int
         self.sigma2_v = self.plin_int / 3
 
-    def set_bias(self, bias={}):
-        self.bias = bias
+    def set_bias(self, bias1={}, bias2={}):
+        self.bias = bias1
+        self.bias1 = bias1
+        self.bias2 = bias2
+        if bias2 == {}:
+            self.bias2 = bias1
 
     def get_pk_prim(self, kh):
         # primordial power spectrum of the curvature perturbations in unit of [Mpc^3]
@@ -294,16 +294,26 @@ class PowerSpectrum1loop:
         return b1**2 * kaiser[int(l/2)] * pk_lin
 
     def get_pkmu_13_UV(self, k, mu):
-        Z1_g = self.bias['b1'] + self.fgrowth * mu**2
-
-        Z3_g_UV = - 61./315. * self.bias['b1'] - 64./21. * self.bias['bG2'] - 128./105. * self.bias['bGamma3']
-        Z3_g_UV += (- 3./5. + 2./105. * self.bias['b1']) * self.fgrowth * mu**2
-        Z3_g_UV += (- 16./35. - 1./3. * self.bias['b1']) * self.fgrowth**2 * mu**2
+        Z1_g = self.bias1['b1'] + self.fgrowth * mu**2
+        Z3_g_UV = - 61./315. * self.bias2['b1'] - 64./21. * self.bias2['bG2'] - 128./105. * self.bias2['bGamma3']
+        Z3_g_UV += (- 3./5. + 2./105. * self.bias2['b1']) * self.fgrowth * mu**2
+        Z3_g_UV += (- 16./35. - 1./3. * self.bias2['b1']) * self.fgrowth**2 * mu**2
         Z3_g_UV += (- 46./105.) * self.fgrowth**2 * mu**4
         Z3_g_UV += (- 1./3.) * self.fgrowth**3 * mu**4
+        Z1Z3_UV_1 = Z1_g * Z3_g_UV
+
+        Z1_g = self.bias2['b1'] + self.fgrowth * mu**2
+        Z3_g_UV = - 61./315. * self.bias1['b1'] - 64./21. * self.bias1['bG2'] - 128./105. * self.bias1['bGamma3']
+        Z3_g_UV += (- 3./5. + 2./105. * self.bias1['b1']) * self.fgrowth * mu**2
+        Z3_g_UV += (- 16./35. - 1./3. * self.bias1['b1']) * self.fgrowth**2 * mu**2
+        Z3_g_UV += (- 46./105.) * self.fgrowth**2 * mu**4
+        Z3_g_UV += (- 1./3.) * self.fgrowth**3 * mu**4
+        Z1Z3_UV_2 = Z1_g * Z3_g_UV
+
+        Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
         
         pk_lin = self.get_pk_lin(k)
-        pkmu_13 = np.kron(k**2 * pk_lin * self.plin_int, Z1_g * Z3_g_UV).reshape(len(k),len(mu))
+        pkmu_13 = np.kron(k**2 * pk_lin * self.plin_int, Z1Z3_UV).reshape(len(k),len(mu))
         
         return pkmu_13
 
@@ -334,12 +344,55 @@ class PowerSpectrum1loop:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_q = self.decomp[name_dec[1]].func_rec.real
-            p13_int = np.dot(self.matrix[name], p1_q).real
-            pk_data = kn**3 * p2_q * p13_int
+            pk_data = kn**3 * p2_q * np.dot(self.matrix[name], p1_q).real
 
         else:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
+
+    # def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
+    #     k = np.atleast_1d(k)
+    #     mu = np.atleast_1d(mu)
+
+    #     if name == 'tot':
+    #         pkmu_22 = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg', mode=mode)
+    #         pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
+    #         pkmu = pkmu_22 + pkmu_13
+    #         return pkmu
+
+    #     term_names = self.name_pkmu_gg_terms[name]
+    #     pkmu_tab = []
+    #     for term in term_names:
+    #         nf, nmu, bias_deg = utils_loop.get_deg_info(term)
+
+    #         bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+    #         fac = bias_fac * self.fgrowth**nf
+
+    #         kn, pk_data = self.get_pk_rsd_1loop_data(term, sub_k0=True, mode=mode)
+
+    #         pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
+    #         pkmu_tab.append(pkmu)
+    #     pkmu_tab = np.array(pkmu_tab)
+    #     pkmu_data = np.sum(pkmu_tab, axis=0)
+
+    #     if name == '13_gg':
+    #         fgrowth = self.fgrowth
+    #         b1 = self.bias['b1']
+    #         Z1_g = b1 + fgrowth * mu**2
+    #         Z1_g = np.tile(Z1_g, (len(kn), 1))
+    #         pkmu_data = Z1_g * pkmu_data
+
+    #         pkmu_UV = self.get_pkmu_13_UV(kn, mu)
+    #         pkmu_data += pkmu_UV
+
+    #     if len(mu) == 1:
+    #         pkmu_interp = ius(kn, np.ravel(pkmu_data))
+    #         pkmu = pkmu_interp(k)
+    #     else:
+    #         pkmu_interp = rbs(kn, mu, pkmu_data)
+    #         pkmu = pkmu_interp(k, mu)
+
+    #     return pkmu
 
     def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
         k = np.atleast_1d(k)
@@ -356,8 +409,27 @@ class PowerSpectrum1loop:
         for term in term_names:
             nf, nmu, bias_deg = utils_loop.get_deg_info(term)
 
-            bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+            # only for auto power spectrum
+            # bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+            
+            keys = list(bias_deg.keys())
+            if len(bias_deg) == 0:
+                bias_fac = 1
+            elif len(bias_deg) == 1:
+                key = keys[0]
+                if bias_deg[key] == 1:
+                    bias_fac = (self.bias1[key] + self.bias2[key]) / 2
+                elif bias_deg[key] == 2:
+                    bias_fac = self.bias1[key] * self.bias2[key]
+            elif len(bias_deg) == 2:
+                key1 = keys[0]
+                key2 = keys[1]
+                bias_fac = (self.bias1[key1] * self.bias2[key2] + self.bias2[key1] * self.bias1[key2]) / 2
+            else:
+                raise ValueError('Invalid numbers of bias')
+
             fac = bias_fac * self.fgrowth**nf
+            if fac == 0.: continue
 
             kn, pk_data = self.get_pk_rsd_1loop_data(term, sub_k0=True, mode=mode)
 
@@ -367,12 +439,6 @@ class PowerSpectrum1loop:
         pkmu_data = np.sum(pkmu_tab, axis=0)
 
         if name == '13_gg':
-            fgrowth = self.fgrowth
-            b1 = self.bias['b1']
-            Z1_g = b1 + fgrowth * mu**2
-            Z1_g = np.tile(Z1_g, (len(kn), 1))
-            pkmu_data = Z1_g * pkmu_data
-
             pkmu_UV = self.get_pkmu_13_UV(kn, mu)
             pkmu_data += pkmu_UV
 

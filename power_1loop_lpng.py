@@ -46,14 +46,17 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.name_pkmu_gg_terms['13_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M22_*.txt')
         self.name_pkmu_gg_terms['22_gg_lpng'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M13_*.txt')
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M13_*lpng1*.txt')
+        self.name_pkmu_gg_terms['13_gg_lpng1'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M13_*lpng3*.txt')
         self.name_pkmu_gg_terms['13_gg_lpng3'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M12_*lpng1*.txt')
         self.name_pkmu_gg_terms['12_gg_lpng1'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/lpng/M12_*lpng2*.txt')
         self.name_pkmu_gg_terms['12_gg_lpng2'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_gg_terms['tot'] = self.name_pkmu_gg_terms['22_gg'] + self.name_pkmu_gg_terms['13_gg']
-        self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['22_gg_lpng'] + self.name_pkmu_gg_terms['13_gg_lpng3']
+        self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['22_gg_lpng']
+        self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['13_gg_lpng1'] + self.name_pkmu_gg_terms['13_gg_lpng3']
         self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['12_gg_lpng1'] + self.name_pkmu_gg_terms['12_gg_lpng2']
 
     def set_cosmology(self, cparam, z=0, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7, khigh=40.):
@@ -71,7 +74,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.decomp['M nu=0.2'].compute(self.get_M, kwarg={'z':z})
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, self.params['h'], rbao=110, kmin=7e-5, kmax=7, n_min=120, n_max=240, kwarg={'z':z})
+        self.irres = IRResum(self.get_pk_lin, self.params['h'], rbao=110, khmin=7e-5, khmax=7, n_min=120, n_max=240, kwarg={'z':z})
         Sigma2_ref = self.irres.get_Sigma2(ks=0.2)
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -152,6 +155,30 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
 
+    def get_pkmu_13_lpng1_UV(self, k, mu):
+        Z1_lpng = self.bias1['bphi']
+        Z3_g_UV = - 61./315. * self.bias2['b1'] - 64./21. * self.bias2['bG2'] - 128./105. * self.bias2['bGamma3']
+        Z3_g_UV += (- 3./5. + 2./105. * self.bias2['b1']) * self.fgrowth * mu**2
+        Z3_g_UV += (- 16./35. - 1./3. * self.bias2['b1']) * self.fgrowth**2 * mu**2
+        Z3_g_UV += (- 46./105.) * self.fgrowth**2 * mu**4
+        Z3_g_UV += (- 1./3.) * self.fgrowth**3 * mu**4
+        Z1Z3_UV_1 = Z1_lpng * Z3_g_UV
+
+        Z1_lpng = self.bias2['bphi']
+        Z3_g_UV = - 61./315. * self.bias1['b1'] - 64./21. * self.bias1['bG2'] - 128./105. * self.bias1['bGamma3']
+        Z3_g_UV += (- 3./5. + 2./105. * self.bias1['b1']) * self.fgrowth * mu**2
+        Z3_g_UV += (- 16./35. - 1./3. * self.bias1['b1']) * self.fgrowth**2 * mu**2
+        Z3_g_UV += (- 46./105.) * self.fgrowth**2 * mu**4
+        Z3_g_UV += (- 1./3.) * self.fgrowth**3 * mu**4
+        Z1Z3_UV_2 = Z1_lpng * Z3_g_UV
+
+        Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
+        
+        pk_1phi = self.get_pk_1phi(k)
+        pkmu_13 = np.kron(k**2 * pk_1phi * self.plin_int, Z1Z3_UV).reshape(len(k),len(mu))
+        
+        return pkmu_13
+
     def get_pk_rsd_1loop_data(self, name, sub_k0=True, mode='full'):
         if '12' in name:
             if 'lpng1' in name:
@@ -197,65 +224,188 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_q = self.decomp[name_dec[1]].func_rec.real
-            p13_int = np.dot(self.matrix[name], p1_q).real
-            pk_data = kn**3 * p2_q * p13_int
+            pk_data = kn**3 * p2_q * np.dot(self.matrix[name], p1_q).real
 
         else:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
+    # def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
+    #     k = np.atleast_1d(k)
+    #     mu = np.atleast_1d(mu)
+
+    #     b1 = self.bias['b1']
+    #     bphi = self.bias['bphi']
+    #     fgrowth = self.fgrowth
+    #     f_nl = self.f_nl
+
+    #     if name == 'tot':
+    #         # Gaussian terms
+    #         pkmu_22 = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg', mode=mode)
+    #         pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
+
+    #         # LPNG 1-2 term (first order in f_NL)
+    #         pkmu_12_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng1', mode=mode)
+    #         pkmu_12_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng2', mode=mode)
+    #         pkmu_12_lpng = pkmu_12_lpng1 + pkmu_12_lpng2
+
+    #         # LPNG 2-2 term (first order in f_NL)
+    #         pkmu_22_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg_lpng', mode=mode)
+
+    #         # LPNG 1-3 term (first order in f_NL)
+    #         pkmu_13_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng1', mode=mode)
+    #         pkmu_13_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng2', mode=mode)
+    #         pkmu_13_lpng3 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng3', mode=mode)
+    #         pkmu_13_lpng = pkmu_13_lpng1 + pkmu_13_lpng2 + pkmu_13_lpng3
+
+    #         pkmu = pkmu_22 + pkmu_13
+    #         pkmu += pkmu + f_nl * (pkmu_12_lpng + pkmu_22_lpng + pkmu_13_lpng)
+
+    #         return pkmu
+
+    #     elif name == 'lpng_tot':
+    #         pkmu_12_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng', mode=mode)
+    #         pkmu_22_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg_lpng', mode=mode)
+    #         pkmu_13_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng', mode=mode)
+    #         pkmu = pkmu_12_lpng + pkmu_22_lpng + pkmu_13_lpng
+    #         return pkmu
+
+    #     elif name == '12_gg_lpng':
+    #         pkmu_12_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng1', mode=mode)
+    #         pkmu_12_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng2', mode=mode)
+    #         pkmu_12_lpng = pkmu_12_lpng1 + pkmu_12_lpng2
+    #         return pkmu_12_lpng
+
+    #     elif name == '13_gg_lpng':
+    #         pkmu_13_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng1', mode=mode)
+    #         pkmu_13_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng2', mode=mode)
+    #         pkmu_13_lpng3 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng3', mode=mode)
+    #         pkmu_13_lpng = pkmu_13_lpng1 + pkmu_13_lpng2 + pkmu_13_lpng3
+    #         return pkmu_13_lpng
+
+    #     elif name == '13_gg_lpng1':
+    #         Z1_g = b1 + fgrowth * mu**2
+    #         Z1_g = np.tile(Z1_g, (len(k), 1))
+    #         Z1_lpng = bphi * f_nl / self.get_M(k)
+    #         Z1_lpng = np.tile(Z1_lpng, (len(mu), 1)).T
+    #         pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
+    #         factor = Z1_lpng / Z1_g
+    #         if len(k) == 1 or len(mu) == 1:
+    #             factor = np.ravel(factor)
+    #         pkmu = factor * pkmu_13
+    #         return pkmu
+
+    #     elif name == '13_gg_lpng2':
+    #         Z1_g = b1 + fgrowth * mu**2
+    #         Z1_g = np.tile(Z1_g, (len(k),1))
+    #         pk_1phi = self.get_pk_1phi(k)
+    #         pk_1phi = np.tile(pk_1phi, (len(mu),1)).T
+    #         factor = np.kron(k**2, (1 + fgrowth**2 * mu**2)).reshape(len(k),len(mu))
+    #         pkmu = - bphi * f_nl * Z1_g * factor * self.sigma2_v * pk_1phi
+    #         if len(k) == 1 or len(mu) == 1:
+    #             pkmu = np.ravel(pkmu)
+    #         return pkmu
+
+    #     term_names = self.name_pkmu_gg_terms[name]
+    #     pkmu_tab = []
+    #     for term in term_names:
+    #         nf, nmu, bias_deg = utils_loop.get_deg_info(term)
+
+    #         bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+    #         fac = bias_fac * self.fgrowth**nf
+    #         if fac == 0.: continue
+
+    #         kn, pk_data = self.get_pk_rsd_1loop_data(term, mode=mode)
+
+    #         pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
+    #         pkmu_tab.append(pkmu)
+    #     pkmu_tab = np.array(pkmu_tab)
+    #     pkmu_data = np.sum(pkmu_tab, axis=0)
+
+    #     Z1_g = b1 + fgrowth * mu**2
+    #     Z1_g = np.tile(Z1_g, (len(kn), 1))
+
+    #     if name == '13_gg':
+    #         pkmu_data = Z1_g * pkmu_data
+    #         pkmu_UV = self.get_pkmu_13_UV(kn, mu)
+    #         pkmu_data += pkmu_UV
+    #     elif name == '13_gg_lpng3':
+    #         pkmu_data = Z1_g * pkmu_data
+    #     elif name == '12_gg_lpng1':
+    #         pk_1phi = self.get_pk_1phi(kn)
+    #         pk_1phi = np.tile(pk_1phi, (len(mu),1)).T
+    #         pkmu_data = 2 * f_nl * Z1_g * pk_1phi * pkmu_data
+    #     elif name == '12_gg_lpng2':
+    #         Mk = self.get_M(kn)
+    #         Mk = np.tile(Mk, (len(mu),1)).T
+    #         pkmu_data = f_nl * Z1_g * Mk * pkmu_data
+
+    #     if len(mu) == 1:
+    #         pkmu_interp = ius(kn, np.ravel(pkmu_data))
+    #         pkmu = pkmu_interp(k)
+    #     else:
+    #         pkmu_interp = rbs(kn, mu, pkmu_data)
+    #         pkmu = pkmu_interp(k, mu)
+
+    #     return pkmu
+
     def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
-
-        b1 = self.bias['b1']
-        bphi = self.bias['bphi']
-        fgrowth = self.fgrowth
-        f_nl = self.f_nl
 
         if name == 'tot':
             # Gaussian terms
             pkmu_22 = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg', mode=mode)
             pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
 
-            # 2-2 term
+            # LPNG 1-2 term (first order in f_NL)
+            pkmu_12_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng1', mode=mode)
+            pkmu_12_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng2', mode=mode)
+            pkmu_12_lpng = pkmu_12_lpng1 + pkmu_12_lpng2
+
+            # LPNG 2-2 term (first order in f_NL)
             pkmu_22_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg_lpng', mode=mode)
 
-            # 1-3 term
+            # LPNG 1-3 term (first order in f_NL)
             pkmu_13_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng1', mode=mode)
             pkmu_13_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng2', mode=mode)
             pkmu_13_lpng3 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng3', mode=mode)
             pkmu_13_lpng = pkmu_13_lpng1 + pkmu_13_lpng2 + pkmu_13_lpng3
 
-            ## 1-2 term
+            pkmu = pkmu_22 + pkmu_13
+            pkmu += pkmu + self.f_nl * (pkmu_12_lpng + pkmu_22_lpng + pkmu_13_lpng)
+
+            return pkmu
+
+        elif name == 'lpng_tot':
+            pkmu_12_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng', mode=mode)
+            pkmu_22_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg_lpng', mode=mode)
+            pkmu_13_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng', mode=mode)
+            pkmu = pkmu_12_lpng + pkmu_22_lpng + pkmu_13_lpng
+            return pkmu
+
+        elif name == '12_gg_lpng':
             pkmu_12_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng1', mode=mode)
             pkmu_12_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='12_gg_lpng2', mode=mode)
             pkmu_12_lpng = pkmu_12_lpng1 + pkmu_12_lpng2
+            return pkmu_12_lpng
 
-            pkmu = pkmu_22 + pkmu_13
-            pkmu += pkmu + f_nl * (pkmu_22_lpng + pkmu_13_lpng + pkmu_12_lpng)
-
-            return pkmu
-
-        elif name == '13_gg_lpng1':
-            Z1_g = b1 + fgrowth * mu**2
-            Z1_g = np.tile(Z1_g, (len(k), 1))
-            Z1_lpng = bphi * f_nl / self.get_M(k)
-            Z1_lpng = np.tile(Z1_lpng, (len(mu), 1)).T
-            pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
-            factor = Z1_lpng / Z1_g
-            if len(k) == 1 or len(mu) == 1:
-                factor = np.ravel(factor)
-            pkmu = factor * pkmu_13
-            return pkmu
+        elif name == '13_gg_lpng':
+            pkmu_13_lpng1 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng1', mode=mode)
+            pkmu_13_lpng2 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng2', mode=mode)
+            pkmu_13_lpng3 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg_lpng3', mode=mode)
+            pkmu_13_lpng = pkmu_13_lpng1 + pkmu_13_lpng2 + pkmu_13_lpng3
+            return pkmu_13_lpng
 
         elif name == '13_gg_lpng2':
-            Z1_g = b1 + fgrowth * mu**2
-            Z1_g = np.tile(Z1_g, (len(k),1))
-            pk_1phi = self.get_pk_1phi(k)
-            pk_1phi = np.tile(pk_1phi, (len(mu),1)).T
-            factor = np.kron(k**2, (1 + fgrowth**2 * mu**2)).reshape(len(k),len(mu))
-            pkmu = - bphi * f_nl * Z1_g * factor * self.sigma2_v * pk_1phi
+            Z1_g1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k),1))
+            Z1_g2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k),1))
+            
+            pk_1phi = np.tile(self.get_pk_1phi(k), (len(mu),1)).T
+            factor = np.kron(k**2, (1 + self.fgrowth**2 * mu**2)).reshape(len(k),len(mu))
+            
+            pkmu = - (self.bias1['bphi'] * Z1_g2 + self.bias2['bphi'] * Z1_g1) / 2 * factor * self.sigma2_v * pk_1phi
+
             if len(k) == 1 or len(mu) == 1:
                 pkmu = np.ravel(pkmu)
             return pkmu
@@ -265,10 +415,29 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         for term in term_names:
             nf, nmu, bias_deg = utils_loop.get_deg_info(term)
 
-            bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+            # only for auto power spectrum
+            # bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
+
+            keys = list(bias_deg.keys())
+            if len(bias_deg) == 0:
+                bias_fac = 1
+            elif len(bias_deg) == 1:
+                key = keys[0]
+                if bias_deg[key] == 1:
+                    bias_fac = (self.bias1[key] + self.bias2[key]) / 2
+                elif bias_deg[key] == 2:
+                    bias_fac = self.bias1[key] * self.bias2[key]
+            elif len(bias_deg) == 2:
+                key1 = keys[0]
+                key2 = keys[1]
+                bias_fac = (self.bias1[key1] * self.bias2[key2] + self.bias2[key1] * self.bias1[key2]) / 2
+            else:
+                raise ValueError('Invalid number of bias')
+            # print(term, bias_deg, bias_fac)
+
             fac = bias_fac * self.fgrowth**nf
             if fac == 0.: continue
-            
+
             kn, pk_data = self.get_pk_rsd_1loop_data(term, mode=mode)
 
             pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
@@ -276,23 +445,18 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         pkmu_tab = np.array(pkmu_tab)
         pkmu_data = np.sum(pkmu_tab, axis=0)
 
-        Z1_g = b1 + fgrowth * mu**2
-        Z1_g = np.tile(Z1_g, (len(kn), 1))
-
         if name == '13_gg':
-            pkmu_data = Z1_g * pkmu_data
             pkmu_UV = self.get_pkmu_13_UV(kn, mu)
             pkmu_data += pkmu_UV
-        elif name == '13_gg_lpng3':
-            pkmu_data = Z1_g * pkmu_data
+        elif name == '13_gg_lpng1':
+            pkmu_UV = self.get_pkmu_13_lpng1_UV(kn, mu)
+            pkmu_data += pkmu_UV
         elif name == '12_gg_lpng1':
-            pk_1phi = self.get_pk_1phi(kn)
-            pk_1phi = np.tile(pk_1phi, (len(mu),1)).T
-            pkmu_data = 2 * f_nl * Z1_g * pk_1phi * pkmu_data
+            pk_1phi = np.tile(self.get_pk_1phi(kn), (len(mu),1)).T
+            pkmu_data = 2 * pk_1phi * pkmu_data
         elif name == '12_gg_lpng2':
-            Mk = self.get_M(kn)
-            Mk = np.tile(Mk, (len(mu),1)).T
-            pkmu_data = f_nl * Z1_g * Mk * pkmu_data
+            Mk = np.tile(self.get_M(kn), (len(mu),1)).T
+            pkmu_data = Mk * pkmu_data
 
         if len(mu) == 1:
             pkmu_interp = ius(kn, np.ravel(pkmu_data))
