@@ -3,20 +3,31 @@ from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.integrate import quad
 from scipy.special import spherical_jn
 from scipy.fft import dst, idst
-from utils_loop import get_log_extrap
 
 class IRResum:
 
     def __init__(self, pk_lin, hubble, rbao=110, khmin=7e-5, khmax=7, n_min=120, n_max=240,
-                kmin_interp=1e-7, kmax_interp=1e+4, kwarg={}):
+                kmin_interp=1e-7, kmax_interp=1e+7, kwarg={}):
         self.rbao = rbao
-        kh = np.linspace(khmin, khmax, 2**16)
-        plin = pk_lin(kh/hubble, **kwarg) * hubble**(-3)
-        plin_nw = self.remove_wiggle(kh, plin, n_min, n_max)
-        k_extrap, plin_nw_extrap = get_log_extrap(kh / hubble, plin_nw * hubble**3, kmin_interp, kmax_interp)
+        kh = np.linspace(khmin, khmax, 2**16) # in unit of 1/Mpc
+        plin = pk_lin(kh / hubble, **kwarg) * hubble**(-3) # in unit of Mpc^3
+        plin_nw = self.remove_wiggle(kh, plin, n_min, n_max) # in unit of Mpc^3
+        
+        # adjustment at high k for extrapolation
+        plin_nw[-10:] = plin[-10:]
+
+        # extrapolation
+        k_low = np.geomspace(kmin_interp, kh[0] / hubble, 100)[:-1]
+        k_high = np.geomspace(kh[-1] / hubble, kmax_interp, 100)[1:]
+        k_extrap = np.hstack((k_low, kh / hubble, k_high)) # in unit of h/Mpc
+        plin_nw_extrap = np.hstack((pk_lin(k_low, **kwarg), plin_nw * hubble**3, pk_lin(k_high, **kwarg))) # in unit of (Mpc/h)^3
+
+        # spline interpolation
         self.pk_nw_interp = ius(np.log(k_extrap), np.log(plin_nw_extrap))
 
     def remove_wiggle(self, kh, plin, n_min, n_max):
+        # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
+
         harms = dst(np.log(kh * plin))
 
         n = np.arange(1,len(harms)+1)
@@ -38,7 +49,7 @@ class IRResum:
 
         i_rec = np.argsort(np.hstack((n_odd, n_even)))
         harms_s = np.hstack((harms_odd_s, harms_even_s))[i_rec]
-        plin_nw = np.exp(idst(harms_s)) / kh
+        plin_nw = np.exp(idst(harms_s)) / kh # in unit of Mpc^3
 
         return plin_nw
 
@@ -58,6 +69,6 @@ class IRResum:
         return res[0] / (6*np.pi**2)
 
     def get_Sigma2_rsd(self, fgrowth, mu, ks=0.2):
-        Sigma2_1 = (1+mu**2*fgrowth*(2+fgrowth)) * self.get_Sigma2(ks)
-        Sigma2_2 = fgrowth**2*mu**2*(mu**2-1) * self.get_dSigma2(ks)
+        Sigma2_1 = (1 + mu**2 * fgrowth * (2 + fgrowth)) * self.get_Sigma2(ks)
+        Sigma2_2 = fgrowth**2 * mu**2 * (mu**2 - 1) * self.get_dSigma2(ks)
         return Sigma2_1 + Sigma2_2
