@@ -250,7 +250,7 @@ class PowerSpectrum1loop:
             pkmu = self.get_pkmu_gg_irres(k, mu, mode='LO+NLO', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
         else:
             pkmu_tree = self.get_pkmu_gg_lin(k, mu)
-            pkmu_1loop = self.get_pkmu_gg_1loop_raw(k, mu, name=name, mode='full')
+            pkmu_1loop = self.get_pkmu_gg_1loop_raw(k, mu, name='tot', mode='full')
             pkmu = pkmu_tree + pkmu_1loop
         return pkmu
 
