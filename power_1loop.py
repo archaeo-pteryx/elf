@@ -170,12 +170,10 @@ class PowerSpectrum1loop:
             Sigma2 = self.irres.get_Sigma2(ks=ks)
         if mode == 'LO':
             pk = plin_nw + np.exp(-k**2 * Sigma2) * plin_w
-        elif mode == 'tree':
-            pk = plin_nw + np.exp(-k**2 * Sigma2) * plin_w * (1 + k**2 * Sigma2)
         return pk
 
     def get_pk_1loop_data(self, name, sub_k0=True, mode='full'):
-        name_dec = utils_loop.kernel_to_decomp_dict[name]
+        name_dec = copy.deepcopy(utils_loop.kernel_to_decomp_dict[name])
         if mode != 'full':
             for i in range(len(name_dec)):
                 if 'plin' in name_dec[i]: name_dec[i] += ' (%s)' % (mode)
@@ -254,13 +252,35 @@ class PowerSpectrum1loop:
             pkmu = pkmu_tree + pkmu_1loop
         return pkmu
 
-    def get_pl_gg(self, l, k, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
+    def get_pk_ell_gg(self, l, k, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pl
+
+    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
+        k_ref = np.atleast_1d(k_ref)
+        mu_ref = np.atleast_1d(mu_ref)
+
+        F = alpha_para / alpha_perp
+        fac = np.sqrt(1 + mu_ref**2 * (1./F**2 - 1))
+        mu = mu_ref / (F * fac)
+        k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
+
+        pkmu = np.array([self.get_pkmu_gg(k[:,i], mu, irres=irres, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)[:,i] for i in range(len(mu_ref))]).T
+        pkmu = pkmu / (alpha_perp**2 * alpha_para)
+        return pkmu
+
+    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
+        k_ref = np.atleast_1d(k_ref)
+        mu = np.linspace(0.,1.,2**8+1)
+        dmu = mu[1]-mu[0]
+        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu, alpha_perp, alpha_para, irres=irres, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+        Legendre = np.tile(special.lpmv(0,l,mu), (len(k_ref),1))
+        pl = (2*l+1) * romb(pkmu_ref * Legendre, axis=1, dx=dmu)
         return pl
 
     def get_pkmu_gg_lin(self, k, mu):
@@ -276,7 +296,7 @@ class PowerSpectrum1loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pl_gg_lin(self, l, k):
+    def get_pk_ell_gg_lin(self, l, k):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
@@ -285,21 +305,9 @@ class PowerSpectrum1loop:
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
 
-    def get_pl_gg_lin_analytic(self, l, k):
-        # only for auto power spectrum
-        k = np.atleast_1d(k)
-        b1 = self.bias['b1']
-        fgrowth = self.fgrowth
-        beta = fgrowth / b1
-        kaiser = [
-            1 + 2/3 * beta + 1/5 * beta**2, 
-            4/3 * beta + 4/7 * beta**2,
-            8/35 * beta**2
-            ]
-        pk_lin = self.get_pk_lin(k)
-        return b1**2 * kaiser[int(l/2)] * pk_lin
-
     def get_pkmu_13_UV(self, k, mu, mode='full'):
+        # UV limit of the 1-3 term
+
         Z1_g = self.bias1['b1'] + self.fgrowth * mu**2
         Z3_g_UV = - 61./315. * self.bias2['b1'] - 64./21. * self.bias2['bG2'] - 128./105. * self.bias2['bGamma3']
         Z3_g_UV += (- 3./5. + 2./105. * self.bias2['b1']) * self.fgrowth * mu**2
@@ -323,7 +331,7 @@ class PowerSpectrum1loop:
         elif mode == 'no-wiggle':
             pk_fac = self.irres.get_pk_nw(k) * self.plin_nw_int
         else:
-            raise ValueError('Invalid mode')
+            raise ValueError('Invalid mode.')
 
         pkmu_13 = np.kron(k**2 * pk_fac, Z1Z3_UV).reshape(len(k),len(mu))
         return pkmu_13
@@ -393,7 +401,7 @@ class PowerSpectrum1loop:
                 key2 = keys[1]
                 bias_fac = (self.bias1[key1] * self.bias2[key2] + self.bias2[key1] * self.bias1[key2]) / 2
             else:
-                raise ValueError('Invalid numbers of bias')
+                raise ValueError('Invalid numbers of bias parameters.')
 
             fac = bias_fac * self.fgrowth**nf
 
@@ -417,7 +425,7 @@ class PowerSpectrum1loop:
 
         return pkmu
 
-    def get_pl_gg_1loop_raw(self, l, k, name='tot', mode='full'):
+    def get_pk_ell_gg_1loop_raw(self, l, k, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
@@ -484,12 +492,3 @@ class PowerSpectrum1loop:
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
-
-    def get_pl_gg_irres(self, l, k, mode='LO+NLO', Sigma2=None, dSigma2=None, ks=0.2):
-        k = np.atleast_1d(k)
-        mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
-        pkmu = self.get_pkmu_gg_irres(k, mu, mode=mode, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
-        return pl

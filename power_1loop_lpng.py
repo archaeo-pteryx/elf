@@ -135,15 +135,6 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pl_gg_lin(self, l, k):
-        k = np.atleast_1d(k)
-        mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
-        pkmu = self.get_pkmu_gg_lin(k,mu)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
-        return pl
-
     def get_pkmu_13_lpng1_UV(self, k, mu, mode='full'):
         Z1_lpng = self.bias1['bphi']
         Z3_g_UV = - 61./315. * self.bias2['b1'] - 64./21. * self.bias2['bG2'] - 128./105. * self.bias2['bGamma3']
