@@ -221,14 +221,25 @@ class PowerSpectrum1loop:
         for name in name_list:
             pks[name] = self.get_pk_1loop(k, name=name, sub_k0=sub_k0_22)
 
-        pk_gg = self.bias['b1']**2 * (pk_tree + pks['22'] + pks['13'])
-        pk_gg = pk_gg + self.bias['b1'] * self.bias['b2'] * pks['I_d2']
-        pk_gg = pk_gg + 2 * self.bias['b1'] * self.bias['bG2'] * pks['I_G2']
-        pk_gg = pk_gg + self.bias['b2']**2 / 4. * pks['I_d2_d2']
-        pk_gg = pk_gg + self.bias['bG2']**2 * pks['I_G2_G2']
-        pk_gg = pk_gg + self.bias['b2'] * self.bias['bG2'] * pks['I_d2_G2']
-        pk_gg = pk_gg + 2 * self.bias['b1'] * self.bias['bG2'] * pks['F_G2']
-        pk_gg = pk_gg + (4./5.) * self.bias['b1'] * self.bias['bGamma3'] * pks['F_G2']
+        # only for auto power spectrum
+        # pk_gg = self.bias['b1']**2 * (pk_tree + pks['22'] + pks['13'])
+        # pk_gg = pk_gg + self.bias['b1'] * self.bias['b2'] * pks['I_d2']
+        # pk_gg = pk_gg + 2 * self.bias['b1'] * self.bias['bG2'] * pks['I_G2']
+        # pk_gg = pk_gg + self.bias['b2']**2 / 4. * pks['I_d2_d2']
+        # pk_gg = pk_gg + self.bias['bG2']**2 * pks['I_G2_G2']
+        # pk_gg = pk_gg + self.bias['b2'] * self.bias['bG2'] * pks['I_d2_G2']
+        # pk_gg = pk_gg + 2 * self.bias['b1'] * self.bias['bG2'] * pks['F_G2']
+        # pk_gg = pk_gg + (4./5.) * self.bias['b1'] * self.bias['bGamma3'] * pks['F_G2']
+
+        # cross power spectrum
+        pk_gg = (self.bias1['b1'] * self.bias2['b1']) * (pk_tree + pks['22'] + pks['13'])
+        pk_gg = pk_gg + (self.bias1['b1'] * self.bias2['b2'] + self.bias1['b2'] * self.bias2['b1']) / 2. * pks['I_d2']
+        pk_gg = pk_gg + (self.bias1['b1'] * self.bias2['bG2'] + self.bias1['bG2'] * self.bias2['b1']) * pks['I_G2']
+        pk_gg = pk_gg + (self.bias1['b2'] * self.bias2['b2']) / 4. * pks['I_d2_d2']
+        pk_gg = pk_gg + (self.bias1['bG2'] * self.bias2['bG2']) * pks['I_G2_G2']
+        pk_gg = pk_gg + (self.bias1['b2'] * self.bias2['bG2'] + self.bias1['bG2'] * self.bias2['b2']) / 2. * pks['I_d2_G2']
+        pk_gg = pk_gg + (self.bias1['b1'] * self.bias2['bG2'] + self.bias1['bG2'] * self.bias2['b1']) * pks['F_G2']
+        pk_gg = pk_gg + (2./5.) * (self.bias1['b1'] * self.bias2['bGamma3'] + self.bias1['bGamma3'] * self.bias2['b1']) * pks['F_G2']
 
         # pk_gg = pk_gg - self.bias['c0'] * k**2 * pk_tree
 
@@ -275,6 +286,7 @@ class PowerSpectrum1loop:
         return pl
 
     def get_pl_gg_lin_analytic(self, l, k):
+        # only for auto power spectrum
         k = np.atleast_1d(k)
         b1 = self.bias['b1']
         fgrowth = self.fgrowth
