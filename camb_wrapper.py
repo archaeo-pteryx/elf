@@ -7,6 +7,7 @@ import camb
 from background import Cosmo
 
 class CambWrapper(Cosmo):
+
     def __init__(self, cparam, omega_nu0=0.00064, Omega_K0=0, k_pivot=0.05):
         super(CambWrapper, self).__init__(cparam, omega_nu0, Omega_K0)
         self.pars = camb.CAMBparams()
@@ -16,7 +17,7 @@ class CambWrapper(Cosmo):
         self.pars.set_dark_energy(w=self.params['w_de'])
         self.pars.InitPower.set_params(As=self.params['As'], ns=self.params['ns'], r=0, pivot_scalar=self.params['k_pivot'])
 
-    def set_matter_power(self, z=0, kmax=10):
+    def set_matter_power(self, z=0, kmax=1e+3):
         self.pars.set_matter_power(redshifts=[z], kmax=kmax)
         self.pars.NonLinear = camb.model.NonLinear_none
         self.pars.DoLensing = False
@@ -26,11 +27,17 @@ class CambWrapper(Cosmo):
     def get_rdrag(self):
         return self.results.get_derived_params()['rdrag'] * self.params['h']
 
-    def get_matter_transfer_data(self):
+    def get_matter_transfer_data(self, name='tot'):
         trans = self.results.get_matter_transfer_data()
         k = trans.q
-        Tk = trans.transfer_data[camb.model.Transfer_tot-1,:,0] # total transfer
-        return k, Tk
+
+        # see https://camb.readthedocs.io/en/latest/transfer_variables.html
+        if name == 'tot':
+            tk = trans.transfer_data[camb.model.Transfer_tot-1,:,0] # total transfer
+        elif name == 'cb':
+            tk = trans.transfer_data[camb.model.Transfer_nonu-1,:,0] # CDM+baryon transfer
+
+        return k, tk
 
     def get_matter_power_data(self, minkh=2e-5, maxkh=10., npoints=400):
         kh, z, pk = self.results.get_matter_power_spectrum(minkh=minkh, maxkh=maxkh, npoints=npoints)

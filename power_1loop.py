@@ -45,7 +45,7 @@ class PowerSpectrum1loop:
         self.params = self.cosmo.params
         self.cosmo.set_matter_power(z=0.)
         
-        k, Tk = self.cosmo.get_matter_transfer_data()
+        k, Tk = self.cosmo.get_matter_transfer_data(name=self.transfer_name)
         Tk[1] = Tk[0]
         self.Tk_lowk = Tk[0]
         k_extrap, Tk_extrap = get_log_extrap(k, Tk, kmin, kmax)
@@ -98,8 +98,9 @@ class PowerSpectrum1loop:
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
 
-    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7, khigh=None):
+    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., transfer_name='cb', kmin=1e-7, kmax=1e+7, khigh=None):
         # run CAMB
+        self.transfer_name = transfer_name
         self.set_camb(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
         self.redshift = redshift
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
@@ -155,11 +156,11 @@ class PowerSpectrum1loop:
         return plin
 
     def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e7, limit=1000, kwarg={}):
-        res = quad(lambda logk: get_pk(np.exp(logk), **kwarg) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit)
+        res = quad(lambda logk: get_pk(np.exp(logk), **kwarg) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
 
     def get_pk_int2(self, get_pk, kmin=1e-7, kmax=1e7, limit=1000, kwarg={}):
-        res = quad(lambda logk: get_pk(np.exp(logk), **kwarg)**2 / np.exp(logk), np.log(kmin), np.log(kmax), limit=limit)
+        res = quad(lambda logk: get_pk(np.exp(logk), **kwarg)**2 / np.exp(logk), np.log(kmin), np.log(kmax), limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
 
     def get_pk_mm_irres(self, k, mode='LO', Sigma2=None, ks=0.2):

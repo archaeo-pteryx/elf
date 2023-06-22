@@ -57,15 +57,15 @@ class IRResum:
         return np.exp(self.pk_nw_interp(np.log(k)))
 
     def get_Sigma2(self, ks=0.2, kmin=1e-7, limit=1000):
-        res = quad(lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0,self.rbao*q) + 2 * spherical_jn(2,self.rbao*q)), kmin, ks, limit=limit)
+        res = quad(lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0,self.rbao*q) + 2 * spherical_jn(2,self.rbao*q)), kmin, ks, limit=limit, epsrel=1e-6)
         return res[0] / (6*np.pi**2)
 
     def get_dSigma2(self, ks=0.2, kmin=1e-7, limit=1000):
-        res = quad(lambda q: self.get_pk_nw(q) * spherical_jn(2,self.rbao*q), kmin, ks, limit=limit)
+        res = quad(lambda q: self.get_pk_nw(q) * spherical_jn(2,self.rbao*q), kmin, ks, limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
 
     def get_sigmav2(self, kmin=1e-7, kmax=1e+7, limit=1000):
-        res = quad(lambda q: self.get_pk_nw(q), kmin, kmax, limit=limit)
+        res = quad(lambda q: self.get_pk_nw(q), kmin, kmax, limit=limit, epsrel=1e-6)
         return res[0] / (6*np.pi**2)
 
     def get_Sigma2_rsd(self, fgrowth, mu, ks=0.2):
