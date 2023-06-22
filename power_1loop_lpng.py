@@ -19,27 +19,28 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
 
     def __init__(self, config_fft=None):
         self.params = None
+
+        # set up the FFTLog-based power-law decomposition
         if config_fft == None:
+            kmin_fft = 1e-6
+            kmax_fft = 1e+4
+            nmax_fft = 256
             config_fft = {
-                'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.7': {'nu':-0.7, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'p1phi nu=-0.9': {'nu':-0.9, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'p1phi nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'p1phi nu=-2.1': {'nu':-2.1, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'M nu=0.2': {'nu':0.2, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'p1phi nu=-0.9': {'nu':-0.9, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'p1phi nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'p1phi nu=-2.1': {'nu':-2.1, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'M nu=0.2': {'nu':0.2, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
             }
         self.config_fft = config_fft
-
-        # store the names of 1-loop terms calculated with the FFTLog-based method (arXiv:)
         self.set_power_law_decomp(config_fft)
-        self.mat = {}
-        self.matrix = {}
 
-        # store the names of 1-loop terms calculated with the FFTLog-based method (arXiv:)
+        # store the names of 1-loop terms calculated with the FFTLog-based method
         self.name_pkmu_gg_terms = {}
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M22_*.txt')
         self.name_pkmu_gg_terms['22_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
@@ -60,9 +61,17 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['13_gg_lpng1'] + self.name_pkmu_gg_terms['13_gg_lpng3']
         self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['12_gg_lpng1'] + self.name_pkmu_gg_terms['12_gg_lpng2']
 
-    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7, khigh=None):
-        # run CAMB
-        self.set_camb(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
+        # precompute the PT matrices
+        self.mat = {}
+        self.matrix = {}
+        self.set_matrix(self.name_pkmu_gg_terms['tot'])
+        self.compute_matrix(self.name_pkmu_gg_terms['tot'])
+
+    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., transfer_name='cb', 
+                        kmin=1e-7, kmax=1e+7, khigh=None):
+        # run CAMB to obtain the transfer function
+        self.transfer_name = transfer_name
+        self.set_boltzmann(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
         self.redshift = redshift
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
 
@@ -95,9 +104,9 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         h = self.params['h']
         Omega_m0 = self.params['Omega_m0']
         H_0 = self.params['H_0_in_Mpc_inv']
-        Tk = self.get_matter_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
+        tk = self.get_matter_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
         Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
-        return 2./3 * (k*h)**2 * (Tk * Dgrowth) / (Omega_m0 * H_0**2)
+        return 2./3 * (k*h)**2 * (tk * Dgrowth) / (Omega_m0 * H_0**2)
 
     def get_pk_1phi(self, k, khigh=None):
         plin = self.get_pk_lin(k, khigh=khigh)
@@ -223,7 +232,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         if name == 'tot':
             # Gaussian terms
             pkmu = self.get_pkmu_gg_1loop_raw(k, mu, name='gauss_tot', mode=mode)
-            # LPNG terms
+            # LPNG terms (first order in f_NL)
             pkmu_lpng = self.get_pkmu_gg_1loop_raw(k, mu, name='lpng_tot', mode=mode)
 
             pkmu = pkmu + self.f_nl * pkmu_lpng

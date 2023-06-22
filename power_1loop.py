@@ -19,20 +19,24 @@ class PowerSpectrum1loop:
 
     def __init__(self, config_fft=None):
         self.params = None
+
+        # set up the FFTLog-based power-law decomposition
         if config_fft == None:
+            kmin_fft = 1e-6
+            kmax_fft = 1e+4
+            nmax_fft = 256
             config_fft = {
-                'plin nu=-0.3': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.7': {'nu':-0.7, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-1.6': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
-                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':1e-6, 'kmax':1e+4, 'nmax':256},
+                'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
             }
         self.config_fft = config_fft
         self.set_power_law_decomp(config_fft)
-        self.mat = {}
-        self.matrix = {}
 
+        # store the names of 1-loop terms calculated with the FFTLog-based method
         self.name_pkmu_gg_terms = {}
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M22_*.txt')
         self.name_pkmu_gg_terms['22_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
@@ -40,16 +44,24 @@ class PowerSpectrum1loop:
         self.name_pkmu_gg_terms['13_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_gg_terms['tot'] = self.name_pkmu_gg_terms['22_gg'] + self.name_pkmu_gg_terms['13_gg']
 
-    def set_camb(self, cparam, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7):
+        # precompute the PT matrices
+        self.mat = {}
+        self.matrix = {}
+        self.set_matrix(self.name_pkmu_gg_terms['tot'])
+        self.compute_matrix(self.name_pkmu_gg_terms['tot'])
+
+    def set_boltzmann(self, cparam, omega_nu0=0.00064, Omega_K0=0., kmin=1e-7, kmax=1e+7):
+        # run CAMB to obtain the transfer function
+
         self.cosmo = CambWrapper(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0)
         self.params = self.cosmo.params
         self.cosmo.set_matter_power(z=0.)
         
-        k, Tk = self.cosmo.get_matter_transfer_data(name=self.transfer_name)
-        Tk[1] = Tk[0]
-        self.Tk_lowk = Tk[0]
-        k_extrap, Tk_extrap = get_log_extrap(k, Tk, kmin, kmax)
-        self.matter_transfer_spl = ius(np.log(k_extrap), Tk_extrap / self.Tk_lowk)
+        k, tk = self.cosmo.get_matter_transfer_data(name=self.transfer_name)
+        tk[1] = tk[0]
+        self.tk_lowk = tk[0]
+        k_extrap, tk_extrap = get_log_extrap(k, tk, kmin, kmax)
+        self.matter_transfer_spl = ius(np.log(k_extrap), tk_extrap / self.tk_lowk)
 
     def get_matter_transfer(self, k): # normalized as T(k) -> 1 (k -> 0)
         return self.matter_transfer_spl(np.log(k))
@@ -98,10 +110,11 @@ class PowerSpectrum1loop:
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
 
-    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., transfer_name='cb', kmin=1e-7, kmax=1e+7, khigh=None):
-        # run CAMB
+    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., transfer_name='cb', 
+                        kmin=1e-7, kmax=1e+7, khigh=None):
+        # run CAMB to obtain the transfer function
         self.transfer_name = transfer_name
-        self.set_camb(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
+        self.set_boltzmann(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
         self.redshift = redshift
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
 
@@ -130,6 +143,20 @@ class PowerSpectrum1loop:
         if bias2 == {}:
             self.bias2 = copy.deepcopy(bias1)
 
+    def set_ctr_params(self, ctr1={}, ctr2={}):
+        self.ctr = ctr1
+        self.ctr1 = ctr1
+        self.ctr2 = ctr2
+        if ctr2 == {}:
+            self.ctr2 = copy.deepcopy(ctr1)
+
+    def set_stoch_params(self, stoch1={}, stoch2={}):
+        self.stoch = stoch1
+        self.stoch1 = stoch1
+        self.stoch2 = stoch2
+        if stoch2 == {}:
+            self.stoch2 = copy.deepcopy(stoch1)
+
     def get_pk_prim(self, kh):
         # primordial power spectrum of the curvature perturbations in unit of [Mpc^3]
         As = self.params['As']
@@ -141,9 +168,9 @@ class PowerSpectrum1loop:
     def get_pk_lin(self, k, khigh=None): # in unit of [h^{-3} Mpc^3]
         h = self.params['h']
         pk_prim = self.get_pk_prim(k*h)
-        Tk = self.get_matter_transfer(k*h) * self.Tk_lowk
+        tk = self.get_matter_transfer(k*h) * self.tk_lowk
 
-        plin_z0 = Tk**2 * pk_prim * (k*h)**4 / ((k*h)**3 / (2*np.pi**2))
+        plin_z0 = tk**2 * pk_prim * (k*h)**4 / ((k*h)**3 / (2*np.pi**2))
         plin_z0 *= h**3
 
         Dgrowth = self.cosmo.get_Dgrowth_lcdm(np.array([0, self.redshift]), mode='z')
@@ -489,6 +516,35 @@ class PowerSpectrum1loop:
             pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
             pkmu_1loop = self.get_pkmu_gg_irres(k, mu, mode='1loop', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
             pkmu = pkmu_tree + pkmu_1loop
+
+        if len(k) == 1 or len(mu) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+
+    def get_pkmu_ctr(self, k, mu):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+
+        cs0 = self.ctr['cs0']
+        cs2 = self.ctr['cs2']
+        cs4 = self.ctr['cs4']
+        b4 = self.ctr['b4']
+
+        pk_lin = self.get_pk_lin(k)
+
+        pkmu_ctr1 = - 2 * np.kron(k**2 * pk_lin, (cs0 + cs2 * self.fgrowth * mu**2 + cs4 * self.fgrowth**2 * mu**4)).reshape(len(k),len(mu))
+        pkmu_ctr2 = - np.kron(k**4 * pk_lin, (b4 * self.fgrowth**4 * mu**4)).reshape(len(k),len(mu))
+        pkmu = pkmu_ctr1 + pkmu_ctr2
+
+        if len(k) == 1 or len(mu) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+
+    def get_pkmu_stoch(self, k, mu):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+        
+        pkmu = self.stoch['P_shot'] + self.stoch['a0'] * np.tile(k**2, (len(mu),1)).T + self.stoch['a2'] * np.kron(k**2, mu**2).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
