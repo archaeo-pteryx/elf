@@ -1,8 +1,6 @@
 # PowerSpectrumTheory
 
-A Python code to compute the one-loop galaxy power spectrum, including Promordial non-Gaussianity. 
-
-Currently, the redshift-space power spectrum and the IR resummation is under construction. 
+A Python code to compute the one-loop galaxy power spectrum, including Primordial non-Gaussianity.
 
 ## Requirements
 
