@@ -114,12 +114,7 @@ class PowerSpectrum1loop:
                         kmin=1e-7, kmax=1e+7, khigh=None):
         # run CAMB to obtain the transfer function
         self.transfer_name = transfer_name
-
-        ti = time.time()
         self.set_boltzmann(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
-        tf = time.time()
-        print('%s sec' % (tf-ti))
-
         self.redshift = redshift
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
 
@@ -130,7 +125,7 @@ class PowerSpectrum1loop:
 
         # set up the IR resummation
         self.irres = IRResum(self.get_pk_lin, hubble=self.params['h'], rbao=110, 
-                            khmin=7e-5, khmax=7, n_min=120, n_max=240,
+                            khmin=7e-5, khmax=7, n_min=120, n_max=220,
                             kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-0.7 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -141,7 +136,7 @@ class PowerSpectrum1loop:
         self.plin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=1e-7, kmax=1e+7, limit=1000)
         self.sigma2_v = self.plin_int / 3
 
-    def set_bias(self, bias1={}, bias2={}):
+    def set_bias_params(self, bias1={}, bias2={}):
         self.bias = bias1
         self.bias1 = bias1
         self.bias2 = bias2
@@ -246,7 +241,7 @@ class PowerSpectrum1loop:
         pk = pk_interp(k) * k**(-alpha)
         return pk
 
-    def get_pk_gg(self, k, sub_k0_22=True):
+    def get_pk_gg_raw(self, k, sub_k0_22=True):
         pk_tree = self.get_pk_lin(k)
 
         name_list = ['22','13','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
@@ -277,6 +272,10 @@ class PowerSpectrum1loop:
         # pk_gg = pk_gg - self.bias['c0'] * k**2 * pk_tree
 
         return pk_gg
+
+    def get_pk_gg(self, k, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
+        pk = self.get_pkmu_gg(k, 0, irres=irres, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+        return pk
 
     def get_pkmu_gg(self, k, mu, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
         if irres:
@@ -323,6 +322,10 @@ class PowerSpectrum1loop:
         Legendre = np.tile(special.lpmv(0,l,mu), (len(k_ref),1))
         pl = (2*l+1) * romb(pkmu_ref * Legendre, axis=1, dx=dmu)
         return pl
+
+    def get_pk_gg_lin(self, k):
+        pk = self.get_pkmu_gg_lin(k, 0)
+        return pk
 
     def get_pkmu_gg_lin(self, k, mu):
         k = np.atleast_1d(k)

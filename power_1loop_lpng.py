@@ -113,7 +113,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         M = self.get_M(k)
         return plin / M
 
-    def get_pk_gg_lin(self, k, mu):
+    def get_pk_gg_lin(self, k):
         k = np.atleast_1d(k)
 
         Z1_1 = self.bias1['b1'] + self.bias1['bphi'] * self.f_nl / self.get_M(k)
