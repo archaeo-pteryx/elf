@@ -114,7 +114,12 @@ class PowerSpectrum1loop:
                         kmin=1e-7, kmax=1e+7, khigh=None):
         # run CAMB to obtain the transfer function
         self.transfer_name = transfer_name
+
+        ti = time.time()
         self.set_boltzmann(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
+        tf = time.time()
+        print('%s sec' % (tf-ti))
+
         self.redshift = redshift
         self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
 
@@ -150,12 +155,14 @@ class PowerSpectrum1loop:
         if ctr2 == {}:
             self.ctr2 = copy.deepcopy(ctr1)
 
-    def set_stoch_params(self, stoch1={}, stoch2={}):
+    def set_stoch_params(self, stoch1={}, stoch2={}, ndens=1, k_nl=1):
         self.stoch = stoch1
         self.stoch1 = stoch1
         self.stoch2 = stoch2
         if stoch2 == {}:
             self.stoch2 = copy.deepcopy(stoch1)
+        self.ndens = ndens
+        self.k_nl = k_nl
 
     def get_pk_prim(self, kh):
         # primordial power spectrum of the curvature perturbations in unit of [Mpc^3]
@@ -239,7 +246,7 @@ class PowerSpectrum1loop:
         pk = pk_interp(k) * k**(-alpha)
         return pk
 
-    def get_pk_gg_raw(self, k, sub_k0_22=True):
+    def get_pk_gg(self, k, sub_k0_22=True):
         pk_tree = self.get_pk_lin(k)
 
         name_list = ['22','13','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
@@ -274,10 +281,16 @@ class PowerSpectrum1loop:
     def get_pkmu_gg(self, k, mu, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
         if irres:
             pkmu = self.get_pkmu_gg_irres(k, mu, mode='LO+NLO', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=True, Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu = pkmu + pkmu_ctr
         else:
             pkmu_tree = self.get_pkmu_gg_lin(k, mu)
-            pkmu_1loop = self.get_pkmu_gg_1loop_raw(k, mu, name='tot', mode='full')
-            pkmu = pkmu_tree + pkmu_1loop
+            pkmu_1loop = self.get_pkmu_gg_1loop(k, mu, name='tot', mode='full')
+            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=False)
+            pkmu = pkmu_tree + pkmu_1loop + pkmu_ctr
+
+        pkmu_stoch = self.get_pkmu_stoch(k, mu)
+        pkmu = pkmu + pkmu_stoch
         return pkmu
 
     def get_pk_ell_gg(self, l, k, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
@@ -397,13 +410,13 @@ class PowerSpectrum1loop:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
-    def get_pkmu_gg_1loop_raw(self, k, mu, name='tot', mode='full'):
+    def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
         if name == 'tot':
-            pkmu_22 = self.get_pkmu_gg_1loop_raw(k, mu, name='22_gg', mode=mode)
-            pkmu_13 = self.get_pkmu_gg_1loop_raw(k, mu, name='13_gg', mode=mode)
+            pkmu_22 = self.get_pkmu_gg_1loop(k, mu, name='22_gg', mode=mode)
+            pkmu_13 = self.get_pkmu_gg_1loop(k, mu, name='13_gg', mode=mode)
             pkmu = pkmu_22 + pkmu_13
             return pkmu
 
@@ -453,11 +466,11 @@ class PowerSpectrum1loop:
 
         return pkmu
 
-    def get_pk_ell_gg_1loop_raw(self, l, k, name='tot', mode='full'):
+    def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
-        pkmu = self.get_pkmu_gg_1loop_raw(k, mu, name=name, mode=mode)
+        pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
@@ -502,14 +515,14 @@ class PowerSpectrum1loop:
             pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + (1 + damp_fac) * np.exp(-damp_fac) * plin_w_tile)
         elif mode == '1loop no-wiggle':
             # 1-loop term computed with the non-wiggly component of the linear power spectrum
-            pkmu = self.get_pkmu_gg_1loop_raw(k, mu, name='tot', mode='no-wiggle')
+            pkmu = self.get_pkmu_gg_1loop(k, mu, name='tot', mode='no-wiggle')
         elif mode == '1loop wiggle':
             # 1-loop term computed with the wiggly component of the linear power spectrum
-            pkmu = self.get_pkmu_gg_1loop_raw(k, mu, name='tot') - self.get_pkmu_gg_1loop_raw(k, mu, name='tot', mode='no-wiggle')
+            pkmu = self.get_pkmu_gg_1loop(k, mu, name='tot') - self.get_pkmu_gg_1loop(k, mu, name='tot', mode='no-wiggle')
         elif mode == '1loop':
             # next-to-leading order term of the IR-resummed power spectrum
             pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
-            pkmu_1loop_w = self.get_pkmu_gg_1loop_raw(k, mu, name='tot') - pkmu_1loop_nw
+            pkmu_1loop_w = self.get_pkmu_gg_1loop(k, mu, name='tot') - pkmu_1loop_nw
             pkmu = pkmu_1loop_nw + np.exp(-damp_fac) * pkmu_1loop_w
         elif mode == 'LO+NLO':
             # LO+NLO IR-resummed power spectrum
@@ -521,20 +534,51 @@ class PowerSpectrum1loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pkmu_ctr(self, k, mu):
+    def get_pkmu_ctr(self, k, mu, irres=False, Sigma2=None, dSigma2=None, ks=0.2):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
-        cs0 = self.ctr['cs0']
-        cs2 = self.ctr['cs2']
-        cs4 = self.ctr['cs4']
-        b4 = self.ctr['b4']
+        ctr1_mu = self.ctr['c0'] + self.ctr['c2'] * self.fgrowth * mu**2 + self.ctr['c4'] * self.fgrowth**2 * mu**4
+        ctr2_mu = self.ctr['cfog'] * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
 
-        pk_lin = self.get_pk_lin(k)
+        if irres:
+            # wiggly-non-wiggly decomposition
+            plin = self.get_pk_lin(k)
+            plin_nw = self.irres.get_pk_nw(k)
+            plin_w = plin - plin_nw
 
-        pkmu_ctr1 = - 2 * np.kron(k**2 * pk_lin, (cs0 + cs2 * self.fgrowth * mu**2 + cs4 * self.fgrowth**2 * mu**4)).reshape(len(k),len(mu))
-        pkmu_ctr2 = - np.kron(k**4 * pk_lin, (b4 * self.fgrowth**4 * mu**4)).reshape(len(k),len(mu))
-        pkmu = pkmu_ctr1 + pkmu_ctr2
+            # BAO damping factor
+            # if Sigma2 == None:
+            #     Sigma2 = self.irres.get_Sigma2(ks=ks)
+
+            # pk = plin_nw + np.exp(-k**2 * Sigma2) * plin_w
+            # pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
+            # pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
+            # pkmu = pkmu_ctr1 + pkmu_ctr2
+
+            # BAO damping factor in redshift space
+            if Sigma2 == None:
+                Sigma2 = self.irres.get_Sigma2(ks=ks)
+            if dSigma2 == None:
+                dSigma2 = self.irres.get_dSigma2(ks=ks)
+            Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * Sigma2
+            Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * dSigma2
+            Sigma2_tot = Sigma2_1 + Sigma2_2
+
+            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
+            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
+            damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+
+            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
+
+            pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
+            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
+            pkmu = pkmu_ctr1 + pkmu_ctr2
+        else:
+            pk = self.get_pk_lin(k)
+            pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
+            pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
+            pkmu = pkmu_ctr1 + pkmu_ctr2
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
@@ -544,7 +588,7 @@ class PowerSpectrum1loop:
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
         
-        pkmu = self.stoch['P_shot'] + self.stoch['a0'] * np.tile(k**2, (len(mu),1)).T + self.stoch['a2'] * np.kron(k**2, mu**2).reshape(len(k),len(mu))
+        pkmu = 1./self.ndens * (1 + self.stoch['P_shot'] + self.stoch['a0'] * np.tile((k/self.k_nl)**2, (len(mu),1)).T + self.stoch['a2'] * np.kron((k/self.k_nl)**2, mu**2).reshape(len(k),len(mu)))
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
