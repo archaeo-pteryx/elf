@@ -6,6 +6,7 @@ from scipy.interpolate import RectBivariateSpline as rbs
 import camb
 from background import Cosmo
 
+
 class CambWrapper(Cosmo):
 
     def __init__(self, cparam, omega_nu0=0.00064, Omega_K0=0, k_pivot=0.05):
@@ -14,7 +15,7 @@ class CambWrapper(Cosmo):
         mnu = self.params['omega_nu0'] * 94.12
         self.params['k_pivot'] = k_pivot
         self.pars.set_cosmology(H0=self.params['H_0'], ombh2=self.params['omega_b0'], omch2=self.params['omega_c0'], omk=self.params['Omega_K0'], num_massive_neutrinos=1, mnu=mnu, nnu=3.046, YHe=0.24, TCMB=2.7255, tau=0.079)
-        self.pars.set_dark_energy(w=self.params['w_de'])
+        self.pars.set_dark_energy(w=self.params['w_0'])
         self.pars.InitPower.set_params(As=self.params['As'], ns=self.params['ns'], r=0, pivot_scalar=self.params['k_pivot'])
 
     def set_matter_power(self, z=0, kmax=1e+3):

@@ -10,9 +10,11 @@ GMsolar = 1.32712442099 * 1e+20 # in unit of m^3 s^-2. based on ASTRONOMICAL CON
 Msolar = GMsolar / G # in unit of kg
 G_in_Mpc_Msolar_inv = GMsolar / (SpeedofLight**2) / Mpc_in_m # in unit of Mpc Msolar^-1
 
+
 class Cosmo:
+
     def __init__(self, cparam, omega_nu0=0.00064, Omega_K0=0.):
-        self.params = {'omega_b0':cparam[0],'omega_c0':cparam[1],'Omega_de0':cparam[2],'ln10p10As':cparam[3],'ns':cparam[4],'w_de':cparam[5]}
+        self.params = {'omega_b0':cparam[0],'omega_c0':cparam[1],'Omega_de0':cparam[2],'ln10p10As':cparam[3],'ns':cparam[4],'w_0':cparam[5]}
         self.params['omega_nu0'] = omega_nu0
         self.params['Omega_K0'] = Omega_K0
         self.params['Omega_m0'] = 1-self.params['Omega_de0']-self.params['Omega_K0']
@@ -28,7 +30,7 @@ class Cosmo:
         self.params['rho_m0'] = self.params['rho_c0'] * self.params['Omega_m0']; # in unit of h^2 Msolar Mpc^-3
 
         a = np.hstack((np.geomspace(1e-10,0.5,500), np.linspace(0.5,1,501)[1:]))
-        de_dependence = np.exp([3 * quad(lambda t: (1+self.get_w_de(t)) / t, ai, 1)[0] for ai in a])
+        de_dependence = np.exp([3 * quad(lambda t: (1+self.get_w_0(t)) / t, ai, 1)[0] for ai in a])
         self._de_dependence_spl = ius(a, de_dependence)
 
     @staticmethod
@@ -38,8 +40,8 @@ class Cosmo:
         else: raise ValueError('The argument must be either a scale factor or a redshift.')
         return a
 
-    def get_w_de(self, x, mode='a'):
-        return self.params['w_de']
+    def get_w_0(self, x, mode='a'):
+        return self.params['w_0']
 
     def get_E(self, x, mode='a'):
         a = self.get_a(x, mode)
@@ -113,7 +115,7 @@ class Cosmo:
         return Dgrowth, fgrowth
 
     def get_Dgrowth_lcdm(self, x, mode='a'):
-        if self.params['w_de'] != -1.:
+        if self.params['w_0'] != -1.:
             raise ValueError('This function is valid only for LambdaCDM cosmology.')
         a = self.get_a(x, mode)
         if not isinstance(a,list) and not isinstance(a,np.ndarray):
@@ -130,7 +132,7 @@ class Cosmo:
         return Dgrowth
 
     def get_fgrowth_lcdm(self, x, mode='a'):
-        if self.params['w_de'] != -1.:
+        if self.params['w_0'] != -1.:
             raise ValueError('This function is valid only for LambdaCDM cosmology.')
         a = self.get_a(x, mode)
         if not isinstance(a,list) and not isinstance(a,np.ndarray):

@@ -1,6 +1,8 @@
 import numpy as np
 
+
 class PowerLawDecomp:
+
     def __init__(self, nu, kmin, kmax, nmax):
         self.nu = nu
         self.kmin = kmin
