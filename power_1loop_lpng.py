@@ -24,7 +24,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         if config_fft == None:
             kmin_fft = 1e-6
             kmax_fft = 1e+4
-            nmax_fft = 256
+            nmax_fft = 512
             config_fft = {
                 'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
                 'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
@@ -67,14 +67,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.set_matrix(self.name_pkmu_gg_terms['tot'])
         self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
-    def set_cosmology(self, cparam, redshift=0., omega_nu0=0.00064, Omega_K0=0., transfer_name='cb', 
-                        kmin=1e-7, kmax=1e+7, khigh=None):
-        # run CAMB to obtain the transfer function
-        self.transfer_name = transfer_name
-        self.set_boltzmann(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0, kmin=kmin, kmax=kmax)
-        self.redshift = redshift
-        self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
-
+    def set_1loop(kmin=1e-7, kmax=1e+7, khigh=None):
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -93,9 +86,9 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
 
         # compute the power spectrum integrals for UV part of P13
-        self.plin_int = self.get_pk_int(self.get_pk_lin, kmin=1e-7, kmax=1e+7, limit=1000, kwarg={'khigh':khigh})
-        self.plin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=1e-7, kmax=1e+7, limit=1000)
-        self.sigma2_v = self.plin_int / 3
+        self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
+        self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
+        self.sigma2_v = self.pk_lin_int / 3
 
     def set_f_nl(self, f_nl):
         self.f_nl = f_nl
@@ -104,14 +97,14 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         h = self.params['h']
         Omega_m0 = self.params['Omega_m0']
         H_0 = self.params['H_0_in_Mpc_inv']
-        tk = self.get_matter_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
+        tk = self.get_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
         Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
         return 2./3 * (k*h)**2 * (tk * Dgrowth) / (Omega_m0 * H_0**2)
 
     def get_pk_1phi(self, k, khigh=None):
-        plin = self.get_pk_lin(k, khigh=khigh)
+        pk_lin = self.get_pk_lin(k, khigh=khigh)
         M = self.get_M(k)
-        return plin / M
+        return pk_lin / M
 
     def get_pk_gg_lin(self, k):
         k = np.atleast_1d(k)
@@ -164,9 +157,9 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
 
         if mode == 'full':
-            pk_fac = self.get_pk_1phi(k) * self.plin_int
+            pk_fac = self.get_pk_1phi(k) * self.pk_lin_int
         elif mode == 'no-wiggle':
-            pk_fac = self.get_pk_1phi(k) * self.plin_nw_int
+            pk_fac = self.get_pk_1phi(k) * self.pk_lin_nw_int
         else:
             raise ValueError('Invalid mode')
 
@@ -285,9 +278,6 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         pkmu_tab = []
         for term in term_names:
             nf, nmu, bias_deg = utils_loop.get_deg_info(term)
-
-            # only for auto power spectrum
-            # bias_fac = np.prod([self.bias[key]**val for key, val in bias_deg.items()])
 
             keys = list(bias_deg.keys())
             if len(bias_deg) == 0:

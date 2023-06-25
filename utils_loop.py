@@ -3,8 +3,12 @@ import re
 
 kernel_to_decomp_dict = {
     # matter
-    '22_mm': ['plin nu=-0.3','plin nu=-0.3'],
-    '13_mm': ['plin nu=-0.3','plin nu=-0.3'],
+    '22_dd': ['plin nu=-0.3','plin nu=-0.3'],
+    '13_dd': ['plin nu=-0.3','plin nu=-0.3'],
+    '22_dv': ['plin nu=-0.3','plin nu=-0.3'],
+    '13_dv': ['plin nu=-0.3','plin nu=-0.3'],
+    '22_vv': ['plin nu=-0.3','plin nu=-0.3'],
+    '13_vv': ['plin nu=-0.3','plin nu=-0.3'],
     # biased tracer (Gaussian)
     'I_d2': ['plin nu=-1.6','plin nu=-1.6'],
     'I_G2': ['plin nu=-1.6','plin nu=-1.6'],
@@ -12,6 +16,8 @@ kernel_to_decomp_dict = {
     'I_d2_G2': ['plin nu=-1.6','plin nu=-1.6'],
     'I_G2_G2': ['plin nu=-1.6','plin nu=-1.6'],
     'F_G2': ['plin nu=-1.6','plin nu=-1.6'],
+    'I_d2_v': ['plin nu=-1.6','plin nu=-1.6'],
+    'I_s2_v': ['plin nu=-1.6','plin nu=-1.6'],
     # local PNG
     'I_phi': ['p1phi nu=-1.6','plin nu=-0.3'],
     'I_phi-d': ['p1phi nu=-1.6','plin nu=-1.6'],
@@ -21,15 +27,10 @@ kernel_to_decomp_dict = {
     'I_G2_phi-d': ['p1phi nu=-1.6','plin nu=-1.6'],
     'F_phi': ['p1phi nu=-1.6','plin nu=-1.6'],
     'F_G2_LPNG': ['plin nu=-1.6','p1phi nu=-1.6'],
-    # 'I_phi_tilde': ['p1phi nu=-1.6','M nu=0.2'],
-    # 'I_phi_tilde_d2': ['p1phi nu=-1.6','M nu=0.2'],
-    # 'I_phi_tilde_G2': ['p1phi nu=-1.6','M nu=0.2'],
     'I_phi_tilde': ['p1phi nu=-2.1','p1phi nu=-2.1'],
     'I_phi_tilde_d2': ['p1phi nu=-2.1','p1phi nu=-2.1'],
     'I_phi_tilde_G2': ['p1phi nu=-2.1','p1phi nu=-2.1'],
     # biased tracer in redshift space (Gaussian)
-    # '22_gg': ['plin nu=-1.6','plin nu=-1.6'],
-    # '13_gg': ['plin nu=-1.6','plin nu=-1.6'],
     '22_gg': ['plin nu=-0.7','plin nu=-0.7'],
     '13_gg': ['plin nu=-0.7','plin nu=-0.7'],
     # biased tracer in redshift space (local PNG contribution)
@@ -43,8 +44,12 @@ kernel_to_decomp_dict = {
 kernel_name_dict = {
     # matter
     'linear': 'P_\mathrm{lin}',
-    '22_mm': 'P_{22}',
-    '13_mm': 'P_{13}',
+    '22_dd': 'P_{22,\\delta\\delta}',
+    '13_dd': 'P_{13,\\delta\\delta}',
+    '22_dv': 'P_{22,\\delta\\theta}',
+    '13_dv': 'P_{13,\\delta\\theta}',
+    '22_vv': 'P_{22,\\theta\\theta}',
+    '13_vv': 'P_{13,\\theta\\theta}',
     # biased tracer (Gaussian)
     'I_d2': '\mathcal{I}_{\\delta^2}',
     'I_G2': '\mathcal{I}_{\mathcal{G}_2}',
