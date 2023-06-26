@@ -13,7 +13,7 @@ class IRResum:
         plin = pk_lin(kh / hubble, **kwarg) * hubble**(-3) # in unit of Mpc^3
         plin_nw = self.remove_wiggle(kh, plin, n_min, n_max) # in unit of Mpc^3
         
-        # adjustment at high k for extrapolation
+        # ad-hoc adjustment at high k for extrapolation
         plin_nw[-10:] = plin[-10:]
 
         # extrapolation
@@ -56,11 +56,11 @@ class IRResum:
     def get_pk_nw(self, k):
         return np.exp(self.pk_nw_interp(np.log(k)))
 
-    def get_Sigma2(self, ks=0.2, kmin=1e-7, limit=1000):
+    def get_Sigma2(self, ks, kmin=1e-7, limit=1000):
         res = quad(lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0,self.rbao*q) + 2 * spherical_jn(2,self.rbao*q)), kmin, ks, limit=limit, epsrel=1e-6)
         return res[0] / (6*np.pi**2)
 
-    def get_dSigma2(self, ks=0.2, kmin=1e-7, limit=1000):
+    def get_dSigma2(self, ks, kmin=1e-7, limit=1000):
         res = quad(lambda q: self.get_pk_nw(q) * spherical_jn(2,self.rbao*q), kmin, ks, limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
 

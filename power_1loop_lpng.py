@@ -17,7 +17,7 @@ from ir_resum import IRResum
 
 class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
 
-    def __init__(self, config_fft=None):
+    def __init__(self, config_fft=None, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
@@ -61,11 +61,12 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['13_gg_lpng1'] + self.name_pkmu_gg_terms['13_gg_lpng3']
         self.name_pkmu_gg_terms['tot'] += self.name_pkmu_gg_terms['12_gg_lpng1'] + self.name_pkmu_gg_terms['12_gg_lpng2']
 
-        # precompute the PT matrices
         self.mat = {}
         self.matrix = {}
-        self.set_matrix(self.name_pkmu_gg_terms['tot'])
-        self.compute_matrix(self.name_pkmu_gg_terms['tot'])
+        # precompute the PT matrices
+        if precompute:
+            self.set_matrix(self.name_pkmu_gg_terms['tot'])
+            self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
     def set_1loop(self, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
         # FFTLog-based power-law decomposition
@@ -103,12 +104,44 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         H_0 = self.params['H_0_in_Mpc_inv']
         tk = self.get_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
         Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
-        return 2./3 * (k*h)**2 * (tk * Dgrowth) / (Omega_m0 * H_0**2)
+        Mk = 2./3 * (k*h)**2 * (tk * Dgrowth) / (Omega_m0 * H_0**2)
+        return Mk
 
     def get_pk_1phi(self, k, khigh=None):
         pk_lin = self.get_pk_lin(k, khigh=khigh)
-        M = self.get_M(k)
-        return pk_lin / M
+        Mk = self.get_M(k)
+        return pk_lin / Mk
+
+    def get_pk_mm_irres(self, k, mode='LO'):
+        pk_lin = self.get_pk_lin(k)
+        pk_lin_nw = self.irres.get_pk_nw(k)
+        pk_lin_w = pk_lin - pk_lin_nw
+        if mode == 'LO':
+            pk = pk_lin_nw + np.exp(-k**2 * self.Sigma2) * pk_lin_w
+        return pk
+
+    def get_pk_1phi_irres(self, k):
+        pk_lin = self.get_pk_lin(k)
+        pk_lin_nw = self.irres.get_pk_nw(k)
+        pk_lin_w = pk_lin - pk_lin_nw
+        pk_irres_LO = pk_lin_nw + np.exp(-k**2 * self.Sigma2) * pk_lin_w
+
+        h = self.params['h']
+        pk_zeta = self.get_pk_zeta(k*h)
+        pk_prim = pk_zeta * (k*h)**4
+
+        pk_irres_LO = self.get_pk_mm_irres(k, mode='LO')
+        tk_irres_LO = np.sqrt((pk_irres_LO / h**3 / self.Dgrowth**2) / pk_prim)
+        tk_irres_LO *= self.tk_k0 # correction for T(k) in M(k), which is normalized as T(k) -> 1 (k -> 0).
+
+        Omega_m0 = self.params['Omega_m0']
+        H_0 = self.params['H_0_in_Mpc_inv']
+        Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
+
+        pk_1phi_irres_LO = tk_irres_LO / (2./3 * (k*h)**2 * Dgrowth / (Omega_m0 * H_0**2)) * pk_prim * h**3
+        pk_1phi_irres_LO = self.Dgrowth**2 * pk_1phi_irres_LO
+
+        return pk_1phi_irres_LO
 
     def get_pk_gg_lin(self, k):
         k = np.atleast_1d(k)
@@ -426,11 +459,13 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
     #         plin_nw_tile = np.ravel(plin_nw_tile)
     #         plin_w_tile = np.ravel(plin_w_tile)
 
+    #     plin_nw + np.exp(- self.damp_fac) * plin_w
+
     #     # IR-resummed power spectrum
     #     if mode == 'LO':
     #         # leading-order IR resummation
-    #         # pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
     #         pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
+    #         pkmu = Z1_lpng_tile1 * Z1_lpng_
     #     elif mode == 'tree':
     #         # leading-order IR resummation + additional term to prevent the double counting
     #         pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + (1 + damp_fac) * np.exp(-damp_fac) * plin_w_tile)
@@ -442,13 +477,13 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
     #         pkmu = self.get_pkmu_gg_1loop(k, mu, name='tot') - self.get_pkmu_gg_1loop(k, mu, name='tot', mode='no-wiggle')
     #     elif mode == '1loop':
     #         # next-to-leading order term of the IR-resummed power spectrum
-    #         pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+    #         pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle')
     #         pkmu_1loop_w = self.get_pkmu_gg_1loop(k, mu, name='tot') - pkmu_1loop_nw
     #         pkmu = pkmu_1loop_nw + np.exp(-damp_fac) * pkmu_1loop_w
     #     elif mode == 'LO+NLO':
     #         # LO+NLO IR-resummed power spectrum
-    #         pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
-    #         pkmu_1loop = self.get_pkmu_gg_irres(k, mu, mode='1loop', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+    #         pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree')
+    #         pkmu_1loop = self.get_pkmu_gg_irres(k, mu, mode='1loop')
     #         pkmu = pkmu_tree + pkmu_1loop
 
     #     if len(k) == 1 or len(mu) == 1:

@@ -17,7 +17,7 @@ from ir_resum import IRResum
 
 class PowerSpectrum1loop:
 
-    def __init__(self, config_fft=None):
+    def __init__(self, config_fft=None, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
@@ -44,11 +44,12 @@ class PowerSpectrum1loop:
         self.name_pkmu_gg_terms['13_gg'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_gg_terms['tot'] = self.name_pkmu_gg_terms['22_gg'] + self.name_pkmu_gg_terms['13_gg']
 
-        # precompute the PT matrices
         self.mat = {}
         self.matrix = {}
-        self.set_matrix(self.name_pkmu_gg_terms['tot'])
-        self.compute_matrix(self.name_pkmu_gg_terms['tot'])
+        # precompute the PT matrices
+        if precompute:
+            self.set_matrix(self.name_pkmu_gg_terms['tot'])
+            self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
     def set_power_law_decomp(self, config_fft):
         # set multiple instances of PowerLawDecomp class.
@@ -102,11 +103,11 @@ class PowerSpectrum1loop:
         
         k, tk = self.cosmo.get_matter_transfer_data(name=transfer_name)
         tk[1] = tk[0]
-        self.tk_lowk = tk[0]
+        self.tk_k0 = tk[0]
         k_extrap, tk_extrap = get_log_extrap(k, tk, kmin, kmax)
 
         # normalize the transfer function as T(k) -> 1 (k -> 0)
-        self.matter_transfer_spl = ius(np.log(k_extrap), tk_extrap / self.tk_lowk)
+        self.matter_transfer_spl = ius(np.log(k_extrap), np.log(tk_extrap / self.tk_k0))
 
     def set_redshift(self, redshift):
         self.redshift = redshift
@@ -162,24 +163,25 @@ class PowerSpectrum1loop:
         self.ndens = ndens
         self.k_nl = k_nl
 
-    def get_pk_prim(self, kh):
-        # primordial power spectrum of the curvature perturbations
+    def get_pk_zeta(self, kh):
+        # power spectrum of the primordial curvature perturbations
         As = self.params['As']
         ns = self.params['ns']
         k_pivot = self.params['k_pivot']
-        pk_prim = As * (kh / k_pivot)**(ns-1)
-        return pk_prim
+        pk_zeta = (2*np.pi**2) * As / kh**3 * (kh / k_pivot)**(ns-1)
+        return pk_zeta
 
     def get_transfer(self, k):
         # normalized as T(k) -> 1 (k -> 0)
-        return self.matter_transfer_spl(np.log(k))
+        tk = np.exp(self.matter_transfer_spl(np.log(k)))
+        return tk
 
     def get_pk_lin(self, k, khigh=None): # in unit of [h^{-3} Mpc^3]
         h = self.params['h']
-        pk_prim = self.get_pk_prim(k*h)
-        tk = self.get_transfer(k*h) * self.tk_lowk
+        pk_zeta = self.get_pk_zeta(k*h)
+        tk = self.get_transfer(k*h) * self.tk_k0
 
-        pk_lin_z0 = tk**2 * pk_prim * (k*h)**4 / ((k*h)**3 / (2*np.pi**2))
+        pk_lin_z0 = (k*h)**4 * tk**2 * pk_zeta
         pk_lin_z0 *= h**3
         pk_lin = self.Dgrowth**2 * pk_lin_z0
 
@@ -222,8 +224,7 @@ class PowerSpectrum1loop:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_k = self.decomp[name_dec[1]].func_rec.real
-            p13_int = np.dot(self.matrix[name], p1_q).real
-            pk_data = kn**3 * p2_k * p13_int
+            pk_data = kn**3 * p2_k * np.dot(self.matrix[name], p1_q).real
             if name == '13_dd':
                 pk_data = pk_data - 61./315. * kn**2 * p2_k * self.pk_lin_int
             elif name == '13_dv':
@@ -294,21 +295,28 @@ class PowerSpectrum1loop:
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.atleast_1d(mu_ref)
 
+        # mapping of (k, mu)
         F = alpha_para / alpha_perp
         fac = np.sqrt(1 + mu_ref**2 * (1./F**2 - 1))
         mu = mu_ref / (F * fac)
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
-        pkmu = np.array([self.get_pkmu_gg(k[:,i], mu, irres=irres)[:,i] for i in range(len(mu_ref))]).T
+        # spline interpolation
+        # kn = np.sort(np.unique(np.ravel(k)))
+        kn = np.linspace(np.min(k), np.max(k), 1000)
+        pkmu = self.get_pkmu_gg(kn, mu, irres=irres)
+        pkmu_interp = rbs(kn, mu, pkmu)
+
+        pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] for i in range(len(mu_ref))]).T
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
 
     def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=False):
         k_ref = np.atleast_1d(k_ref)
-        mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
-        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu, alpha_perp, alpha_para, irres=irres)
-        legendre = np.tile(lpmv(0,l,mu), (len(k_ref),1))
+        mu_ref = np.linspace(0.,1.,2**8+1)
+        dmu = mu_ref[1]-mu_ref[0]
+        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres)
+        legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
         pl = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
         return pl
 
