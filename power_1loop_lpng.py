@@ -67,7 +67,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.set_matrix(self.name_pkmu_gg_terms['tot'])
         self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
-    def set_1loop(kmin=1e-7, kmax=1e+7, khigh=None):
+    def set_1loop(self, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -78,17 +78,21 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         self.decomp['M nu=0.2'].compute(self.get_M)
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, hubble=self.params['h'], rbao=110, 
+        self.irres = IRResum(self.get_pk_lin, hubble=self.params['h'], rbao=rbao, 
                             khmin=7e-5, khmax=7, n_min=120, n_max=240,
                             kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-0.7 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
 
-        # compute the power spectrum integrals for UV part of P13
+        # BAO damping factors
+        self.Sigma2 = self.irres.get_Sigma2(ks=ks)
+        self.dSigma2 = self.irres.get_dSigma2(ks=ks)
+
+        # compute the power spectrum integral for the UV part of P13
         self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
         self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
-        self.sigma2_v = self.pk_lin_int / 3
+        self.sigmav2 = self.pk_lin_int / 3
 
     def set_f_nl(self, f_nl):
         self.f_nl = f_nl
@@ -268,7 +272,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
             pk_1phi = np.tile(self.get_pk_1phi(k), (len(mu),1)).T
             factor = np.kron(k**2, (1 + self.fgrowth**2 * mu**2)).reshape(len(k),len(mu))
             
-            pkmu = - (self.bias1['bphi'] * Z1_g2 + self.bias2['bphi'] * Z1_g1) / 2 * factor * self.sigma2_v * pk_1phi
+            pkmu = - (self.bias1['bphi'] * Z1_g2 + self.bias2['bphi'] * Z1_g1) / 2 * factor * self.sigmav2 * pk_1phi
 
             if len(k) == 1 or len(mu) == 1:
                 pkmu = np.ravel(pkmu)
@@ -326,7 +330,7 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
 
         return pkmu
 
-    def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO', Sigma2=None, dSigma2=None, ks=0.2):
+    def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
@@ -336,12 +340,8 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
         plin_w = plin - plin_nw
 
         # BAO damping factor in redshift space
-        if Sigma2 == None:
-            Sigma2 = self.irres.get_Sigma2(ks=ks)
-        if dSigma2 == None:
-            dSigma2 = self.irres.get_dSigma2(ks=ks)
-        Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * Sigma2
-        Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * dSigma2
+        Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * self.Sigma2
+        Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
         Sigma2_tot = Sigma2_1 + Sigma2_2
 
         Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
@@ -380,22 +380,22 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
             pkmu = self.get_pkmu_gg_1loop(k, mu, name='gauss_tot') - self.get_pkmu_gg_1loop(k, mu, name='gauss_tot', mode='no-wiggle')
         elif mode == '1loop':
             # next-to-leading order term of the IR-resummed power spectrum
-            pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle')
             pkmu_1loop_w = self.get_pkmu_gg_1loop(k, mu, name='gauss_tot') - pkmu_1loop_nw
             pkmu = pkmu_1loop_nw + np.exp(-damp_fac) * pkmu_1loop_w
             pkmu_lpng = self.get_pkmu_gg_1loop(k, mu, name='lpng_tot')
             pkmu = pkmu + pkmu_lpng
         elif mode == 'LO+NLO':
             # LO+NLO IR-resummed power spectrum
-            pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
-            pkmu_1loop = self.get_pkmu_gg_irres(k, mu, mode='1loop', Sigma2=Sigma2, dSigma2=dSigma2, ks=ks)
+            pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree')
+            pkmu_1loop = self.get_pkmu_gg_irres(k, mu, mode='1loop')
             pkmu = pkmu_tree + pkmu_1loop
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    # def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO', Sigma2=None, dSigma2=None, ks=0.2):
+    # def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
     #     k = np.atleast_1d(k)
     #     mu = np.atleast_1d(mu)
 
@@ -405,12 +405,8 @@ class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
     #     plin_w = plin - plin_nw
 
     #     # BAO damping factor in redshift space
-    #     if Sigma2 == None:
-    #         Sigma2 = self.irres.get_Sigma2(ks=ks)
-    #     if dSigma2 == None:
-    #         dSigma2 = self.irres.get_dSigma2(ks=ks)
-    #     Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * Sigma2
-    #     Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * dSigma2
+    #     Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * self.Sigma2
+    #     Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
     #     Sigma2_tot = Sigma2_1 + Sigma2_2
 
     #     Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
