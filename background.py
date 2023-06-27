@@ -13,7 +13,7 @@ G_in_Mpc_Msolar_inv = GMsolar / (SpeedofLight**2) / Mpc_in_m # in unit of Mpc Ms
 
 class Cosmo:
 
-    def __init__(self, cparam, omega_nu0=0.00064, Omega_K0=0.):
+    def __init__(self, cparam, omega_nu0=0., Omega_K0=0.):
         self.params = {'omega_b0':cparam[0],'omega_c0':cparam[1],'Omega_de0':cparam[2],'ln10p10As':cparam[3],'ns':cparam[4],'w_0':cparam[5]}
         self.params['omega_nu0'] = omega_nu0
         self.params['Omega_K0'] = Omega_K0
@@ -35,6 +35,7 @@ class Cosmo:
 
     @staticmethod
     def get_a(x, mode):
+        x = np.atleast_1d(x)
         if mode == 'a': a = x
         elif mode == 'z': a = 1/(1+x)
         else: raise ValueError('The argument must be either a scale factor or a redshift.')
@@ -45,8 +46,6 @@ class Cosmo:
 
     def get_E(self, x, mode='a'):
         a = self.get_a(x, mode)
-        if not isinstance(a,list) and not isinstance(a,np.ndarray):
-            a = np.array([a])
         Omega_m0 = self.params['Omega_m0']
         Omega_de0 = self.params['Omega_de0']
         Omega_K0 = self.params['Omega_K0']
@@ -67,8 +66,6 @@ class Cosmo:
 
     def get_cosmic_time(self, x, mode='a'):
         a = self.get_a(x, mode)
-        if not isinstance(a,list) and not isinstance(a,np.ndarray):
-            a = np.array([a])
         # t_in_Mpc = quad(lambda t: 1./self.get_hubble_comoving(t), 0, a)[0]
         num = 9
         t = np.linspace(0,1,2**num+1)
@@ -118,8 +115,6 @@ class Cosmo:
         if self.params['w_0'] != -1.:
             raise ValueError('This function is valid only for LambdaCDM cosmology.')
         a = self.get_a(x, mode)
-        if not isinstance(a,list) and not isinstance(a,np.ndarray):
-            a = np.array([a])
         num = 9
         t = np.linspace(1e-10,1,2**num+1)
         dt = t[1]-t[0]
@@ -135,8 +130,6 @@ class Cosmo:
         if self.params['w_0'] != -1.:
             raise ValueError('This function is valid only for LambdaCDM cosmology.')
         a = self.get_a(x, mode)
-        if not isinstance(a,list) and not isinstance(a,np.ndarray):
-            a = np.array([a])
         num = 9
         t = np.linspace(1e-10,1,2**num+1)
         dt = t[1]-t[0]
@@ -150,8 +143,6 @@ class Cosmo:
     # in unit of Mpc
     def get_comoving_dist(self, x, mode='a'):
         a = self.get_a(x, mode)
-        if not isinstance(a,list) and not isinstance(a,np.ndarray):
-            a = np.array([a])
         z = 1./a-1
         comoving_dist = np.array([quad(lambda t: 1./self.get_hubble_in_Mpc_inv(t, mode='z'), 0., zi)[0] for zi in z])
         if len(comoving_dist) == 1: comoving_dist = comoving_dist[0]

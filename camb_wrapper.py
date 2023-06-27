@@ -1,15 +1,12 @@
 import numpy as np
-from copy import deepcopy
-from scipy.integrate import romb
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
-from scipy.interpolate import RectBivariateSpline as rbs
 import camb
 from background import Cosmo
 
 
 class CambWrapper(Cosmo):
 
-    def __init__(self, cparam, omega_nu0=0.00064, Omega_K0=0, k_pivot=0.05):
+    def __init__(self, cparam, omega_nu0=0., Omega_K0=0., k_pivot=0.05):
         super(CambWrapper, self).__init__(cparam, omega_nu0, Omega_K0)
         self.pars = camb.CAMBparams()
         mnu = self.params['omega_nu0'] * 94.12
@@ -40,16 +37,13 @@ class CambWrapper(Cosmo):
 
         return k, tk
 
-    def get_matter_power_data(self, minkh=2e-5, maxkh=10., npoints=400):
+    def get_matter_power_data(self, minkh=2e-5, maxkh=1e+2, npoints=1000):
         kh, z, pk = self.results.get_matter_power_spectrum(minkh=minkh, maxkh=maxkh, npoints=npoints)
         return kh, pk[0]
 
     def get_matter_power(self, k):
         k = np.atleast_1d(k)
-        kh, z, pk = self.results.get_matter_power_spectrum(minkh=2e-5, maxkh=10, npoints=400)
+        kh, z, pk = self.results.get_matter_power_spectrum(minkh=2e-5, maxkh=1e+2, npoints=1000)
         pk_spl = ius(np.log(kh), np.log(pk[0]))
         return np.exp(pk_spl(np.log(k)))
-
-    def convert_sigma8_to_As(self, sigma8):
-        return self.params['As'] * (sigma8 / self.params['sigma8'])**2
         
