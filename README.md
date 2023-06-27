@@ -17,7 +17,7 @@ The following packages need to be installed (version information is to be determ
 
 ## Basic Usage
 
-You can refer an example Jupiter notebook at
+You can refer an example Jupyter notebook at
 
 ```bash
 example/power_1loop.ipynb
