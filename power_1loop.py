@@ -263,11 +263,11 @@ class PowerSpectrum1loop:
 
         return pk_gg
 
-    def get_pk_gg(self, k, irres=False):
+    def get_pk_gg(self, k, irres=True):
         pk = self.get_pkmu_gg(k, 0, irres=irres)
         return pk
 
-    def get_pkmu_gg(self, k, mu, irres=False):
+    def get_pkmu_gg(self, k, mu, irres=True):
         if irres:
             pkmu = self.get_pkmu_gg_irres(k, mu, mode='LO+NLO')
             pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
@@ -282,7 +282,7 @@ class PowerSpectrum1loop:
         pkmu = pkmu + pkmu_stoch
         return pkmu
 
-    def get_pk_ell_gg(self, l, k, irres=False):
+    def get_pk_ell_gg(self, l, k, irres=True):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
@@ -291,7 +291,11 @@ class PowerSpectrum1loop:
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
 
-    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=False):
+    def get_pk_gg_ref(self, k_ref, alpha_perp, alpha_para, irres=True):
+        pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres)
+        return pk
+
+    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.atleast_1d(mu_ref)
 
@@ -305,13 +309,18 @@ class PowerSpectrum1loop:
         # kn = np.sort(np.unique(np.ravel(k)))
         kn = np.linspace(np.min(k), np.max(k), 1000)
         pkmu = self.get_pkmu_gg(kn, mu, irres=irres)
-        pkmu_interp = rbs(kn, mu, pkmu)
 
-        pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] for i in range(len(mu_ref))]).T
+        if len(mu) == 1:
+            pkmu_interp = ius(kn, pkmu)
+            pkmu = pkmu_interp(np.ravel(k))
+        else:
+            pkmu_interp = rbs(kn, mu, pkmu)
+            pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] for i in range(len(mu_ref))]).T
+
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
 
-    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=False):
+    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.linspace(0.,1.,2**8+1)
         dmu = mu_ref[1]-mu_ref[0]
@@ -527,7 +536,7 @@ class PowerSpectrum1loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pkmu_ctr(self, k, mu, irres=False):
+    def get_pkmu_ctr(self, k, mu, irres=True):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
@@ -564,7 +573,7 @@ class PowerSpectrum1loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pk_ell_ctr(self, l, k, irres=False):
+    def get_pk_ell_ctr(self, l, k, irres=True):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
