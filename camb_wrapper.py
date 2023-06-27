@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.interpolate import InterpolatedUnivariateSpline as ius
 import camb
 from background import Cosmo
 
@@ -22,9 +21,6 @@ class CambWrapper(Cosmo):
         self.results = camb.get_results(self.pars)
         self.params['sigma8'] = self.results.get_sigma8()[0]
 
-    def get_rdrag(self):
-        return self.results.get_derived_params()['rdrag'] * self.params['h']
-
     def get_matter_transfer_data(self, name='tot'):
         trans = self.results.get_matter_transfer_data()
         k = trans.q
@@ -36,14 +32,3 @@ class CambWrapper(Cosmo):
             tk = trans.transfer_data[camb.model.Transfer_nonu-1,:,0] # CDM+baryon transfer
 
         return k, tk
-
-    def get_matter_power_data(self, minkh=2e-5, maxkh=1e+2, npoints=1000):
-        kh, z, pk = self.results.get_matter_power_spectrum(minkh=minkh, maxkh=maxkh, npoints=npoints)
-        return kh, pk[0]
-
-    def get_matter_power(self, k):
-        k = np.atleast_1d(k)
-        kh, z, pk = self.results.get_matter_power_spectrum(minkh=2e-5, maxkh=1e+2, npoints=1000)
-        pk_spl = ius(np.log(kh), np.log(pk[0]))
-        return np.exp(pk_spl(np.log(k)))
-        

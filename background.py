@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.integrate import quad, romb, odeint
+from scipy.integrate import quad, romb
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 
 Mpc_in_m = 3.085677581 * 1e+16 * 1e+6 # in unit of m
@@ -64,22 +64,6 @@ class Cosmo:
         a = self.get_a(x, mode)
         return a * self.get_hubble_in_Mpc_inv(a)
 
-    def get_cosmic_time(self, x, mode='a'):
-        a = self.get_a(x, mode)
-        # t_in_Mpc = quad(lambda t: 1./self.get_hubble_comoving(t), 0, a)[0]
-        num = 9
-        t = np.linspace(0,1,2**num+1)
-        t_tile = np.tile(t, (len(a),1))
-        diff = np.tile(a, (len(t),1)).T
-        a_table = diff * t_tile
-        da_list = a_table[:,1]-a_table[:,0]
-        hubble_comoving_table = self.get_hubble_comoving(np.ravel(a_table)).reshape(len(a),len(t))
-        t_in_Mpc = romb(1./hubble_comoving_table, axis=1) * da_list
-
-        if len(t_in_Mpc) == 1: t_in_Mpc = t_in_Mpc[0]
-        t_in_yr = 3.261563777 * 1e+6 * t_in_Mpc
-        return t_in_yr
-
     def get_Omega_m(self, x, mode='a'):
         a = self.get_a(x, mode)
         return self.params['Omega_m0'] / self.get_E(a)**2 / a**3
@@ -93,23 +77,6 @@ class Cosmo:
     def get_Omega_K(self, x, mode='a'):
         a = self.get_a(x, mode)
         return 1 - self.get_Omega_m(a) - self.get_Omega_de(a)
-
-    def get_deceleration_param(self, x, mode='a'):
-        a = self.get_a(x, mode)
-        return -1 + a / self.get_hubble_in_Mpc_inv(a)
-
-    def get_linear_growth(self, x, mode='a'):
-        a = self.get_a(x, mode)
-        def model(y,a):
-            D, dDda = y
-            q = self.get_deceleration_param(a)
-            dyda = [dDda, (q-2)/a * dDda + 1.5*self.get_Omega_m(a)/a**2]
-            return dyda
-        t = np.array([a])
-        res = odeint(model, y0, t)
-        Dgrowth = res[:,0]
-        fgrowth = res[:,1] * a / Dgrowth
-        return Dgrowth, fgrowth
 
     def get_Dgrowth_lcdm(self, x, mode='a'):
         if self.params['w_0'] != -1.:
@@ -139,49 +106,3 @@ class Cosmo:
         fgrowth = -1 - self.get_Omega_m(a)/2 + self.get_Omega_de(a) + 1/res
         if len(fgrowth) == 1: fgrowth = fgrowth[0]
         return fgrowth
-
-    # in unit of Mpc
-    def get_comoving_dist(self, x, mode='a'):
-        a = self.get_a(x, mode)
-        z = 1./a-1
-        comoving_dist = np.array([quad(lambda t: 1./self.get_hubble_in_Mpc_inv(t, mode='z'), 0., zi)[0] for zi in z])
-        if len(comoving_dist) == 1: comoving_dist = comoving_dist[0]
-        return comoving_dist
-
-    # in unit of Mpc/h
-    def get_comoving_dist_in_h_inv_Mpc(self, x, mode='a'):
-        return self.get_comoving_dist(x, mode) * self.params['h']
-
-    @staticmethod
-    def comoving_to_radial(x, K):
-        if K == 0: return x
-        elif K > 0: return np.sin(np.sqrt(K)*x) / np.sqrt(K)
-        elif K < 0: return np.sinh(np.sqrt(-K)*x) / np.sqrt(-K)
-        else: raise ValueError('The curvature K is not specified.')
-
-    # in comoving Mpc
-    def get_D_angular(self, x, mode='a', K=0):
-        return self.comoving_to_radial(self.get_comoving_dist(x, mode), K)
-
-    # in unit of Mpc/h
-    def get_D_angular_in_h_inv_Mpc(self, x, mode='a', K=0):
-        return self.get_D_angular(x, mode, K) * self.params['h']
-
-    # in comoving Mpc
-    def get_D_luminos(self, x, mode='a', K=0):
-        return self.comoving_to_radial(self.get_comoving_dist(x, mode), K)
-
-    # in unit of Mpc/h
-    def get_D_luminos_in_h_inv_Mpc(self, x, mode='a', K=0):
-        return self.get_D_luminos(x, mode, K) * self.params['h']
-
-    # in comoving Mpc
-    def get_D_V(self, x, mode='a', K=0):
-        DA = self.get_D_angular(x, mode, K)
-        H = self.get_hubble_comoving(x, mode)
-        D_V = (DA**2/H)**(1./3)
-        return D_V
-
-    # in unit of Mpc/h
-    def get_D_V_in_h_inv_Mpc(self, x, mode='a', K=0):
-        return self.get_D_V(x, mode, K) * self.params['h']
