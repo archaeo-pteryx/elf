@@ -14,7 +14,7 @@ class CambWrapper(Cosmo):
         self.pars.set_dark_energy(w=self.params['w_0'])
         self.pars.InitPower.set_params(As=self.params['As'], ns=self.params['ns'], r=0, pivot_scalar=self.params['k_pivot'])
 
-    def set_matter_power(self, z=0, kmax=1e+3):
+    def set_matter_power(self, z=0, kmax=100.):
         self.pars.set_matter_power(redshifts=[z], kmax=kmax)
         self.pars.NonLinear = camb.model.NonLinear_none
         self.pars.DoLensing = False
