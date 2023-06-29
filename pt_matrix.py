@@ -1,7 +1,7 @@
 import numpy as np
 import scipy as sp
 from scipy.special import gamma
-from sympy.parsing.mathematica import mathematica
+from sympy.parsing.mathematica import parse_mathematica
 from sympy import var, lambdify
 
 def get_I(nu1, nu2):
@@ -14,7 +14,7 @@ class PTMatrix22:
         self.name = name
         with open(name,'r') as file:
             expr = file.read()
-        self.expr = mathematica(expr)
+        self.expr = parse_mathematica(expr)
         nu1 = var('nu1')
         nu2 = var('nu2')
         self.func = lambdify([nu1,nu2], self.expr, modules='numpy')
@@ -29,7 +29,7 @@ class PTMatrix13:
         self.name = name
         with open(name,'r') as file:
             expr = file.read()
-        self.expr = mathematica(expr)
+        self.expr = parse_mathematica(expr)
         nu1 = var('nu1')
         self.func = lambdify([nu1], self.expr, modules='numpy')
 
