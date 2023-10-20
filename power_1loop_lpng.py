@@ -8,23 +8,20 @@ from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
 
 from camb_wrapper import CambWrapper
-from power_1loop import PowerSpectrum1loop
+from power_1loop import PowerSpectrum1Loop
 from power_law_decomp import PowerLawDecomp
 import pt_matrix
 import utils_loop
 from ir_resum import IRResum
 
 
-class PowerSpectrum1loopLPNG(PowerSpectrum1loop):
+class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
-    def __init__(self, config_fft=None, precompute=True):
+    def __init__(self, config_fft=None, kmin_fft=1e-6, kmax_fft=1e+4, nmax_fft=512, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
         if config_fft == None:
-            kmin_fft = 1e-6
-            kmax_fft = 1e+4
-            nmax_fft = 512
             config_fft = {
                 'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
                 'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
