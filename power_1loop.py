@@ -15,16 +15,13 @@ from utils_loop import get_log_extrap
 from ir_resum import IRResum
 
 
-class PowerSpectrum1loop:
+class PowerSpectrum1Loop:
 
-    def __init__(self, config_fft=None, precompute=True):
+    def __init__(self, config_fft=None, kmin_fft=1e-6, kmax_fft=1e+4, nmax_fft=512, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
         if config_fft == None:
-            kmin_fft = 1e-6
-            kmax_fft = 1e+4
-            nmax_fft = 512
             config_fft = {
                 'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
                 'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
@@ -154,13 +151,13 @@ class PowerSpectrum1loop:
         if ctr2 == {}:
             self.ctr2 = copy.deepcopy(ctr1)
 
-    def set_stoch_params(self, stoch1={}, stoch2={}, ndens=1, k_nl=1):
-        self.stoch = stoch1
-        self.stoch1 = stoch1
-        self.stoch2 = stoch2
-        if stoch2 == {}:
-            self.stoch2 = copy.deepcopy(stoch1)
+    def set_stoch_params(self, stoch={}, ndens=1, ndens2=None, k_nl=1):
+        self.stoch = stoch
         self.ndens = ndens
+        self.ndens1 = ndens
+        self.ndens2 = ndens2
+        if ndens2 == None:
+            self.ndens2 = ndens
         self.k_nl = k_nl
 
     def get_pk_zeta(self, kh):
@@ -263,11 +260,11 @@ class PowerSpectrum1loop:
 
         return pk_gg
 
-    def get_pk_gg(self, k, irres=True):
-        pk = self.get_pkmu_gg(k, 0, irres=irres)
+    def get_pk_gg(self, k, irres=True, cross=False):
+        pk = self.get_pkmu_gg(k, 0, irres=irres, cross=cross)
         return pk
 
-    def get_pkmu_gg(self, k, mu, irres=True):
+    def get_pkmu_gg(self, k, mu, irres=True, cross=False):
         if irres:
             pkmu = self.get_pkmu_gg_irres(k, mu, mode='LO+NLO')
             pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
@@ -278,24 +275,24 @@ class PowerSpectrum1loop:
             pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
             pkmu = pkmu_tree + pkmu_1loop + pkmu_ctr
 
-        pkmu_stoch = self.get_pkmu_stoch(k, mu)
+        pkmu_stoch = self.get_pkmu_stoch(k, mu, cross=cross)
         pkmu = pkmu + pkmu_stoch
         return pkmu
 
-    def get_pk_ell_gg(self, l, k, irres=True):
+    def get_pk_ell_gg(self, l, k, irres=True, cross=False):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
-        pkmu = self.get_pkmu_gg(k, mu, irres=irres)
+        pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
         pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pl
 
-    def get_pk_gg_ref(self, k_ref, alpha_perp, alpha_para, irres=True):
-        pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres)
+    def get_pk_gg_ref(self, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
+        pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres, cross=cross)
         return pk
 
-    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
+    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.atleast_1d(mu_ref)
 
@@ -308,7 +305,7 @@ class PowerSpectrum1loop:
         # spline interpolation
         # kn = np.sort(np.unique(np.ravel(k)))
         kn = np.linspace(np.min(k), np.max(k), 1000)
-        pkmu = self.get_pkmu_gg(kn, mu, irres=irres)
+        pkmu = self.get_pkmu_gg(kn, mu, irres=irres, cross=cross)
 
         if len(mu) == 1:
             pkmu_interp = ius(kn, pkmu)
@@ -320,11 +317,11 @@ class PowerSpectrum1loop:
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
 
-    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True):
+    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.linspace(0.,1.,2**8+1)
         dmu = mu_ref[1]-mu_ref[0]
-        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres)
+        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, cross=cross)
         legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
         pl = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
         return pl
@@ -540,8 +537,15 @@ class PowerSpectrum1loop:
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
-        ctr1_mu = self.ctr['c0'] + self.ctr['c2'] * self.fgrowth * mu**2 + self.ctr['c4'] * self.fgrowth**2 * mu**4
-        ctr2_mu = self.ctr['cfog'] * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
+        # auto power spectrum
+        # ctr1_mu = self.ctr['c0'] + self.ctr['c2'] * self.fgrowth * mu**2 + self.ctr['c4'] * self.fgrowth**2 * mu**4
+        # ctr2_mu = self.ctr['cfog'] * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
+
+        # cross power spectrum
+        ctr1_mu = (self.ctr1['c0'] + self.ctr2['c0']) / 2 
+        ctr1_mu = ctr1_mu + (self.ctr1['c2'] + self.ctr2['c2']) / 2 * self.fgrowth * mu**2
+        ctr1_mu = ctr1_mu + (self.ctr1['c4'] + self.ctr2['c4']) / 2 * self.fgrowth**2 * mu**4
+        ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
 
         if irres:
             # wiggly-non-wiggly decomposition
@@ -601,16 +605,28 @@ class PowerSpectrum1loop:
         legendre = np.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
         pl = -2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
 
-        if l == 0: cl = self.ctr['c0']
-        elif l == 2: cl = self.ctr['c2']
-        elif l == 4: cl = self.ctr['c4']
+        if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
+        elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
+        elif l == 4: cl = (self.ctr1['c4'] + self.ctr2['c4']) / 2
         return cl * pl
 
-    def get_pkmu_stoch(self, k, mu):
+    def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
-        
-        pkmu = 1./self.ndens * (1 + self.stoch['P_shot'] + self.stoch['a0'] * np.tile((k/self.k_nl)**2, (len(mu),1)).T + self.stoch['a2'] * np.kron((k/self.k_nl)**2, mu**2).reshape(len(k),len(mu)))
+
+        pkmu = self.stoch['P_shot']
+        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
+        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
+        pkmu = 1./self.ndens * pkmu
+
+        if cross:
+            try:
+                pkmu = self.stoch['P_shot_cross']
+                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
+                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
+                pkmu = (1./self.ndens1 + 1./self.ndens2) / 2. * pkmu
+            except KeyError:
+                pkmu = np.zeros((len(k),len(mu)))
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)

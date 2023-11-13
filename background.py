@@ -106,3 +106,30 @@ class Cosmo:
         fgrowth = -1 - self.get_Omega_m(a)/2 + self.get_Omega_de(a) + 1/res
         if len(fgrowth) == 1: fgrowth = fgrowth[0]
         return fgrowth
+
+    # in unit of Mpc
+    def get_comoving_dist(self, x, mode='a'):
+        a = self.get_a(x, mode)
+        z = 1./a-1
+        comoving_dist = np.array([quad(lambda t: 1./self.get_hubble_in_Mpc_inv(t, mode='z'), 0., zi)[0] for zi in z])
+        if len(comoving_dist) == 1: comoving_dist = comoving_dist[0]
+        return comoving_dist
+
+    # in unit of Mpc/h
+    def get_comoving_dist_in_h_inv_Mpc(self, x, mode='a'):
+        return self.get_comoving_dist(x, mode) * self.params['h']
+
+    @staticmethod
+    def comoving_to_radial(x, K):
+        if K == 0: return x
+        elif K > 0: return np.sin(np.sqrt(K)*x) / np.sqrt(K)
+        elif K < 0: return np.sinh(np.sqrt(-K)*x) / np.sqrt(-K)
+        else: raise ValueError('The curvature K is not specified.')
+
+    # in comoving Mpc
+    def get_D_angular(self, x, mode='a', K=0):
+        return self.comoving_to_radial(self.get_comoving_dist(x, mode), K)
+
+    # in unit of Mpc/h
+    def get_D_angular_in_h_inv_Mpc(self, x, mode='a', K=0):
+        return self.get_D_angular(x, mode, K) * self.params['h']
