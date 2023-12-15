@@ -17,7 +17,7 @@ from ir_resum import IRResum
 
 class PowerSpectrum1Loop:
 
-    def __init__(self, config_fft=None, kmin_fft=1e-6, kmax_fft=1e+4, nmax_fft=512, precompute=True):
+    def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
@@ -614,14 +614,14 @@ class PowerSpectrum1Loop:
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
-        pkmu = 1 + self.stoch['P_shot']
+        pkmu = self.stoch['P_shot']
         pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
         pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
         pkmu = 1./self.ndens * pkmu
 
         if cross:
             try:
-                pkmu = 1 + self.stoch['P_shot_cross']
+                pkmu = self.stoch['P_shot_cross']
                 pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
                 pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
                 pkmu = (1./self.ndens1 + 1./self.ndens2) / 2. * pkmu

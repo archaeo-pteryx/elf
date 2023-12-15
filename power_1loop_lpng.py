@@ -17,7 +17,7 @@ from ir_resum import IRResum
 
 class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
-    def __init__(self, config_fft=None, kmin_fft=1e-6, kmax_fft=1e+4, nmax_fft=512, precompute=True):
+    def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
         self.params = None
 
         # set up the FFTLog-based power-law decomposition
