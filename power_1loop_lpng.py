@@ -11,6 +11,7 @@ from power_1loop import PowerSpectrum1Loop
 from power_law_decomp import PowerLawDecomp
 import pt_matrix
 import utils_loop
+from utils_loop import get_log_extrap
 from ir_resum import IRResum
 
 
@@ -94,11 +95,11 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         self.f_nl = f_nl
 
     def set_Mk(self, k, Mk, kmin=1e-7, kmax=1e+7):
-        k_extrap, Mk_extrap = get_log_extrap(kh, Mk, kmin, kmax)
+        k_extrap, Mk_extrap = get_log_extrap(k, Mk, kmin, kmax)
         self.Mk_spl = ius(np.log(k_extrap), np.log(Mk_extrap))
 
     def get_Mk(self, k):
-        Mk = np.exp(self.Mk_spl(np.log(kh)))
+        Mk = np.exp(self.Mk_spl(np.log(k)))
         return Mk
 
     def get_pk_1phi(self, k, khigh=None):

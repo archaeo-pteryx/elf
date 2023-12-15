@@ -94,9 +94,8 @@ class PowerSpectrum1Loop:
         k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
         self.pk_lin_spl = ius(np.log(k_extrap), np.log(pk_extrap))
 
-    def set_redshift(self, redshift, Dgrowth, fgrowth):
+    def set_redshift(self, redshift, fgrowth):
         self.redshift = redshift
-        self.Dgrowth = Dgrowth
         self.fgrowth = fgrowth
 
     def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
@@ -149,7 +148,7 @@ class PowerSpectrum1Loop:
         """
         The linear matter power spectrum
         """
-        pk_lin = np.exp(self.pk_lin_spl(np.log(kh)))
+        pk_lin = np.exp(self.pk_lin_spl(np.log(k)))
         if khigh != None:
             pk_lin = pk_lin * np.exp(-(k / khigh))
         return pk_lin
