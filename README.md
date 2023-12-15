@@ -13,7 +13,6 @@ The following packages need to be installed (version information is to be determ
 - numpy
 - scipy
 - sympy
-- [camb](https://camb.readthedocs.io/en/latest/)
 
 ### Basic Usage
 
