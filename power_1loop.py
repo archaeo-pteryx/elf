@@ -297,22 +297,22 @@ class PowerSpectrum1Loop:
         mu_ref = np.atleast_1d(mu_ref)
 
         # mapping of (k, mu)
-        F = alpha_para / alpha_perp
-        fac = np.sqrt(1 + mu_ref**2 * (1./F**2 - 1))
-        mu = mu_ref / (F * fac)
+        fac = np.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
+        mu = mu_ref * (alpha_perp / alpha_para) / fac
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        # kn = np.sort(np.unique(np.ravel(k)))
-        kn = np.linspace(np.min(k), np.max(k), 1000)
+        kn = np.geomspace(np.min(k), np.max(k), 1000)
         pkmu = self.get_pkmu_gg(kn, mu, irres=irres, cross=cross)
 
+        alpha = 1.5
         if len(mu) == 1:
-            pkmu_interp = ius(kn, pkmu)
-            pkmu = pkmu_interp(np.ravel(k))
+            pkmu_interp = ius(kn, pkmu * kn**alpha)
+            pkmu = pkmu_interp(np.ravel(k)) * np.ravel(k)**(-alpha)
         else:
-            pkmu_interp = rbs(kn, mu, pkmu)
-            pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] for i in range(len(mu_ref))]).T
+            k_tile = np.tile(kn, (len(mu),1)).T
+            pkmu_interp = rbs(kn, mu, pkmu * k_tile**alpha)
+            pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
@@ -614,14 +614,14 @@ class PowerSpectrum1Loop:
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
-        pkmu = self.stoch['P_shot']
+        pkmu = 1 + self.stoch['P_shot']
         pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
         pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
         pkmu = 1./self.ndens * pkmu
 
         if cross:
             try:
-                pkmu = self.stoch['P_shot_cross']
+                pkmu = 1 + self.stoch['P_shot_cross']
                 pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
                 pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
                 pkmu = (1./self.ndens1 + 1./self.ndens2) / 2. * pkmu
