@@ -7,7 +7,6 @@ from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
 
-from camb_wrapper import CambWrapper
 from power_1loop import PowerSpectrum1Loop
 from power_law_decomp import PowerLawDecomp
 import pt_matrix
@@ -18,7 +17,6 @@ from ir_resum import IRResum
 class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
     def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
-        self.params = None
 
         # set up the FFTLog-based power-law decomposition
         if config_fft == None:
@@ -65,7 +63,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             self.set_matrix(self.name_pkmu_gg_terms['tot'])
             self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
-    def set_1loop(self, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+    def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -73,10 +71,10 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         self.decomp['p1phi nu=-0.9'].compute(self.get_pk_1phi, kwarg={'khigh':khigh})
         self.decomp['p1phi nu=-1.6'].compute(self.get_pk_1phi, kwarg={'khigh':khigh})
         self.decomp['p1phi nu=-2.1'].compute(self.get_pk_1phi, kwarg={'khigh':khigh})
-        self.decomp['M nu=0.2'].compute(self.get_M)
+        self.decomp['M nu=0.2'].compute(self.get_Mk)
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, hubble=self.params['h'], rbao=rbao, 
+        self.irres = IRResum(self.get_pk_lin, hubble=hubble, rbao=rbao, 
                             khmin=7e-5, khmax=7, n_min=120, n_max=240,
                             kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -95,18 +93,17 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
     def set_f_nl(self, f_nl):
         self.f_nl = f_nl
 
-    def get_M(self, k):
-        h = self.params['h']
-        Omega_m0 = self.params['Omega_m0']
-        H_0 = self.params['H_0_in_Mpc_inv']
-        tk = self.get_transfer(k*h) # normalized as T(k) -> 1 (k -> 0)
-        Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
-        Mk = 2./3 * (k*h)**2 * (tk * Dgrowth) / (Omega_m0 * H_0**2)
+    def set_Mk(self, k, Mk, kmin=1e-7, kmax=1e+7):
+        k_extrap, Mk_extrap = get_log_extrap(kh, Mk, kmin, kmax)
+        self.Mk_spl = ius(np.log(k_extrap), np.log(Mk_extrap))
+
+    def get_Mk(self, k):
+        Mk = np.exp(self.Mk_spl(np.log(kh)))
         return Mk
 
     def get_pk_1phi(self, k, khigh=None):
         pk_lin = self.get_pk_lin(k, khigh=khigh)
-        Mk = self.get_M(k)
+        Mk = self.get_Mk(k)
         return pk_lin / Mk
 
     def get_pk_mm_irres(self, k, mode='LO'):
@@ -117,34 +114,11 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             pk = pk_lin_nw + np.exp(-k**2 * self.Sigma2) * pk_lin_w
         return pk
 
-    def get_pk_1phi_irres(self, k):
-        pk_lin = self.get_pk_lin(k)
-        pk_lin_nw = self.irres.get_pk_nw(k)
-        pk_lin_w = pk_lin - pk_lin_nw
-        pk_irres_LO = pk_lin_nw + np.exp(-k**2 * self.Sigma2) * pk_lin_w
-
-        h = self.params['h']
-        pk_zeta = self.get_pk_zeta(k*h)
-        pk_prim = pk_zeta * (k*h)**4
-
-        pk_irres_LO = self.get_pk_mm_irres(k, mode='LO')
-        tk_irres_LO = np.sqrt((pk_irres_LO / h**3 / self.Dgrowth**2) / pk_prim)
-        tk_irres_LO *= self.tk_k0 # correction for T(k) in M(k), which is normalized as T(k) -> 1 (k -> 0).
-
-        Omega_m0 = self.params['Omega_m0']
-        H_0 = self.params['H_0_in_Mpc_inv']
-        Dgrowth = self.cosmo.get_Dgrowth_lcdm(self.redshift, mode='z') # normalized as D(a) -> a (a -> 0)
-
-        pk_1phi_irres_LO = tk_irres_LO / (2./3 * (k*h)**2 * Dgrowth / (Omega_m0 * H_0**2)) * pk_prim * h**3
-        pk_1phi_irres_LO = self.Dgrowth**2 * pk_1phi_irres_LO
-
-        return pk_1phi_irres_LO
-
     def get_pk_gg_lin(self, k):
         k = np.atleast_1d(k)
 
-        Z1_1 = self.bias1['b1'] + self.bias1['bphi'] * self.f_nl / self.get_M(k)
-        Z1_2 = self.bias2['b1'] + self.bias2['bphi'] * self.f_nl / self.get_M(k)
+        Z1_1 = self.bias1['b1'] + self.bias1['bphi'] * self.f_nl / self.get_Mk(k)
+        Z1_2 = self.bias2['b1'] + self.bias2['bphi'] * self.f_nl / self.get_Mk(k)
         pk_lin = self.get_pk_lin(k)
         pk = Z1_1 * Z1_2 * pk_lin
 
@@ -155,9 +129,9 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         mu = np.atleast_1d(mu)
 
         Z1_1 = self.bias1['b1'] + self.fgrowth * mu**2
-        Z1_lpng_1 = self.bias1['bphi'] * self.f_nl / self.get_M(k)
+        Z1_lpng_1 = self.bias1['bphi'] * self.f_nl / self.get_Mk(k)
         Z1_2 = self.bias2['b1'] + self.fgrowth * mu**2
-        Z1_lpng_2 = self.bias2['bphi'] * self.f_nl / self.get_M(k)
+        Z1_lpng_2 = self.bias2['bphi'] * self.f_nl / self.get_Mk(k)
 
         Z1_1_tile = np.tile(Z1_1, (len(k), 1)) + np.tile(Z1_lpng_1, (len(mu),1)).T
         Z1_2_tile = np.tile(Z1_2, (len(k), 1)) + np.tile(Z1_lpng_2, (len(mu),1)).T
@@ -348,7 +322,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             pk_1phi = np.tile(self.get_pk_1phi(kn), (len(mu),1)).T
             pkmu_data = 2 * pk_1phi * pkmu_data
         elif name == '12_gg_lpng2':
-            Mk = np.tile(self.get_M(kn), (len(mu),1)).T
+            Mk = np.tile(self.get_Mk(kn), (len(mu),1)).T
             pkmu_data = Mk * pkmu_data
 
         if len(mu) == 1:
@@ -376,8 +350,8 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
         Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
         Z1_tile2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
-        Z1_lpng_tile1 = np.tile(self.bias1['bphi'] * self.f_nl / self.get_M(k), (len(mu),1)).T
-        Z1_lpng_tile2 = np.tile(self.bias2['bphi'] * self.f_nl / self.get_M(k), (len(mu),1)).T
+        Z1_lpng_tile1 = np.tile(self.bias1['bphi'] * self.f_nl / self.get_Mk(k), (len(mu),1)).T
+        Z1_lpng_tile2 = np.tile(self.bias2['bphi'] * self.f_nl / self.get_Mk(k), (len(mu),1)).T
         plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
         plin_w_tile = np.tile(plin_w, (len(mu),1)).T
         damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
