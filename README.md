@@ -2,21 +2,22 @@
 
 A Python code to compute the one-loop galaxy power spectrum, including Primordial non-Gaussianity (currently local PNG only).
 
-This is a pure-Python implementation of the galaxy power spectrum following the Effective Field Theory of Large-Scale Structure, described in [Chudaykin et al. (2020)](https://journals.aps.org/prd/abstract/10.1103/PhysRevD.102.063533) for the Gaussian initial condition case, and in [Cabass et al. (2022)](https://journals.aps.org/prd/abstract/10.1103/PhysRevD.106.043506) for the local PNG case.
+This is a pure-Python implementation of the galaxy power spectrum following the Effective Field Theory of Large-Scale Structure (EFTofLSS), described in [Chudaykin et al. (2020)](https://journals.aps.org/prd/abstract/10.1103/PhysRevD.102.063533) for the Gaussian initial condition case, and in [Cabass et al. (2022)](https://journals.aps.org/prd/abstract/10.1103/PhysRevD.106.043506) for the local PNG case.
 
-The implementation includes the galaxy bias expansion up to the third order, the redshift-space distortion, the ultraviolet counterterms, the infrared resummation, and the Alcock-Paczynski effect. 
+The implementation includes the galaxy bias expansion up to the third order, the redshift-space distortions, the ultraviolet counterterms, the infrared resummation, and the Alcock-Paczynski effect. 
 
-### Requirements
+### Installation
 
-The following packages need to be installed (version information is to be determined). 
+After cloning this repository, run 
 
-- numpy
-- scipy
-- sympy
+```bash
+cd PowerSpectrumTheory
+python -m pip install -e .
+```
 
 ### Basic Usage
 
-You can find an example Jupyter notebook [here](example/power_1loop.ipynb)
+You can find an example Jupyter notebook [here](example/power_1loop.ipynb).
 
 ### Authors
 

@@ -7,12 +7,12 @@ from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
 
-from power_1loop import PowerSpectrum1Loop
-from power_law_decomp import PowerLawDecomp
-import pt_matrix
-import utils_loop
-from utils_loop import get_log_extrap
-from ir_resum import IRResum
+from .power_1loop import PowerSpectrum1Loop
+from .power_law_decomp import PowerLawDecomp
+from . import pt_matrix
+from . import utils_loop
+from .utils_loop import get_log_extrap
+from .ir_resum import IRResum
 
 
 class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
