@@ -17,7 +17,7 @@ python -m pip install -e .
 
 ### Basic Usage
 
-You can find an example Jupyter notebook [here](example/power_1loop.ipynb).
+You can find an example Jupyter notebook [here](example/ps_1loop.ipynb).
 
 ### Authors
 
