@@ -24,7 +24,6 @@ classifiers = [
 
 [tool.setuptools]
 include-package-data = true
-# package-dir = {"" = "src"}
 
 # [tool.setuptools.packages.find]
 # # All the following settings are optional:
