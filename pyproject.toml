@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ps_1loop"
-version = "0.0.1"
+version = "0.1.0"
 authors = [
   {name = "Yosuke Kobayashi", email = "yosukekobayashi@arizona.edu"},
 ]
@@ -24,6 +24,12 @@ classifiers = [
 
 [tool.setuptools]
 include-package-data = true
+
+[project.optional-dependencies]
+tests = [
+  'pytest',
+  'tomllib',
+]
 
 # [tool.setuptools.packages.find]
 # # All the following settings are optional:
