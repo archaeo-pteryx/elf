@@ -1,4 +1,4 @@
-import os, sys, time
+import os
 import glob, re
 import copy
 import numpy as np
@@ -7,19 +7,17 @@ from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
 
-from camb_wrapper import CambWrapper
-from power_law_decomp import PowerLawDecomp
-import pt_matrix
-import utils_loop
-from utils_loop import get_log_extrap
-from ir_resum import IRResum
+from .power_law_decomp import PowerLawDecomp
+from . import pt_matrix
+from . import utils_loop
+from .utils_loop import get_log_extrap
+from .ir_resum import IRResum
 
 
 class PowerSpectrum1Loop:
 
     def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
-        self.params = None
-
+        
         # set up the FFTLog-based power-law decomposition
         if config_fft == None:
             config_fft = {
@@ -92,36 +90,21 @@ class PowerSpectrum1Loop:
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
 
-    def set_cosmology(self, cparam, omega_nu0=0., Omega_K0=0., transfer_name='cb', kmin=1e-7, kmax=1e+7):
-        # run CAMB to obtain the transfer function
-        self.cosmo = CambWrapper(cparam, omega_nu0=omega_nu0, Omega_K0=Omega_K0)
-        self.params = self.cosmo.params
-        self.cosmo.set_matter_power(z=0)
-        
-        k, tk = self.cosmo.get_matter_transfer_data(name=transfer_name)
-        tk[1] = tk[0]
-        self.tk_k0 = tk[0]
-        k_extrap, tk_extrap = get_log_extrap(k, tk, kmin, kmax)
+    def set_pk_lin(self, k, pk_lin, kmin=1e-7, kmax=1e+7):
+        k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
+        self.pk_lin_spl = ius(np.log(k_extrap), np.log(pk_extrap))
 
-        # normalize the transfer function as T(k) -> 1 (k -> 0)
-        self.matter_transfer_spl = ius(np.log(k_extrap), np.log(tk_extrap / self.tk_k0))
+    def set_fgrowth(self, fgrowth):
+        self.fgrowth = fgrowth
 
-    def set_redshift(self, redshift):
-        self.redshift = redshift
-
-        # compute the growth factor and the logarithmic growth rate
-        Dgrowth = self.cosmo.get_Dgrowth_lcdm(np.array([0, redshift]), mode='z')
-        self.Dgrowth = Dgrowth[1] / Dgrowth[0]
-        self.fgrowth = self.cosmo.get_fgrowth_lcdm(redshift, mode='z')
-
-    def set_1loop(self, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+    def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-1.6'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
 
         # set up the IR resummation
-        self.irres = IRResum(self.get_pk_lin, hubble=self.params['h'], rbao=rbao, 
+        self.irres = IRResum(self.get_pk_lin, hubble=hubble, rbao=rbao, 
                             khmin=7e-5, khmax=7, n_min=120, n_max=240,
                             kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -160,31 +143,13 @@ class PowerSpectrum1Loop:
             self.ndens2 = ndens
         self.k_nl = k_nl
 
-    def get_pk_zeta(self, kh):
-        # power spectrum of the primordial curvature perturbations
-        As = self.params['As']
-        ns = self.params['ns']
-        k_pivot = self.params['k_pivot']
-        pk_zeta = (2*np.pi**2) * As / kh**3 * (kh / k_pivot)**(ns-1)
-        return pk_zeta
-
-    def get_transfer(self, k):
-        # normalized as T(k) -> 1 (k -> 0)
-        tk = np.exp(self.matter_transfer_spl(np.log(k)))
-        return tk
-
     def get_pk_lin(self, k, khigh=None): # in unit of [h^{-3} Mpc^3]
-        h = self.params['h']
-        pk_zeta = self.get_pk_zeta(k*h)
-        tk = self.get_transfer(k*h) * self.tk_k0
-
-        pk_lin_z0 = (k*h)**4 * tk**2 * pk_zeta
-        pk_lin_z0 *= h**3
-        pk_lin = self.Dgrowth**2 * pk_lin_z0
-
+        """
+        The linear matter power spectrum
+        """
+        pk_lin = np.exp(self.pk_lin_spl(np.log(k)))
         if khigh != None:
             pk_lin = pk_lin * np.exp(-(k / khigh))
-
         return pk_lin
 
     def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, limit=1000, kwarg={}):
@@ -615,18 +580,18 @@ class PowerSpectrum1Loop:
         mu = np.atleast_1d(mu)
 
         pkmu = self.stoch['P_shot']
-        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
-        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
-        pkmu = 1./self.ndens * pkmu
+        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+        pkmu = 1. / self.ndens * pkmu
 
         if cross:
             try:
                 pkmu = self.stoch['P_shot_cross']
-                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
-                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
-                pkmu = (1./self.ndens1 + 1./self.ndens2) / 2. * pkmu
+                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+                pkmu = (1. / self.ndens1 + 1. / self.ndens2) / 2. * pkmu
             except KeyError:
-                pkmu = np.zeros((len(k),len(mu)))
+                pkmu = np.zeros((len(k), len(mu)))
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)

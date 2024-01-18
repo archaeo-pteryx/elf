@@ -1,0 +1,20 @@
+[cosmology]
+omega_b = 0.02
+omega_c = 0.15
+omega_nu = 0
+Omega_m = 0.25
+h = 0.824621125123532
+As = 2.5e-9
+ns = 1.1
+w0 = -1
+
+redshift = 0
+fgrowth = 0.46252392515658114
+
+[galaxy_bias]
+b1 = 3
+b2 = -2
+bG2 = 0.25
+bGamma3 = -0.3
+bphi = 10
+bphid = 30

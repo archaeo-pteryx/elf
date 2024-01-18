@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ps_1loop"
+version = "0.1.0"
+authors = [
+  {name = "Yosuke Kobayashi", email = "yosukekobayashi@arizona.edu"},
+]
+description = "Theory code for galaxy power spectrum based on one-loop perturbation theory"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.10.0",
+    "sympy>=1.11.0",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[project.optional-dependencies]
+tests = [
+  'pytest',
+  'tomllib',
+]
+
+# [tool.setuptools.packages.find]
+# # All the following settings are optional:
+# where = ["src"]  # ["."] by default
+# exclude = ["tests*", "examples*"]  # empty by default
+# namespaces = false  # true by default
+
+[project.urls]
+Homepage = "https://github.com/SPHEREx/PowerSpectrumTheory"
