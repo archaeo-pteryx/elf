@@ -1,15 +1,11 @@
-import os, sys, time
+import os
 import glob, re
 import copy
 import numpy as np
-from scipy.integrate import quad, romb
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
-from scipy.special import lpmv
 
 from .ps_1loop import PowerSpectrum1Loop
-from .power_law_decomp import PowerLawDecomp
-from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_log_extrap
 from .ir_resum import IRResum

@@ -1,4 +1,4 @@
-import os, sys, time
+import os
 import glob, re
 import copy
 import numpy as np
@@ -580,18 +580,18 @@ class PowerSpectrum1Loop:
         mu = np.atleast_1d(mu)
 
         pkmu = self.stoch['P_shot']
-        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
-        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
-        pkmu = 1./self.ndens * pkmu
+        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+        pkmu = 1. / self.ndens * pkmu
 
         if cross:
             try:
                 pkmu = self.stoch['P_shot_cross']
-                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k),len(mu))
-                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k),len(mu))
-                pkmu = (1./self.ndens1 + 1./self.ndens2) / 2. * pkmu
+                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+                pkmu = (1. / self.ndens1 + 1. / self.ndens2) / 2. * pkmu
             except KeyError:
-                pkmu = np.zeros((len(k),len(mu)))
+                pkmu = np.zeros((len(k), len(mu)))
 
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
