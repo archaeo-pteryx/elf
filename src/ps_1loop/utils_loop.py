@@ -41,36 +41,6 @@ kernel_to_decomp_dict = {
     '12_gg_lpng2': ['p1phi nu=-2.1','p1phi nu=-2.1']
 }
 
-kernel_name_dict = {
-    # matter
-    'linear': 'P_\mathrm{lin}',
-    '22_dd': 'P_{22,\\delta\\delta}',
-    '13_dd': 'P_{13,\\delta\\delta}',
-    '22_dv': 'P_{22,\\delta\\theta}',
-    '13_dv': 'P_{13,\\delta\\theta}',
-    '22_vv': 'P_{22,\\theta\\theta}',
-    '13_vv': 'P_{13,\\theta\\theta}',
-    # biased tracer (Gaussian)
-    'I_d2': '\mathcal{I}_{\\delta^2}',
-    'I_G2': '\mathcal{I}_{\mathcal{G}_2}',
-    'I_d2_d2': '\mathcal{I}_{\\delta^2\\delta^2}',
-    'I_d2_G2': '\mathcal{I}_{\\delta^2\mathcal{G}_2}',
-    'I_G2_G2': '\mathcal{I}_{\mathcal{G}_2\mathcal{G}_2}',
-    'F_G2': '\mathcal{F}_{\mathcal{G}_2}',
-    # local PNG
-    'I_phi': '\mathcal{I}_{\\phi}',
-    'I_phi-d': '\mathcal{I}_{\\phi\\delta}',
-    'I_d2_phi': '\mathcal{I}_{\\delta^2,\\phi}',
-    'I_G2_phi': '\mathcal{I}_{\mathcal{G}_2,\\phi}',
-    'I_d2_phi-d': '\mathcal{I}_{\\delta^2,\\phi\\delta}',
-    'I_G2_phi-d': '\mathcal{I}_{\mathcal{G}_2,\\phi\\delta}',
-    'F_phi': '\mathcal{F}_{\\phi}',
-    'F_G2_LPNG': '\mathcal{F}_{\mathcal{G}_2}^\mathrm{PNG}',
-    'I_phi_tilde': '\\tilde{\mathcal{I}}_{\\phi}',
-    'I_phi_tilde_d2': '\\tilde{\mathcal{I}}_{\\phi,\\delta^2}',
-    'I_phi_tilde_G2': '\\tilde{\mathcal{I}}_{\\phi,\mathcal{G}_2}'
-}
-
 def get_deg_info(name):
     deg_name = re.split('=', name)[-1]
     str_list = re.split('_', deg_name)
