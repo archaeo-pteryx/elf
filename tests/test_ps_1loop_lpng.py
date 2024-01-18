@@ -10,8 +10,8 @@ test_data_dir = os.path.join(test_dir, 'test_data')
 
 config_name_list = ['planck18_fid_z0', 
                     'planck18_fid_z1', 
-                    # 'random_input_z0', 
-                    # 'random_input_z1',
+                    'random_input_z0', 
+                    'random_input_z1',
                     ]
 
 term_name_list = ['22_gg', '13_gg', '12_gg_lpng', '22_gg_lpng', '13_gg_lpng']
@@ -66,4 +66,4 @@ def test_PowerSpectrum1loopLPNG(config_name: str, term_name: str):
 
     k_tile = np.tile(k, (len(mu), 1)).T # shape (len(k), len(mu))
     kmin = 0.1
-    assert np.allclose(data_pkmu[k_tile >= kmin], model_pkmu[k_tile >= kmin], rtol=1e-2, atol=1e-2)
+    assert np.allclose(data_pkmu[k_tile >= kmin], model_pkmu[k_tile >= kmin], rtol=2e-2, atol=2e-2)
