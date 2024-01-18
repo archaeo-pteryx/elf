@@ -9,7 +9,7 @@ test_dir = os.path.dirname(os.path.realpath(__file__))
 test_data_dir = os.path.join(test_dir, 'test_data')
 
 config_name_list = ['planck18_fid_z0', 
-                    # 'planck18_fid_z1', 
+                    'planck18_fid_z1', 
                     # 'random_input_z0', 
                     # 'random_input_z1',
                     ]
@@ -20,11 +20,10 @@ test_item_list = []
 for config_name in config_name_list:
     test_item_list += [(config_name, term_name) for term_name in term_name_list]
 
+model = ps_1loop.PowerSpectrum1Loop()
 
 @pytest.mark.parametrize('config_name, term_name', test_item_list)
 def test_PowerSpectrum1loop(config_name: str, term_name: str):
-
-    model = ps_1loop.PowerSpectrum1Loop()
 
     config_file = os.path.join(test_data_dir, 'input/%s.toml' % (config_name))
     with open(config_file, 'rb') as f:
