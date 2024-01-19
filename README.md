@@ -15,6 +15,11 @@ cd PowerSpectrumTheory
 python -m pip install -e .
 ```
 
+To do a simple test, run
+```bash
+python -m pytest tests
+```
+
 ### Basic Usage
 
 You can find an example Jupyter notebook [here](example/ps_1loop.ipynb).
