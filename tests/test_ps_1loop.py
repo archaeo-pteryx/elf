@@ -1,7 +1,11 @@
 import pytest
-import os
+import os, sys
 import numpy as np
-import tomllib
+
+if sys.version_info.minor >= 11:
+    import tomllib
+else:
+    import toml
 
 import ps_1loop
 
@@ -26,8 +30,11 @@ model = ps_1loop.PowerSpectrum1Loop()
 def test_PowerSpectrum1loop(config_name: str, term_name: str):
 
     config_file = os.path.join(test_data_dir, 'input/%s.toml' % (config_name))
-    with open(config_file, 'rb') as f:
-        config = tomllib.load(f)
+    if sys.version_info.minor >= 11:
+        with open(config_file, 'rb') as f:
+            config = tomllib.load(f)
+    else:
+        toml.load(config_file)
 
     ## Specify the linear matter power spectrum
     d = np.loadtxt(os.path.join(test_data_dir, 'input/pk_lin_%s.txt' % (config_name)))
