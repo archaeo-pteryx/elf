@@ -34,7 +34,7 @@ def test_PowerSpectrum1loop(config_name: str, term_name: str):
         with open(config_file, 'rb') as f:
             config = tomllib.load(f)
     else:
-        toml.load(config_file)
+        config = toml.load(config_file)
 
     ## Specify the linear matter power spectrum
     d = np.loadtxt(os.path.join(test_data_dir, 'input/pk_lin_%s.txt' % (config_name)))
