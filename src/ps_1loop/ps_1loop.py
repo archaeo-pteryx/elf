@@ -230,28 +230,45 @@ class PowerSpectrum1Loop:
         return pk
 
     def get_pkmu_gg(self, k, mu, irres=True, cross=False):
+        # tree + 1-loop
         if irres:
             pkmu = self.get_pkmu_gg_irres(k, mu, mode='LO+NLO')
-            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
-            pkmu = pkmu + pkmu_ctr
         else:
             pkmu_tree = self.get_pkmu_gg_lin(k, mu)
             pkmu_1loop = self.get_pkmu_gg_1loop(k, mu, name='tot', mode='full')
-            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
-            pkmu = pkmu_tree + pkmu_1loop + pkmu_ctr
+            pkmu = pkmu_tree + pkmu_1loop
 
+        # counterterm
+        pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
+        pkmu = pkmu + pkmu_ctr
+
+        # stochasticity
         pkmu_stoch = self.get_pkmu_stoch(k, mu, cross=cross)
         pkmu = pkmu + pkmu_stoch
+
         return pkmu
 
-    def get_pk_ell_gg(self, l, k, irres=True, cross=False):
-        k = np.atleast_1d(k)
+    def get_pk_ell_gg(self, l, k, irres=True, ctr_multipole=True, cross=False):
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
+
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
+        
+        # subtract ctr part from P(k, mu)
+        if ctr_multipole:
+            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
+            pkmu = pkmu - pkmu_ctr
+
+        # compute the Legendre multipole moment
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
-        return pl
+        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+
+        # add ctr part to P_ell(k)
+        if ctr_multipole:
+            pk_ell_ctr = self.get_pk_ell_ctr(l, k, irres=irres)
+            pk_ell = pk_ell + pk_ell_ctr
+
+        return pk_ell
 
     def get_pk_gg_ref(self, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
         pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres, cross=cross)
@@ -502,10 +519,6 @@ class PowerSpectrum1Loop:
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
-        # auto power spectrum
-        # ctr1_mu = self.ctr['c0'] + self.ctr['c2'] * self.fgrowth * mu**2 + self.ctr['c4'] * self.fgrowth**2 * mu**4
-        # ctr2_mu = self.ctr['cfog'] * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
-
         # cross power spectrum
         ctr1_mu = (self.ctr1['c0'] + self.ctr2['c0']) / 2 
         ctr1_mu = ctr1_mu + (self.ctr1['c2'] + self.ctr2['c2']) / 2 * self.fgrowth * mu**2
@@ -568,11 +581,13 @@ class PowerSpectrum1Loop:
             pk = np.tile(pk_lin, (len(mu),1)).T
 
         legendre = np.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
-        pl = -2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
+        pl = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
 
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
         elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
         elif l == 4: cl = (self.ctr1['c4'] + self.ctr2['c4']) / 2
+        else: cl = 0.
+
         return cl * pl
 
     def get_pkmu_stoch(self, k, mu, cross=False):
