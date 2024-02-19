@@ -544,13 +544,12 @@ class PowerSpectrum1Loop:
 
             pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
             pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
-            pkmu = pkmu_ctr1 + pkmu_ctr2
         else:
             pk = self.get_pk_lin(k)
             pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
             pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
-            pkmu = pkmu_ctr1 + pkmu_ctr2
 
+        pkmu = pkmu_ctr1 + pkmu_ctr2
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
@@ -559,6 +558,8 @@ class PowerSpectrum1Loop:
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
+
+        ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
         
         if irres:
             # wiggly-non-wiggly decomposition
@@ -576,19 +577,27 @@ class PowerSpectrum1Loop:
             damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
 
             pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
+            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
         else:
             pk_lin = self.get_pk_lin(k)
+            pkmu_ctr2 = - np.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
             pk = np.tile(pk_lin, (len(mu),1)).T
 
         legendre = np.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
-        pl = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
+        pk_ell_ctr1 = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
 
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
         elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
         elif l == 4: cl = (self.ctr1['c4'] + self.ctr2['c4']) / 2
         else: cl = 0.
+        
+        pk_ell_ctr1 = cl * pk_ell_ctr1
 
-        return cl * pl
+        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        pk_ell_ctr2 = (2*l+1) * romb(pkmu_ctr2 * legendre, axis=1, dx=dmu)
+
+        pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
+        return pk_ell_ctr
 
     def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)
