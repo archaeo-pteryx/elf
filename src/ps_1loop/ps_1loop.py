@@ -6,6 +6,7 @@ from scipy.integrate import quad, romb
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
+from scipy.optimize import fsolve
 
 from .power_law_decomp import PowerLawDecomp
 from . import pt_matrix
@@ -155,6 +156,16 @@ class PowerSpectrum1Loop:
     def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, limit=1000, kwarg={}):
         res = quad(lambda logk: get_pk(np.exp(logk), **kwarg) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
+    
+    def get_k_nl(self):
+        def func(logk):
+            k = np.exp(logk)
+            Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * np.pi**2)
+            return np.log(Delta2_lin)
+        k0 = 0.4 # initial guess of k_nl
+        root = fsolve(func, x0=np.log(k0)) # solve Delta2_lin(k_nl) = 1
+        k_nl = np.exp(root[0])
+        return k_nl
 
     def get_pk_mm_irres(self, k, mode='LO'):
         plin = self.get_pk_lin(k)
