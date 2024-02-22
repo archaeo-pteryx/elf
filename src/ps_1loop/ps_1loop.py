@@ -261,7 +261,7 @@ class PowerSpectrum1Loop:
 
     def get_pk_ell_gg(self, l, k, irres=True, ctr_multipole=True, cross=False):
         mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
+        dmu = mu[1] - mu[0]
 
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
         
@@ -310,14 +310,15 @@ class PowerSpectrum1Loop:
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
 
+    # HACK: implement the redefined ctr
     def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.linspace(0.,1.,2**8+1)
-        dmu = mu_ref[1]-mu_ref[0]
+        dmu = mu_ref[1] - mu_ref[0]
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, cross=cross)
         legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
-        pl = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
-        return pl
+        pk_ell = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
+        return pk_ell
 
     def get_pk_gg_lin(self, k):
         pk = self.get_pkmu_gg_lin(k, 0)
@@ -339,11 +340,11 @@ class PowerSpectrum1Loop:
     def get_pk_ell_gg_lin(self, l, k):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
+        dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_lin(k,mu)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
-        return pl
+        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pk_ell
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
         # UV limit of the 1-3 term
@@ -465,11 +466,11 @@ class PowerSpectrum1Loop:
     def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
+        dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pl = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
-        return pl
+        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
         k = np.atleast_1d(k)
