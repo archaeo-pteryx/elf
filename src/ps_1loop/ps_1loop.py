@@ -614,13 +614,15 @@ class PowerSpectrum1Loop:
     def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
-
-        pkmu = self.stoch['P_shot']
-        pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
-        pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
-        pkmu = 1. / self.ndens * pkmu
-
-        if cross:
+        
+        # auto power spectrum
+        if cross == False:
+            pkmu = self.stoch['P_shot']
+            pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+            pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+            pkmu = 1. / self.ndens * pkmu
+        # cross power spectrum
+        else:
             try:
                 pkmu = self.stoch['P_shot_cross']
                 pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
