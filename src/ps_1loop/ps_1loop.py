@@ -157,12 +157,11 @@ class PowerSpectrum1Loop:
         res = quad(lambda logk: get_pk(np.exp(logk), **kwarg) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit, epsrel=1e-6)
         return res[0] / (2*np.pi**2)
     
-    def get_k_nl(self):
+    def get_k_nl(self, k0=0.5):
         def func(logk):
             k = np.exp(logk)
             Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * np.pi**2)
             return np.log(Delta2_lin)
-        k0 = 0.4 # initial guess of k_nl
         root = fsolve(func, x0=np.log(k0)) # solve Delta2_lin(k_nl) = 1
         k_nl = np.exp(root[0])
         return k_nl
