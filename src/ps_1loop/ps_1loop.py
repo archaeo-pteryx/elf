@@ -284,7 +284,7 @@ class PowerSpectrum1Loop:
         pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres, cross=cross)
         return pk
 
-    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, cross=False):
+    def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=False, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.atleast_1d(mu_ref)
 
@@ -297,6 +297,11 @@ class PowerSpectrum1Loop:
         kn = np.geomspace(np.min(k), np.max(k), 1000)
         pkmu = self.get_pkmu_gg(kn, mu, irres=irres, cross=cross)
 
+        # subtract ctr part from P(k, mu)
+        if ctr_multipole:
+            pkmu_ctr = self.get_pkmu_ctr(kn, mu, irres=irres)
+            pkmu = pkmu - pkmu_ctr
+
         alpha = 1.5
         if len(mu) == 1:
             pkmu_interp = ius(kn, pkmu * kn**alpha)
@@ -308,15 +313,22 @@ class PowerSpectrum1Loop:
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
-
-    # HACK: implement the redefined ctr
-    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
+    
+    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.linspace(0.,1.,2**8+1)
         dmu = mu_ref[1] - mu_ref[0]
-        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, cross=cross)
+
+        pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
+
         legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
         pk_ell = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
+
+        # add ctr part to P_ell(k)
+        if ctr_multipole:
+            pk_ell_ctr = self.get_pk_ell_ctr(l, k_ref, irres=irres)
+            pk_ell = pk_ell + pk_ell_ctr
+
         return pk_ell
 
     def get_pk_gg_lin(self, k):
