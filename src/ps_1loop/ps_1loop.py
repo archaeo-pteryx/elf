@@ -2,11 +2,8 @@ import os
 import glob, re
 import copy
 import jax.numpy as jnp
-from scipy.integrate import quad, romb
-from quadax import quadgk
-from interpax import interp1d, interp2d
-from scipy.interpolate import InterpolatedUnivariateSpline as ius
-from scipy.interpolate import RectBivariateSpline as rbs
+import quadax
+import interpax
 from scipy.special import lpmv
 from scipy.optimize import fsolve
 
@@ -95,7 +92,7 @@ class PowerSpectrum1Loop:
 
     def set_pk_lin(self, k, pk_lin, kmin=1e-7, kmax=1e+7):
         k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
-        self.pk_lin_spl = interp1d(jnp.log(k_extrap), jnp.log(pk_extrap))
+        self.pk_lin_spl = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(pk_extrap))
 
     def set_fgrowth(self, fgrowth):
         self.fgrowth = fgrowth
@@ -155,9 +152,10 @@ class PowerSpectrum1Loop:
             pk_lin = pk_lin * jnp.exp(-(k / khigh))
         return pk_lin
 
-    def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, limit=1000, kwarg={}):
-        res = quad(lambda logk: get_pk(jnp.exp(logk), **kwarg) * jnp.exp(logk), jnp.log(kmin), jnp.log(kmax), limit=limit, epsrel=1e-6)
-        return res[0] / (2*jnp.pi**2)
+    def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, epsrel=1e-6, kwarg={}):
+        func = lambda logk: get_pk(jnp.exp(logk), **kwarg) * jnp.exp(logk)
+        res = quadax.quadgk(func, [jnp.log(kmin), jnp.log(kmax)], epsrel=epsrel)
+        return res[0] / (2 * jnp.pi**2)
     
     def get_k_nl(self, k0=0.5):
         def func(logk):
@@ -213,7 +211,7 @@ class PowerSpectrum1Loop:
     def get_pk_1loop(self, k, name, sub_k0=True):
         alpha = 1.5
         kn, pk_data = self.get_pk_1loop_data(name=name, sub_k0=sub_k0)
-        pk_interp = ius(kn, kn**alpha * pk_data)
+        pk_interp = interpax.Interpolator1D(kn, kn**alpha * pk_data)
         pk = pk_interp(k) * k**(-alpha)
         return pk
 
@@ -273,7 +271,7 @@ class PowerSpectrum1Loop:
 
         # compute the Legendre multipole moment
         legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
@@ -306,11 +304,11 @@ class PowerSpectrum1Loop:
 
         alpha = 1.5
         if len(mu) == 1:
-            pkmu_interp = ius(kn, pkmu * kn**alpha)
+            pkmu_interp = interpax.Interpolator1D(kn, pkmu * kn**alpha)
             pkmu = pkmu_interp(jnp.ravel(k)) * jnp.ravel(k)**(-alpha)
         else:
             k_tile = jnp.tile(kn, (len(mu),1)).T
-            pkmu_interp = rbs(kn, mu, pkmu * k_tile**alpha)
+            pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
             pkmu = jnp.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
@@ -324,7 +322,7 @@ class PowerSpectrum1Loop:
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
 
         legendre = jnp.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
-        pk_ell = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
+        pk_ell = (2*l+1) * quadax.simpson(pkmu_ref * legendre, axis=1, dx=dmu)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
@@ -356,7 +354,7 @@ class PowerSpectrum1Loop:
         dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_lin(k,mu)
         legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
         return pk_ell
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
@@ -468,10 +466,10 @@ class PowerSpectrum1Loop:
             pkmu_data += pkmu_UV
 
         if len(mu) == 1:
-            pkmu_interp = ius(kn, jnp.ravel(pkmu_data))
+            pkmu_interp = interpax.Interpolator1D(kn, jnp.ravel(pkmu_data))
             pkmu = pkmu_interp(k)
         else:
-            pkmu_interp = rbs(kn, mu, pkmu_data)
+            pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu_data)
             pkmu = pkmu_interp(k, mu)
 
         return pkmu
@@ -482,7 +480,7 @@ class PowerSpectrum1Loop:
         dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
         legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
         return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
@@ -609,7 +607,7 @@ class PowerSpectrum1Loop:
             pk = jnp.tile(pk_lin, (len(mu),1)).T
 
         legendre = jnp.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
-        pk_ell_ctr1 = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
+        pk_ell_ctr1 = - 2 * (2*l+1) * quadax.simpson(pk * legendre, axis=1, dx=dmu) * k**2
 
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
         elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
@@ -619,7 +617,7 @@ class PowerSpectrum1Loop:
         pk_ell_ctr1 = cl * pk_ell_ctr1
 
         legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell_ctr2 = (2*l+1) * romb(pkmu_ctr2 * legendre, axis=1, dx=dmu)
+        pk_ell_ctr2 = (2*l+1) * quadax.simpson(pkmu_ctr2 * legendre, axis=1, dx=dmu)
 
         pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
         return pk_ell_ctr
