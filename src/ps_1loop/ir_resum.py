@@ -2,16 +2,7 @@ import jax.numpy as jnp
 import quadax
 import interpax
 from scipy.fft import dst, idst
-
-def spherical_jn(n, x):
-    if n == 0:
-        return jnp.sin(x) / x
-    elif n == 1:
-        return jnp.sin(x) / x**2 - jnp.cos(x) / x
-    elif n == 2:
-        return (3 / x**3 - 1 / x) * jnp.sin(x) - (3 / x**2) * jnp.cos(x)
-    else:
-        raise NotImplementedError
+from .utils_math import spherical_jn
 
 
 class IRResum:
