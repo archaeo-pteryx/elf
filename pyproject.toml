@@ -16,6 +16,9 @@ dependencies = [
     "numpy",
     "scipy>=1.10.0",
     "sympy>=1.11.0",
+    "jax",
+    "quadax",
+    "interpax"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
