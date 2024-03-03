@@ -1,7 +1,7 @@
+import jax
 import jax.numpy as jnp
 import quadax
 import interpax
-from scipy.fft import dst, idst
 from .utils_math import spherical_jn
 
 
@@ -25,12 +25,13 @@ class IRResum:
 
         # spline interpolation
         self.pk_nw_interp = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(plin_nw_extrap))
-
-    # HACK: replace DST with JAX DCT.
+        
     def remove_wiggle(self, kh, plin, n_min, n_max):
         # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
 
-        harms = dst(jnp.log(kh * plin))
+        # harms = dst(jnp.log(kh * plin))
+        signs = (-1)**jnp.arange(0, len(plin))
+        harms = jax.scipy.fft.dct(jnp.log(kh * plin) * signs)[::-1]
 
         n = jnp.arange(1,len(harms)+1)
         i_odd = jnp.arange(0,len(harms)-1,2)
@@ -51,7 +52,8 @@ class IRResum:
 
         i_rec = jnp.argsort(jnp.hstack((n_odd, n_even)))
         harms_s = jnp.hstack((harms_odd_s, harms_even_s))[i_rec]
-        plin_nw = jnp.exp(idst(harms_s)) / kh # in unit of Mpc^3
+        # plin_nw = jnp.exp(idst(harms_s)) / kh # in unit of Mpc^3
+        plin_nw = jnp.exp(jax.scipy.fft.idct(harms_s[::-1]) * signs) / kh # in unit of Mpc^3
 
         return plin_nw
 
