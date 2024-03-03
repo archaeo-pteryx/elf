@@ -1,8 +1,10 @@
 import os
 import glob, re
 import copy
-import numpy as np
+import jax.numpy as jnp
 from scipy.integrate import quad, romb
+from quadax import quadgk
+from interpax import interp1d, interp2d
 from scipy.interpolate import InterpolatedUnivariateSpline as ius
 from scipy.interpolate import RectBivariateSpline as rbs
 from scipy.special import lpmv
@@ -83,7 +85,7 @@ class PowerSpectrum1Loop:
             if '22' in name or 'I' in name or '12' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
-                nu_m1, nu_m2 = np.meshgrid(nu_m1, nu_m2)
+                nu_m1, nu_m2 = jnp.meshgrid(nu_m1, nu_m2)
                 self.matrix[name] = self.mat[name](nu_m1, nu_m2).T
             elif '13' in name or 'F' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
@@ -93,7 +95,7 @@ class PowerSpectrum1Loop:
 
     def set_pk_lin(self, k, pk_lin, kmin=1e-7, kmax=1e+7):
         k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
-        self.pk_lin_spl = ius(np.log(k_extrap), np.log(pk_extrap))
+        self.pk_lin_spl = interp1d(jnp.log(k_extrap), jnp.log(pk_extrap))
 
     def set_fgrowth(self, fgrowth):
         self.fgrowth = fgrowth
@@ -148,22 +150,22 @@ class PowerSpectrum1Loop:
         """
         The linear matter power spectrum
         """
-        pk_lin = np.exp(self.pk_lin_spl(np.log(k)))
+        pk_lin = jnp.exp(self.pk_lin_spl(jnp.log(k)))
         if khigh != None:
-            pk_lin = pk_lin * np.exp(-(k / khigh))
+            pk_lin = pk_lin * jnp.exp(-(k / khigh))
         return pk_lin
 
     def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, limit=1000, kwarg={}):
-        res = quad(lambda logk: get_pk(np.exp(logk), **kwarg) * np.exp(logk), np.log(kmin), np.log(kmax), limit=limit, epsrel=1e-6)
-        return res[0] / (2*np.pi**2)
+        res = quad(lambda logk: get_pk(jnp.exp(logk), **kwarg) * jnp.exp(logk), jnp.log(kmin), jnp.log(kmax), limit=limit, epsrel=1e-6)
+        return res[0] / (2*jnp.pi**2)
     
     def get_k_nl(self, k0=0.5):
         def func(logk):
-            k = np.exp(logk)
-            Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * np.pi**2)
-            return np.log(Delta2_lin)
-        root = fsolve(func, x0=np.log(k0)) # solve Delta2_lin(k_nl) = 1
-        k_nl = np.exp(root[0])
+            k = jnp.exp(logk)
+            Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * jnp.pi**2)
+            return jnp.log(Delta2_lin)
+        root = fsolve(func, x0=jnp.log(k0)) # solve Delta2_lin(k_nl) = 1
+        k_nl = jnp.exp(root[0])
         return k_nl
 
     def get_pk_mm_irres(self, k, mode='LO'):
@@ -171,7 +173,7 @@ class PowerSpectrum1Loop:
         plin_nw = self.irres.get_pk_nw(k)
         plin_w = plin - plin_nw
         if mode == 'LO':
-            pk = plin_nw + np.exp(-k**2 * self.Sigma2) * plin_w
+            pk = plin_nw + jnp.exp(-k**2 * self.Sigma2) * plin_w
         return pk
 
     def get_pk_1loop_data(self, name, sub_k0=True, mode='full'):
@@ -184,19 +186,19 @@ class PowerSpectrum1Loop:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_q = self.decomp[name_dec[1]].func_q
-            pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
+            pk_data = kn**3 * jnp.diag(jnp.dot(p1_q.T, jnp.dot(self.matrix[name], p2_q)).real)
             if sub_k0:
                 kmin = self.decomp[name_dec[0]].kmin
                 p1_k0 = self.decomp[name_dec[0]].func_k0
                 p2_k0 = self.decomp[name_dec[1]].func_k0
-                pk_data_k0 = kmin**3 * np.dot(p1_k0, np.dot(self.matrix[name], p2_k0)).real
+                pk_data_k0 = kmin**3 * jnp.dot(p1_k0, jnp.dot(self.matrix[name], p2_k0)).real
                 pk_data = pk_data - pk_data_k0
 
         elif '13' in name or 'F' in name:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_k = self.decomp[name_dec[1]].func_rec.real
-            pk_data = kn**3 * p2_k * np.dot(self.matrix[name], p1_q).real
+            pk_data = kn**3 * p2_k * jnp.dot(self.matrix[name], p1_q).real
             if name == '13_dd':
                 pk_data = pk_data - 61./315. * kn**2 * p2_k * self.pk_lin_int
             elif name == '13_dv':
@@ -259,7 +261,7 @@ class PowerSpectrum1Loop:
         return pkmu
 
     def get_pk_ell_gg(self, l, k, irres=True, ctr_multipole=True, cross=False):
-        mu = np.linspace(0.,1.,2**8+1)
+        mu = jnp.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
 
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
@@ -270,7 +272,7 @@ class PowerSpectrum1Loop:
             pkmu = pkmu - pkmu_ctr
 
         # compute the Legendre multipole moment
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
         pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
 
         # add ctr part to P_ell(k)
@@ -285,16 +287,16 @@ class PowerSpectrum1Loop:
         return pk
 
     def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=False, cross=False):
-        k_ref = np.atleast_1d(k_ref)
-        mu_ref = np.atleast_1d(mu_ref)
+        k_ref = jnp.atleast_1d(k_ref)
+        mu_ref = jnp.atleast_1d(mu_ref)
 
         # mapping of (k, mu)
-        fac = np.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
+        fac = jnp.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
         mu = mu_ref * (alpha_perp / alpha_para) / fac
-        k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
+        k = jnp.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        kn = np.geomspace(np.min(k), np.max(k), 1000)
+        kn = jnp.geomspace(jnp.min(k), jnp.max(k), 1000)
         pkmu = self.get_pkmu_gg(kn, mu, irres=irres, cross=cross)
 
         # subtract ctr part from P(k, mu)
@@ -305,23 +307,23 @@ class PowerSpectrum1Loop:
         alpha = 1.5
         if len(mu) == 1:
             pkmu_interp = ius(kn, pkmu * kn**alpha)
-            pkmu = pkmu_interp(np.ravel(k)) * np.ravel(k)**(-alpha)
+            pkmu = pkmu_interp(jnp.ravel(k)) * jnp.ravel(k)**(-alpha)
         else:
-            k_tile = np.tile(kn, (len(mu),1)).T
+            k_tile = jnp.tile(kn, (len(mu),1)).T
             pkmu_interp = rbs(kn, mu, pkmu * k_tile**alpha)
-            pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
+            pkmu = jnp.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
     
     def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
-        k_ref = np.atleast_1d(k_ref)
-        mu_ref = np.linspace(0.,1.,2**8+1)
+        k_ref = jnp.atleast_1d(k_ref)
+        mu_ref = jnp.linspace(0.,1.,2**8+1)
         dmu = mu_ref[1] - mu_ref[0]
 
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
 
-        legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
+        legendre = jnp.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
         pk_ell = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
 
         # add ctr part to P_ell(k)
@@ -336,24 +338,24 @@ class PowerSpectrum1Loop:
         return pk
 
     def get_pkmu_gg_lin(self, k, mu):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         Z1_1 = self.bias1['b1'] + self.fgrowth * mu**2
         Z1_2 = self.bias2['b1'] + self.fgrowth * mu**2
         pk_lin = self.get_pk_lin(k)
-        pkmu = np.kron(pk_lin, Z1_1 * Z1_2).reshape(len(k),len(mu))
+        pkmu = jnp.kron(pk_lin, Z1_1 * Z1_2).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
+            pkmu = jnp.ravel(pkmu)
         return pkmu
 
     def get_pk_ell_gg_lin(self, l, k):
-        k = np.atleast_1d(k)
-        mu = np.linspace(0.,1.,2**8+1)
+        k = jnp.atleast_1d(k)
+        mu = jnp.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_lin(k,mu)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
         pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pk_ell
 
@@ -385,7 +387,7 @@ class PowerSpectrum1Loop:
         else:
             raise ValueError('Invalid mode.')
 
-        pkmu_13 = np.kron(k**2 * pk_fac, Z1Z3_UV).reshape(len(k),len(mu))
+        pkmu_13 = jnp.kron(k**2 * pk_fac, Z1Z3_UV).reshape(len(k),len(mu))
         return pkmu_13
 
     def get_pk_rsd_1loop_data(self, name, sub_k0=True, mode='full'):
@@ -398,12 +400,12 @@ class PowerSpectrum1Loop:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_q = self.decomp[name_dec[1]].func_q
-            pk_data = kn**3 * np.diag(np.dot(p1_q.T, np.dot(self.matrix[name], p2_q)).real)
+            pk_data = kn**3 * jnp.diag(jnp.dot(p1_q.T, jnp.dot(self.matrix[name], p2_q)).real)
             if sub_k0:
                 kmin = self.decomp[name_dec[0]].kmin
                 p1_k0 = self.decomp[name_dec[0]].func_k0
                 p2_k0 = self.decomp[name_dec[1]].func_k0
-                pk_data_k0 = kmin**3 * np.dot(p1_k0, np.dot(self.matrix[name], p2_k0)).real
+                pk_data_k0 = kmin**3 * jnp.dot(p1_k0, jnp.dot(self.matrix[name], p2_k0)).real
                 pk_data = pk_data - pk_data_k0
 
         elif '13' in name:
@@ -415,15 +417,15 @@ class PowerSpectrum1Loop:
             kn = self.decomp[name_dec[0]].kn
             p1_q = self.decomp[name_dec[0]].func_q
             p2_q = self.decomp[name_dec[1]].func_rec.real
-            pk_data = kn**3 * p2_q * np.dot(self.matrix[name], p1_q).real
+            pk_data = kn**3 * p2_q * jnp.dot(self.matrix[name], p1_q).real
 
         else:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
     def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         if name == 'tot':
             pkmu_22 = self.get_pkmu_gg_1loop(k, mu, name='22_gg', mode=mode)
@@ -456,17 +458,17 @@ class PowerSpectrum1Loop:
 
             kn, pk_data = self.get_pk_rsd_1loop_data(term, sub_k0=True, mode=mode)
 
-            pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
+            pkmu = fac * jnp.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
-        pkmu_tab = np.array(pkmu_tab)
-        pkmu_data = np.sum(pkmu_tab, axis=0)
+        pkmu_tab = jnp.array(pkmu_tab)
+        pkmu_data = jnp.sum(pkmu_tab, axis=0)
 
         if name == '13_gg':
             pkmu_UV = self.get_pkmu_13_UV(kn, mu, mode=mode)
             pkmu_data += pkmu_UV
 
         if len(mu) == 1:
-            pkmu_interp = ius(kn, np.ravel(pkmu_data))
+            pkmu_interp = ius(kn, jnp.ravel(pkmu_data))
             pkmu = pkmu_interp(k)
         else:
             pkmu_interp = rbs(kn, mu, pkmu_data)
@@ -475,17 +477,17 @@ class PowerSpectrum1Loop:
         return pkmu
 
     def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
-        k = np.atleast_1d(k)
-        mu = np.linspace(0.,1.,2**8+1)
+        k = jnp.atleast_1d(k)
+        mu = jnp.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
         pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
@@ -497,26 +499,26 @@ class PowerSpectrum1Loop:
         Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
         Sigma2_tot = Sigma2_1 + Sigma2_2
 
-        Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
-        Z1_tile2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
-        plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-        plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-        damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+        Z1_tile1 = jnp.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
+        Z1_tile2 = jnp.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
+        plin_nw_tile = jnp.tile(plin_nw, (len(mu),1)).T
+        plin_w_tile = jnp.tile(plin_w, (len(mu),1)).T
+        damp_fac = jnp.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
-            Z1_tile1 = np.ravel(Z1_tile1)
-            Z1_tile2 = np.ravel(Z1_tile2)
-            damp_fac = np.ravel(damp_fac)
-            plin_nw_tile = np.ravel(plin_nw_tile)
-            plin_w_tile = np.ravel(plin_w_tile)
+            Z1_tile1 = jnp.ravel(Z1_tile1)
+            Z1_tile2 = jnp.ravel(Z1_tile2)
+            damp_fac = jnp.ravel(damp_fac)
+            plin_nw_tile = jnp.ravel(plin_nw_tile)
+            plin_w_tile = jnp.ravel(plin_w_tile)
 
         # IR-resummed power spectrum
         if mode == 'LO':
             # leading-order IR resummation
-            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
+            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + jnp.exp(-damp_fac) * plin_w_tile)
         elif mode == 'tree':
             # leading-order IR resummation + additional term to prevent the double counting
-            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + (1 + damp_fac) * np.exp(-damp_fac) * plin_w_tile)
+            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + (1 + damp_fac) * jnp.exp(-damp_fac) * plin_w_tile)
         elif mode == '1loop no-wiggle':
             # 1-loop term computed with the non-wiggly component of the linear power spectrum
             pkmu = self.get_pkmu_gg_1loop(k, mu, name='tot', mode='no-wiggle')
@@ -527,7 +529,7 @@ class PowerSpectrum1Loop:
             # next-to-leading order term of the IR-resummed power spectrum
             pkmu_1loop_nw = self.get_pkmu_gg_irres(k, mu, mode='1loop no-wiggle')
             pkmu_1loop_w = self.get_pkmu_gg_1loop(k, mu, name='tot') - pkmu_1loop_nw
-            pkmu = pkmu_1loop_nw + np.exp(-damp_fac) * pkmu_1loop_w
+            pkmu = pkmu_1loop_nw + jnp.exp(-damp_fac) * pkmu_1loop_w
         elif mode == 'LO+NLO':
             # LO+NLO IR-resummed power spectrum
             pkmu_tree = self.get_pkmu_gg_irres(k, mu, mode='tree')
@@ -535,12 +537,12 @@ class PowerSpectrum1Loop:
             pkmu = pkmu_tree + pkmu_1loop
 
         if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
+            pkmu = jnp.ravel(pkmu)
         return pkmu
 
     def get_pkmu_ctr(self, k, mu, irres=True):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         # cross power spectrum
         ctr1_mu = (self.ctr1['c0'] + self.ctr2['c0']) / 2 
@@ -559,27 +561,27 @@ class PowerSpectrum1Loop:
             Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
             Sigma2_tot = Sigma2_1 + Sigma2_2
 
-            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+            plin_nw_tile = jnp.tile(plin_nw, (len(mu),1)).T
+            plin_w_tile = jnp.tile(plin_w, (len(mu),1)).T
+            damp_fac = jnp.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
 
-            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
+            pk = plin_nw_tile + jnp.exp(-damp_fac) * plin_w_tile
 
-            pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
-            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
+            pkmu_ctr1 = - 2 * jnp.tile(ctr1_mu, (len(k),1)) * jnp.tile(k**2, (len(mu),1)).T * pk
+            pkmu_ctr2 = - jnp.tile(ctr2_mu, (len(k),1)) * jnp.tile(k**4, (len(mu),1)).T * pk
         else:
             pk = self.get_pk_lin(k)
-            pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
-            pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
+            pkmu_ctr1 = - 2 * jnp.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
+            pkmu_ctr2 = - jnp.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
 
         pkmu = pkmu_ctr1 + pkmu_ctr2
         if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
+            pkmu = jnp.ravel(pkmu)
         return pkmu
 
     def get_pk_ell_ctr(self, l, k, irres=True):
-        k = np.atleast_1d(k)
-        mu = np.linspace(0.,1.,2**8+1)
+        k = jnp.atleast_1d(k)
+        mu = jnp.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
 
         ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
@@ -595,18 +597,18 @@ class PowerSpectrum1Loop:
             Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
             Sigma2_tot = Sigma2_1 + Sigma2_2
 
-            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+            plin_nw_tile = jnp.tile(plin_nw, (len(mu),1)).T
+            plin_w_tile = jnp.tile(plin_w, (len(mu),1)).T
+            damp_fac = jnp.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
 
-            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
-            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
+            pk = plin_nw_tile + jnp.exp(-damp_fac) * plin_w_tile
+            pkmu_ctr2 = - jnp.tile(ctr2_mu, (len(k),1)) * jnp.tile(k**4, (len(mu),1)).T * pk
         else:
             pk_lin = self.get_pk_lin(k)
-            pkmu_ctr2 = - np.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
-            pk = np.tile(pk_lin, (len(mu),1)).T
+            pkmu_ctr2 = - jnp.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
+            pk = jnp.tile(pk_lin, (len(mu),1)).T
 
-        legendre = np.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
+        legendre = jnp.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
         pk_ell_ctr1 = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
 
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
@@ -616,32 +618,32 @@ class PowerSpectrum1Loop:
         
         pk_ell_ctr1 = cl * pk_ell_ctr1
 
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
+        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
         pk_ell_ctr2 = (2*l+1) * romb(pkmu_ctr2 * legendre, axis=1, dx=dmu)
 
         pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
         return pk_ell_ctr
 
     def get_pkmu_stoch(self, k, mu, cross=False):
-        k = np.atleast_1d(k)
-        mu = np.atleast_1d(mu)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
         
         # auto power spectrum
         if cross == False:
             pkmu = self.stoch['P_shot']
-            pkmu = pkmu + self.stoch['a0'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
-            pkmu = pkmu + self.stoch['a2'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+            pkmu = pkmu + self.stoch['a0'] * jnp.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+            pkmu = pkmu + self.stoch['a2'] * jnp.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
             pkmu = 1. / self.ndens * pkmu
         # cross power spectrum
         else:
             try:
                 pkmu = self.stoch['P_shot_cross']
-                pkmu = pkmu + self.stoch['a0_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
-                pkmu = pkmu + self.stoch['a2_cross'] * np.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a0_cross'] * jnp.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a2_cross'] * jnp.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
                 pkmu = (1. / self.ndens1 + 1. / self.ndens2) / 2. * pkmu
             except KeyError:
-                pkmu = np.zeros((len(k), len(mu)))
+                pkmu = jnp.zeros((len(k), len(mu)))
 
         if len(k) == 1 or len(mu) == 1:
-            pkmu = np.ravel(pkmu)
+            pkmu = jnp.ravel(pkmu)
         return pkmu
