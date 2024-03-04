@@ -15,7 +15,7 @@ class IRResum:
         plin_nw = self.remove_wiggle(kh, plin, n_min, n_max) # in unit of Mpc^3
         
         # ad-hoc adjustment at high k for extrapolation
-        plin_nw[-10:] = plin[-10:]
+        plin_nw = plin_nw.at[-10:].set(plin[-10:])
 
         # extrapolation
         k_low = jnp.geomspace(kmin_interp, kh[0] / hubble, 100)[:-1]
