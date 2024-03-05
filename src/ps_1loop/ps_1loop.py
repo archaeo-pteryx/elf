@@ -1,6 +1,7 @@
 import os
 import glob, re
 import copy
+import numpy as np
 import jax.numpy as jnp
 import quadax
 import interpax
@@ -82,10 +83,13 @@ class PowerSpectrum1Loop:
             if '22' in name or 'I' in name or '12' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
+                # nu_m1 = np.asarray(nu_m1)
+                # nu_m2 = np.asarray(nu_m2)
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m1, nu_m2)
                 self.matrix[name] = self.mat[name](nu_m1, nu_m2).T
             elif '13' in name or 'F' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
+                # nu_m1 = np.asarray(nu_m1)
                 self.matrix[name] = self.mat[name](nu_m1)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
@@ -116,8 +120,8 @@ class PowerSpectrum1Loop:
         self.dSigma2 = self.irres.get_dSigma2(ks=ks)
 
         # compute the power spectrum integral for the UV part of P13
-        self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
-        self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
+        self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, kwarg={'khigh':khigh})
+        self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax)
         self.sigmav2 = self.pk_lin_int / 3
 
     def set_bias_params(self, bias1={}, bias2={}):
@@ -304,8 +308,7 @@ class PowerSpectrum1Loop:
 
         alpha = 1.5
         if len(mu) == 1:
-            pkmu_interp = interpax.Interpolator1D(kn, pkmu * kn**alpha)
-            pkmu = pkmu_interp(jnp.ravel(k)) * jnp.ravel(k)**(-alpha)
+            pkmu = interpax.interp1d(jnp.ravel(k), kn, pkmu * kn**alpha) * jnp.ravel(k)**(-alpha)
         else:
             k_tile = jnp.tile(kn, (len(mu),1)).T
             pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
@@ -458,7 +461,7 @@ class PowerSpectrum1Loop:
 
             pkmu = fac * jnp.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
-        pkmu_tab = jnp.array(pkmu_tab)
+        pkmu_tab = jnp.asarray(pkmu_tab)
         pkmu_data = jnp.sum(pkmu_tab, axis=0)
 
         if name == '13_gg':
@@ -466,11 +469,11 @@ class PowerSpectrum1Loop:
             pkmu_data += pkmu_UV
 
         if len(mu) == 1:
-            pkmu_interp = interpax.Interpolator1D(kn, jnp.ravel(pkmu_data))
-            pkmu = pkmu_interp(k)
+            pkmu = interpax.interp1d(k, kn, jnp.ravel(pkmu_data))
         else:
-            pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu_data)
-            pkmu = pkmu_interp(k, mu)
+            k_mesh, mu_mesh = jnp.meshgrid(k, mu)
+            pkmu = interpax.interp2d(jnp.ravel(k_mesh), jnp.ravel(mu_mesh), kn, mu, pkmu_data)
+            pkmu = pkmu.reshape(len(k), len(mu))
 
         return pkmu
 
