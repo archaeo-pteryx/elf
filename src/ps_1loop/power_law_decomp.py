@@ -22,8 +22,6 @@ class PowerLawDecomp:
         c_m_sym = self.kmin**(-self.nu_m) * jnp.array([c_m[int(self.nmax//2-i)].conj() if i<self.nmax//2 else c_m[int(i-self.nmax//2)] for i in range(self.nmax+1)])
         c_m_sym = c_m_sym.at[0].set(c_m_sym[0] / 2)
         c_m_sym = c_m_sym.at[-1].set(c_m_sym[-1] / 2)
-        # c_m_sym[0] = c_m_sym[0]/2
-        # c_m_sym[-1] = c_m_sym[-1]/2
         self.c_m = c_m_sym
 
         # reconstruct
