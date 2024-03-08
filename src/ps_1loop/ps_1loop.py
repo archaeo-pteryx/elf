@@ -471,9 +471,13 @@ class PowerSpectrum1Loop:
         if len(mu) == 1:
             pkmu = interpax.interp1d(k, kn, jnp.ravel(pkmu_data))
         else:
-            k_mesh, mu_mesh = jnp.meshgrid(k, mu)
-            pkmu = interpax.interp2d(jnp.ravel(k_mesh), jnp.ravel(mu_mesh), kn, mu, pkmu_data)
+            k_tile = jnp.tile(k, (len(mu), 1)).T
+            mu_tile = jnp.tile(mu, (len(k), 1))
+            pkmu = interpax.interp2d(jnp.ravel(k_tile), jnp.ravel(mu_tile), kn, mu, pkmu_data)
             pkmu = pkmu.reshape(len(k), len(mu))
+
+        # NOTE: for bug fixing
+        self.pkmu_data = copy.deepcopy(pkmu_data)
 
         return pkmu
 
