@@ -359,6 +359,9 @@ class PowerSpectrum1Loop:
         return pk_ell
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
+        
         # UV limit of the 1-3 term
 
         Z1_g = self.bias1['b1'] + self.fgrowth * mu**2
