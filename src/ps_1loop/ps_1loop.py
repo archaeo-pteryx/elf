@@ -83,13 +83,10 @@ class PowerSpectrum1Loop:
             if '22' in name or 'I' in name or '12' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
-                # nu_m1 = np.asarray(nu_m1)
-                # nu_m2 = np.asarray(nu_m2)
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m1, nu_m2)
                 self.matrix[name] = self.mat[name](nu_m1, nu_m2).T
             elif '13' in name or 'F' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
-                # nu_m1 = np.asarray(nu_m1)
                 self.matrix[name] = self.mat[name](nu_m1)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
@@ -312,6 +309,7 @@ class PowerSpectrum1Loop:
         else:
             k_tile = jnp.tile(kn, (len(mu),1)).T
             pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
+            # HACK: fix the below
             pkmu = jnp.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
