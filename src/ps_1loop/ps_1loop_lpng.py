@@ -82,8 +82,8 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         self.dSigma2 = self.irres.get_dSigma2(ks=ks)
 
         # compute the power spectrum integral for the UV part of P13
-        self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
-        self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
+        self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, kwarg={'khigh':khigh})
+        self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax)
         self.sigmav2 = self.pk_lin_int / 3
 
     def set_f_nl(self, f_nl):

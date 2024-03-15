@@ -61,12 +61,12 @@ class IRResum:
         return jnp.exp(self.pk_nw_interp(jnp.log(k)))
 
     def get_Sigma2(self, ks, kmin=1e-7, epsrel=1e-6):
-        func = lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0,self.rbao*q) + 2 * spherical_jn(2,self.rbao*q))
+        func = lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0, self.rbao * q) + 2 * spherical_jn(2, self.rbao * q))
         res = quadax.quadgk(func, [kmin, ks], epsrel=epsrel)
         return res[0] / (6 * jnp.pi**2)
 
     def get_dSigma2(self, ks, kmin=1e-7, epsrel=1e-6):
-        func = lambda q: self.get_pk_nw(q) * spherical_jn(2,self.rbao*q)
+        func = lambda q: self.get_pk_nw(q) * spherical_jn(2, self.rbao * q)
         res = quadax.quadgk(func, [kmin, ks], epsrel=epsrel)
         return res[0] / (2 * jnp.pi**2)
 
