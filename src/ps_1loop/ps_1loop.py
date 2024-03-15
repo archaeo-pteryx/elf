@@ -1,7 +1,6 @@
 import os
 import glob, re
 import copy
-import numpy as np
 import jax.numpy as jnp
 import quadax
 import interpax
