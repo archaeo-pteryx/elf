@@ -152,10 +152,11 @@ class PowerSpectrum1Loop:
             pk_lin = pk_lin * jnp.exp(-(k / khigh))
         return pk_lin
 
-    def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, epsrel=1e-6, kwarg={}):
-        func = lambda logk: get_pk(jnp.exp(logk), **kwarg) * jnp.exp(logk)
-        res = quadax.quadgk(func, [jnp.log(kmin), jnp.log(kmax)], epsrel=epsrel)
-        return res[0] / (2 * jnp.pi**2)
+    def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, num=1000, kwarg={}):
+        q = jnp.geomspace(kmin, kmax, num)
+        integrand = q * get_pk(q)
+        res = quadax.simpson(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
+        return res
     
     def get_k_nl(self, k0=0.5):
         def func(logk):
@@ -308,8 +309,9 @@ class PowerSpectrum1Loop:
         else:
             k_tile = jnp.tile(kn, (len(mu),1)).T
             pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
+            
             # HACK: fix the below
-            pkmu = jnp.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
+            pkmu = jnp.array([pkmu_interp(k[:,i], mu).reshape(len(k), len(mu))[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu

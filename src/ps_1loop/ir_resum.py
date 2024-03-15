@@ -60,20 +60,23 @@ class IRResum:
     def get_pk_nw(self, k):
         return jnp.exp(self.pk_nw_interp(jnp.log(k)))
 
-    def get_Sigma2(self, ks, kmin=1e-7, epsrel=1e-6):
-        func = lambda q: self.get_pk_nw(q) * (1 - spherical_jn(0, self.rbao * q) + 2 * spherical_jn(2, self.rbao * q))
-        res = quadax.quadgk(func, [kmin, ks], epsrel=epsrel)
-        return res[0] / (6 * jnp.pi**2)
+    def get_Sigma2(self, ks, kmin=1e-4, num=1000):
+        q = jnp.linspace(kmin, ks, num)
+        integrand = self.get_pk_nw(q) * (1 - spherical_jn(0, self.rbao * q) + 2 * spherical_jn(2, self.rbao * q))
+        res = quadax.simpson(integrand, x=q) / (6 * jnp.pi**2)
+        return res
 
-    def get_dSigma2(self, ks, kmin=1e-7, epsrel=1e-6):
-        func = lambda q: self.get_pk_nw(q) * spherical_jn(2, self.rbao * q)
-        res = quadax.quadgk(func, [kmin, ks], epsrel=epsrel)
-        return res[0] / (2 * jnp.pi**2)
+    def get_dSigma2(self, ks, kmin=1e-4, num=1000):
+        q = jnp.linspace(kmin, ks, num)
+        integrand = self.get_pk_nw(q) * spherical_jn(2, self.rbao * q)
+        res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
+        return res
 
-    def get_sigmav2(self, kmin=1e-7, kmax=1e+7, epsrel=1e-6):
-        func = lambda q: self.get_pk_nw(q)
-        res = quadax.quadgk(func, [kmin, kmax], epsrel=epsrel)
-        return res[0] / (6 * jnp.pi**2)
+    def get_sigmav2(self, kmin=1e-7, kmax=1e+7, num=1000):
+        q = jnp.geomspace(kmin, kmax, num)
+        integrand = q * self.get_pk_nw(q)
+        res = quadax.simpson(integrand, x=jnp.log(q)) / (6 * jnp.pi**2)
+        return res
 
     def get_Sigma2_rsd(self, fgrowth, mu, ks=0.2):
         Sigma2_1 = (1 + mu**2 * fgrowth * (2 + fgrowth)) * self.get_Sigma2(ks)
