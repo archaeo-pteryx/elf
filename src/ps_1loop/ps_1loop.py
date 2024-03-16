@@ -478,9 +478,6 @@ class PowerSpectrum1Loop:
             pkmu = interpax.interp2d(jnp.ravel(k_tile), jnp.ravel(mu_tile), kn, mu, pkmu_data)
             pkmu = pkmu.reshape(len(k), len(mu))
 
-        # NOTE: for bug fixing
-        self.pkmu_data = copy.deepcopy(pkmu_data)
-
         return pkmu
 
     def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
