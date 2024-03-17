@@ -309,9 +309,14 @@ class PowerSpectrum1Loop:
         else:
             k_tile = jnp.tile(kn, (len(mu),1)).T
             pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
-            
-            # HACK: fix the below
-            pkmu = jnp.array([pkmu_interp(k[:,i], mu).reshape(len(k), len(mu))[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
+            pkmu_tab = []
+            for i in range(len(mu_ref)):
+                k_tile = jnp.tile(k[:,i], (len(mu), 1)).T
+                mu_tile = jnp.tile(mu, (len(k[:,i]), 1))
+                pkmu_muref = pkmu_interp(jnp.ravel(k_tile), jnp.ravel(mu_tile)).reshape(len(k[:,i]), len(mu))
+                pkmu_muref = pkmu_muref[:,i] * k[:,i]**(-alpha)
+                pkmu_tab.append(pkmu_muref)
+            pkmu = jnp.array(pkmu_tab).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
