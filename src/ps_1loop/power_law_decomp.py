@@ -19,7 +19,7 @@ class PowerLawDecomp:
     def compute(self, func, kwarg={}):
         fn_biased = func(self.kn, **kwarg) * (self.kn / self.kmin)**(-self.nu)
         c_m = jnp.fft.fft(fn_biased) / self.nmax
-        c_m_sym = self.kmin**(-self.nu_m) * jnp.array([c_m[int(self.nmax//2-i)].conj() if i<self.nmax//2 else c_m[int(i-self.nmax//2)] for i in range(self.nmax+1)])
+        c_m_sym = self.kmin**(-self.nu_m) * jnp.hstack((c_m[1:int(self.nmax//2)+1][::-1].conj(), c_m[:int(self.nmax//2)+1]))
         c_m_sym = c_m_sym.at[0].set(c_m_sym[0] / 2)
         c_m_sym = c_m_sym.at[-1].set(c_m_sym[-1] / 2)
         self.c_m = c_m_sym
