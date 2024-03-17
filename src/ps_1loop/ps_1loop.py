@@ -260,9 +260,8 @@ class PowerSpectrum1Loop:
         return pkmu
 
     def get_pk_ell_gg(self, l, k, irres=True, ctr_multipole=True, cross=False):
-        mu = jnp.linspace(0.,1.,2**8+1)
-        dmu = mu[1] - mu[0]
-
+        num = 256
+        mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
         
         # subtract ctr part from P(k, mu)
@@ -271,8 +270,8 @@ class PowerSpectrum1Loop:
             pkmu = pkmu - pkmu_ctr
 
         # compute the Legendre multipole moment
-        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
+        legendre = jnp.tile(lpmv(0, l, mu), (len(k), 1))
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, x=mu, axis=1)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
@@ -328,13 +327,11 @@ class PowerSpectrum1Loop:
     
     def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
         k_ref = jnp.atleast_1d(k_ref)
-        mu_ref = jnp.linspace(0.,1.,2**8+1)
-        dmu = mu_ref[1] - mu_ref[0]
-
+        num = 256
+        mu_ref = jnp.linspace(0., 1., num)
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
-
         legendre = jnp.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
-        pk_ell = (2*l+1) * quadax.simpson(pkmu_ref * legendre, axis=1, dx=dmu)
+        pk_ell = (2*l+1) * quadax.simpson(pkmu_ref * legendre, x=mu_ref, axis=1)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
@@ -362,11 +359,11 @@ class PowerSpectrum1Loop:
 
     def get_pk_ell_gg_lin(self, l, k):
         k = jnp.atleast_1d(k)
-        mu = jnp.linspace(0.,1.,2**8+1)
-        dmu = mu[1] - mu[0]
+        num = 256
+        mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_lin(k,mu)
-        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
+        legendre = jnp.tile(lpmv(0, l, mu), (len(k), 1))
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, x=mu, axis=1)
         return pk_ell
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
@@ -492,11 +489,11 @@ class PowerSpectrum1Loop:
 
     def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
         k = jnp.atleast_1d(k)
-        mu = jnp.linspace(0.,1.,2**8+1)
-        dmu = mu[1] - mu[0]
+        num = 256
+        mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
-        legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, axis=1, dx=dmu)
+        legendre = jnp.tile(lpmv(0, l, mu), (len(k), 1))
+        pk_ell = (2*l+1) * quadax.simpson(pkmu * legendre, x=mu, axis=1)
         return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
@@ -595,8 +592,8 @@ class PowerSpectrum1Loop:
 
     def get_pk_ell_ctr(self, l, k, irres=True):
         k = jnp.atleast_1d(k)
-        mu = jnp.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
+        num = 256
+        mu = jnp.linspace(0., 1., num)
 
         ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
         
@@ -623,7 +620,7 @@ class PowerSpectrum1Loop:
             pk = jnp.tile(pk_lin, (len(mu),1)).T
 
         legendre = jnp.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
-        pk_ell_ctr1 = - 2 * (2*l+1) * quadax.simpson(pk * legendre, axis=1, dx=dmu) * k**2
+        pk_ell_ctr1 = - 2 * (2*l+1) * quadax.simpson(pk * legendre, x=mu, axis=1) * k**2
 
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
         elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
@@ -633,7 +630,7 @@ class PowerSpectrum1Loop:
         pk_ell_ctr1 = cl * pk_ell_ctr1
 
         legendre = jnp.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell_ctr2 = (2*l+1) * quadax.simpson(pkmu_ctr2 * legendre, axis=1, dx=dmu)
+        pk_ell_ctr2 = (2*l+1) * quadax.simpson(pkmu_ctr2 * legendre, x=mu, axis=1)
 
         pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
         return pk_ell_ctr
