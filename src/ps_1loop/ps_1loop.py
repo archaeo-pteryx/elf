@@ -307,16 +307,21 @@ class PowerSpectrum1Loop:
         if len(mu) == 1:
             pkmu = interpax.interp1d(jnp.ravel(k), kn, pkmu * kn**alpha) * jnp.ravel(k)**(-alpha)
         else:
-            k_tile = jnp.tile(kn, (len(mu),1)).T
-            pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * k_tile**alpha)
-            pkmu_tab = []
-            for i in range(len(mu_ref)):
-                k_tile = jnp.tile(k[:,i], (len(mu), 1)).T
-                mu_tile = jnp.tile(mu, (len(k[:,i]), 1))
-                pkmu_muref = pkmu_interp(jnp.ravel(k_tile), jnp.ravel(mu_tile)).reshape(len(k[:,i]), len(mu))
-                pkmu_muref = pkmu_muref[:,i] * k[:,i]**(-alpha)
-                pkmu_tab.append(pkmu_muref)
-            pkmu = jnp.array(pkmu_tab).T
+            kn_tile = jnp.tile(kn, (len(mu),1)).T
+            mu_tile = jnp.tile(mu, (len(k_ref), 1))
+            pkmu = interpax.interp2d(jnp.ravel(k), jnp.ravel(mu_tile), kn, mu, pkmu * kn_tile**alpha)
+            pkmu = pkmu.reshape(len(k_ref), len(mu_ref)) * k**(-alpha)
+
+            # kn_tile = jnp.tile(kn, (len(mu),1)).T
+            # pkmu_interp = interpax.Interpolator2D(kn, mu, pkmu * kn_tile**alpha)
+            # pkmu_tab = []
+            # for i in range(len(mu_ref)):
+            #     k_tile = jnp.tile(k[:,i], (len(mu), 1)).T
+            #     mu_tile = jnp.tile(mu, (len(k[:,i]), 1))
+            #     pkmu_muref = pkmu_interp(jnp.ravel(k_tile), jnp.ravel(mu_tile)).reshape(len(k[:,i]), len(mu))
+            #     pkmu_muref = pkmu_muref[:,i] * k[:,i]**(-alpha)
+            #     pkmu_tab.append(pkmu_muref)
+            # pkmu = jnp.array(pkmu_tab).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
