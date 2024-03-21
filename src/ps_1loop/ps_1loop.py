@@ -3,8 +3,8 @@ import glob, re
 import copy
 import numpy as np
 from scipy.integrate import quad, romb
-from scipy.interpolate import InterpolatedUnivariateSpline as ius
-from scipy.interpolate import RectBivariateSpline as rbs
+from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import RectBivariateSpline
 from scipy.special import lpmv
 from scipy.optimize import fsolve
 
@@ -93,7 +93,7 @@ class PowerSpectrum1Loop:
 
     def set_pk_lin(self, k, pk_lin, kmin=1e-7, kmax=1e+7):
         k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
-        self.pk_lin_spl = ius(np.log(k_extrap), np.log(pk_extrap))
+        self.pk_lin_spl = InterpolatedUnivariateSpline(np.log(k_extrap), np.log(pk_extrap))
 
     def set_fgrowth(self, fgrowth):
         self.fgrowth = fgrowth
@@ -120,6 +120,8 @@ class PowerSpectrum1Loop:
         self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
         self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
         self.sigmav2 = self.pk_lin_int / 3
+
+        self.compute_1loop_terms()
 
     def set_bias_params(self, bias1={}, bias2={}):
         self.bias = bias1
@@ -211,7 +213,7 @@ class PowerSpectrum1Loop:
     def get_pk_1loop(self, k, name, sub_k0=True):
         alpha = 1.5
         kn, pk_data = self.get_pk_1loop_data(name=name, sub_k0=sub_k0)
-        pk_interp = ius(kn, kn**alpha * pk_data)
+        pk_interp = InterpolatedUnivariateSpline(kn, kn**alpha * pk_data)
         pk = pk_interp(k) * k**(-alpha)
         return pk
 
@@ -304,11 +306,11 @@ class PowerSpectrum1Loop:
 
         alpha = 1.5
         if len(mu) == 1:
-            pkmu_interp = ius(kn, pkmu * kn**alpha)
+            pkmu_interp = InterpolatedUnivariateSpline(kn, pkmu * kn**alpha)
             pkmu = pkmu_interp(np.ravel(k)) * np.ravel(k)**(-alpha)
         else:
             k_tile = np.tile(kn, (len(mu),1)).T
-            pkmu_interp = rbs(kn, mu, pkmu * k_tile**alpha)
+            pkmu_interp = RectBivariateSpline(kn, mu, pkmu * k_tile**alpha)
             pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
@@ -356,6 +358,15 @@ class PowerSpectrum1Loop:
         legendre = np.tile(lpmv(0,l,mu), (len(k),1))
         pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
         return pk_ell
+    
+    def compute_1loop_terms(self):
+        term_names = self.name_pkmu_gg_terms['tot']
+        self.pk_data_dict = {}
+
+        for mode in ['full', 'no-wiggle']:
+            for term in term_names:
+                kn, pk_data = self.get_pk_rsd_1loop_data(term, mode=mode)
+                self.pk_data_dict[(term, mode)] = (kn, pk_data)
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
         # UV limit of the 1-3 term
@@ -421,15 +432,14 @@ class PowerSpectrum1Loop:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
-    def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
-        k = np.atleast_1d(k)
+    def get_pkmu_gg_1loop_data(self, mu, name='tot', mode='full'):
         mu = np.atleast_1d(mu)
 
         if name == 'tot':
-            pkmu_22 = self.get_pkmu_gg_1loop(k, mu, name='22_gg', mode=mode)
-            pkmu_13 = self.get_pkmu_gg_1loop(k, mu, name='13_gg', mode=mode)
-            pkmu = pkmu_22 + pkmu_13
-            return pkmu
+            kn, pkmu_22 = self.get_pkmu_gg_1loop_data(mu, name='22_gg', mode=mode)
+            kn, pkmu_13 = self.get_pkmu_gg_1loop_data(mu, name='13_gg', mode=mode)
+            pkmu_data = pkmu_22 + pkmu_13
+            return kn, pkmu_data
 
         term_names = self.name_pkmu_gg_terms[name]
         pkmu_tab = []
@@ -454,7 +464,7 @@ class PowerSpectrum1Loop:
 
             fac = bias_fac * self.fgrowth**nf
 
-            kn, pk_data = self.get_pk_rsd_1loop_data(term, sub_k0=True, mode=mode)
+            kn, pk_data = self.pk_data_dict[(term, mode)]
 
             pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
@@ -465,11 +475,19 @@ class PowerSpectrum1Loop:
             pkmu_UV = self.get_pkmu_13_UV(kn, mu, mode=mode)
             pkmu_data += pkmu_UV
 
+        return kn, pkmu_data
+
+    def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+
+        kn, pkmu_data = self.get_pkmu_gg_1loop_data(mu, name=name, mode=mode)
+
         if len(mu) == 1:
-            pkmu_interp = ius(kn, np.ravel(pkmu_data))
+            pkmu_interp = InterpolatedUnivariateSpline(kn, np.ravel(pkmu_data))
             pkmu = pkmu_interp(k)
         else:
-            pkmu_interp = rbs(kn, mu, pkmu_data)
+            pkmu_interp = RectBivariateSpline(kn, mu, pkmu_data)
             pkmu = pkmu_interp(k, mu)
 
         return pkmu
