@@ -102,6 +102,8 @@ class PowerSpectrum1Loop:
         self.fgrowth = fgrowth
 
     def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+        self.Dgrowth = 1.
+
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -150,7 +152,7 @@ class PowerSpectrum1Loop:
         self.k_nl = k_nl
 
     def get_pk_lin(self, k, khigh=None): # in unit of [h^{-3} Mpc^3]
-        pk_lin = np.exp(self.pk_lin_spl(np.log(k)))
+        pk_lin = np.exp(self.pk_lin_spl(np.log(k))) * self.Dgrowth**2
         if khigh != None:
             pk_lin = pk_lin * np.exp(-(k / khigh))
         return pk_lin
@@ -162,7 +164,7 @@ class PowerSpectrum1Loop:
     def get_k_nl(self, k0=0.5):
         def func(logk):
             k = np.exp(logk)
-            Delta2_lin = k**3 * self.Dgrowth**2 * self.get_pk_lin(k) / (2 * np.pi**2)
+            Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * np.pi**2)
             return np.log(Delta2_lin)
         root = fsolve(func, x0=np.log(k0)) # solve Delta2_lin(k_nl) = 1
         k_nl = np.exp(root[0])
@@ -170,10 +172,10 @@ class PowerSpectrum1Loop:
 
     def get_pk_mm_irres(self, k, mode='LO'):
         plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
         plin_w = plin - plin_nw
         if mode == 'LO':
-            pk = self.Dgrowth**2 * (plin_nw + np.exp(-k**2 * self.Dgrowth**2 * self.Sigma2) * plin_w)
+            pk = plin_nw + np.exp(-k**2 * self.Dgrowth**2 * self.Sigma2) * plin_w
         return pk
 
     def get_pk_1loop_data(self, name, sub_k0=True, mode='full'):
@@ -343,7 +345,7 @@ class PowerSpectrum1Loop:
 
         Z1_1 = self.bias1['b1'] + self.fgrowth * mu**2
         Z1_2 = self.bias2['b1'] + self.fgrowth * mu**2
-        pk_lin = self.Dgrowth**2 * self.get_pk_lin(k)
+        pk_lin = self.get_pk_lin(k)
         pkmu = np.kron(pk_lin, Z1_1 * Z1_2).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
@@ -391,14 +393,13 @@ class PowerSpectrum1Loop:
         Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
 
         if mode == 'full':
-            pk_fac = self.get_pk_lin(k) * self.pk_lin_int
+            pk_fac = self.get_pk_lin(k) * (self.pk_lin_int * self.Dgrowth**2)
         elif mode == 'no-wiggle':
-            pk_fac = self.irres.get_pk_nw(k) * self.pk_lin_nw_int
+            pk_fac = (self.irres.get_pk_nw(k) * self.pk_lin_nw_int * self.Dgrowth**4)
         else:
             raise ValueError('Invalid mode.')
 
         pkmu_13 = np.kron(k**2 * pk_fac, Z1Z3_UV).reshape(len(k),len(mu))
-        pkmu_13 = self.Dgrowth**4 * pkmu_13
         return pkmu_13
 
     def get_pk_rsd_1loop_data(self, name, sub_k0=True, mode='full'):
@@ -510,7 +511,7 @@ class PowerSpectrum1Loop:
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
         plin_w = plin - plin_nw
 
         # BAO damping factor in redshift space
@@ -534,10 +535,10 @@ class PowerSpectrum1Loop:
         # IR-resummed power spectrum
         if mode == 'LO':
             # leading-order IR resummation
-            pkmu = Z1_tile1 * Z1_tile2 * self.Dgrowth**2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
+            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
         elif mode == 'tree':
             # leading-order IR resummation + additional term to prevent the double counting
-            pkmu = Z1_tile1 * Z1_tile2 * self.Dgrowth**2 * (plin_nw_tile + (1 + damp_fac) * np.exp(-damp_fac) * plin_w_tile)
+            pkmu = Z1_tile1 * Z1_tile2 * (plin_nw_tile + (1 + damp_fac) * np.exp(-damp_fac) * plin_w_tile)
         elif mode == '1loop no-wiggle':
             # 1-loop term computed with the non-wiggly component of the linear power spectrum
             pkmu = self.get_pkmu_gg_1loop(k, mu, name='tot', mode='no-wiggle')
@@ -572,7 +573,7 @@ class PowerSpectrum1Loop:
         if irres:
             # wiggly-non-wiggly decomposition
             plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k)
+            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
             plin_w = plin - plin_nw
 
             # BAO damping factor in redshift space
@@ -584,11 +585,11 @@ class PowerSpectrum1Loop:
             plin_w_tile = np.tile(plin_w, (len(mu),1)).T
             damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
-            pk = self.Dgrowth**2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
+            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
             pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
             pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
         else:
-            pk = self.Dgrowth**2 * self.get_pk_lin(k)
+            pk = self.get_pk_lin(k)
             pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
             pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
 
@@ -607,7 +608,7 @@ class PowerSpectrum1Loop:
         if irres:
             # wiggly-non-wiggly decomposition
             plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k)
+            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
             plin_w = plin - plin_nw
 
             # BAO damping factor in redshift space
@@ -619,10 +620,10 @@ class PowerSpectrum1Loop:
             plin_w_tile = np.tile(plin_w, (len(mu),1)).T
             damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
-            pk = self.Dgrowth**2 * (plin_nw_tile + np.exp(-damp_fac) * plin_w_tile)
+            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
             pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
         else:
-            pk_lin = self.Dgrowth**2 * self.get_pk_lin(k)
+            pk_lin = self.get_pk_lin(k)
             pkmu_ctr2 = - np.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
             pk = np.tile(pk_lin, (len(mu),1)).T
         

@@ -60,6 +60,8 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             self.compute_matrix(self.name_pkmu_gg_terms['tot'])
 
     def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+        self.Dgrowth = 1.
+
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -96,7 +98,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         self.Mk_spl = InterpolatedUnivariateSpline(np.log(k_extrap), np.log(Mk_extrap))
 
     def get_Mk(self, k):
-        Mk = np.exp(self.Mk_spl(np.log(k)))
+        Mk = np.exp(self.Mk_spl(np.log(k))) * self.Dgrowth
         return Mk
 
     def get_pk_1phi(self, k, khigh=None):
@@ -155,9 +157,9 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
 
         if mode == 'full':
-            pk_fac = self.get_pk_1phi(k) * self.pk_lin_int
+            pk_fac = self.get_pk_1phi(k) * (self.pk_lin_int * self.Dgrowth**2)
         elif mode == 'no-wiggle':
-            pk_fac = self.get_pk_1phi(k) * self.pk_lin_nw_int
+            pk_fac = self.get_pk_1phi(k) * (self.pk_lin_nw_int * self.Dgrowth**2)
         else:
             raise ValueError('Invalid mode')
 
@@ -266,6 +268,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             factor = np.kron(kn**2, (1 + self.fgrowth**2 * mu**2)).reshape(len(kn),len(mu))
             
             pkmu_data = - (self.bias1['bphi'] * Z1_g2 + self.bias2['bphi'] * Z1_g1) / 2 * factor * self.sigmav2 * pk_1phi
+            pkmu_data = pkmu_data * self.Dgrowth**2
             return kn, pkmu_data
 
         term_names = self.name_pkmu_gg_terms[name]
@@ -298,18 +301,28 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         pkmu_tab = np.array(pkmu_tab)
         pkmu_data = np.sum(pkmu_tab, axis=0)
 
-        if name == '13_gg':
+        if name == '22_gg':
+            pkmu_data = self.Dgrowth**4 * pkmu_data
+        elif name == '13_gg':
+            pkmu_data = self.Dgrowth**4 * pkmu_data
             pkmu_UV = self.get_pkmu_13_UV(kn, mu, mode=mode)
             pkmu_data += pkmu_UV
-        elif name == '13_gg_lpng1':
-            pkmu_UV = self.get_pkmu_13_lpng1_UV(kn, mu, mode=mode)
-            pkmu_data += pkmu_UV
         elif name == '12_gg_lpng1':
+            pkmu_data = self.Dgrowth**2 * pkmu_data
             pk_1phi = np.tile(self.get_pk_1phi(kn), (len(mu),1)).T
             pkmu_data = 2 * pk_1phi * pkmu_data
         elif name == '12_gg_lpng2':
+            pkmu_data = self.Dgrowth**2 * pkmu_data
             Mk = np.tile(self.get_Mk(kn), (len(mu),1)).T
             pkmu_data = Mk * pkmu_data
+        elif name == '22_gg_lpng':
+            pkmu_data = self.Dgrowth**3 * pkmu_data
+        elif name == '13_gg_lpng1':
+            pkmu_data = self.Dgrowth**3 * pkmu_data
+            pkmu_UV = self.get_pkmu_13_lpng1_UV(kn, mu, mode=mode)
+            pkmu_data += pkmu_UV
+        elif name == '13_gg_lpng3':
+            pkmu_data = self.Dgrowth**3 * pkmu_data
 
         return kn, pkmu_data
 
@@ -319,7 +332,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
         plin_w = plin - plin_nw
 
         # BAO damping factor in redshift space
@@ -333,7 +346,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         Z1_lpng_tile2 = np.tile(self.bias2['bphi'] * self.f_nl / self.get_Mk(k), (len(mu),1)).T
         plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
         plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-        damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+        damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
             Z1_tile1 = np.ravel(Z1_tile1)
