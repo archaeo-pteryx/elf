@@ -223,10 +223,10 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
 
         if name == 'tot':
             # Gaussian terms
-            kn, pkmu = self.get_pkmu_gg_1loop_data(mu, name='gauss_tot', mode=mode)
+            kn, pkmu_gauss = self.get_pkmu_gg_1loop_data(mu, name='gauss_tot', mode=mode)
             # LPNG terms (first order in f_NL)
             kn, pkmu_lpng = self.get_pkmu_gg_1loop_data(mu, name='lpng_tot', mode=mode)
-            pkmu_data = pkmu + self.f_nl * pkmu_lpng
+            pkmu_data = pkmu_gauss + pkmu_lpng
             return kn, pkmu_data
 
         elif name == 'gauss_tot':
@@ -269,6 +269,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             
             pkmu_data = - (self.bias1['bphi'] * Z1_g2 + self.bias2['bphi'] * Z1_g1) / 2 * factor * self.sigmav2 * pk_1phi
             pkmu_data = pkmu_data * self.Dgrowth**2
+            pkmu_data = self.f_nl * pkmu_data
             return kn, pkmu_data
 
         term_names = self.name_pkmu_gg_terms[name]
@@ -323,6 +324,9 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
             pkmu_data += pkmu_UV
         elif name == '13_gg_lpng3':
             pkmu_data = self.Dgrowth**3 * pkmu_data
+
+        if 'lpng' in name:
+            pkmu_data = self.f_nl * pkmu_data
 
         return kn, pkmu_data
 

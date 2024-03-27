@@ -51,6 +51,9 @@ def test_PowerSpectrum1loopLPNG(config_name: str, term_name: str):
     model.set_Dgrowth(Dgrowth=config['cosmology']['Dgrowth'])
     model.set_fgrowth(fgrowth=config['cosmology']['fgrowth'])
 
+    ## Set f_NL
+    model.set_f_nl(f_nl=1.)
+
     ## Set galaxy bias parameters
     bias = {key: value for key, value in config['galaxy_bias'].items()}
     model.set_bias_params(bias)
