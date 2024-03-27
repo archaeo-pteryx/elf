@@ -43,12 +43,15 @@ def test_PowerSpectrum1loopLPNG(config_name: str, term_name: str):
     ## Specify M(k) = sqrt( P_lin(k) / P_phi(k) )
     d = np.loadtxt(os.path.join(test_data_dir, 'input/Mk_%s.txt' % (config_name)))
     model.set_Mk(d[:,0], d[:,1])
-
-    ## Specify the linear growth rate f
-    model.set_fgrowth(fgrowth=config['cosmology']['fgrowth'])
     
     ## Preparation for computing 1-loop terms
     model.set_1loop(hubble=config['cosmology']['h'])
+
+    ## Specify the linear growth rate f
+    model.set_fgrowth(fgrowth=config['cosmology']['fgrowth'])
+
+    ## Set f_NL
+    model.set_f_nl(f_nl=1.)
 
     ## Set galaxy bias parameters
     bias = {key: value for key, value in config['galaxy_bias'].items()}
