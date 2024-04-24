@@ -3,8 +3,8 @@ import glob, re
 import copy
 import numpy as np
 from scipy.integrate import quad, romb
-from scipy.interpolate import InterpolatedUnivariateSpline as ius
-from scipy.interpolate import RectBivariateSpline as rbs
+from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import RectBivariateSpline
 from scipy.special import lpmv
 from scipy.optimize import fsolve
 
@@ -93,12 +93,17 @@ class PowerSpectrum1Loop:
 
     def set_pk_lin(self, k, pk_lin, kmin=1e-7, kmax=1e+7):
         k_extrap, pk_extrap = get_log_extrap(k, pk_lin, kmin, kmax)
-        self.pk_lin_spl = ius(np.log(k_extrap), np.log(pk_extrap))
+        self.pk_lin_spl = InterpolatedUnivariateSpline(np.log(k_extrap), np.log(pk_extrap))
+
+    def set_Dgrowth(self, Dgrowth):
+        self.Dgrowth = Dgrowth
 
     def set_fgrowth(self, fgrowth):
         self.fgrowth = fgrowth
 
     def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+        self.Dgrowth = 1.
+
         # FFTLog-based power-law decomposition
         self.decomp['plin nu=-0.3'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.7'].compute(self.get_pk_lin, kwarg={'khigh':khigh})
@@ -120,6 +125,8 @@ class PowerSpectrum1Loop:
         self.pk_lin_int = self.get_pk_int(self.get_pk_lin, kmin=kmin, kmax=kmax, limit=1000, kwarg={'khigh':khigh})
         self.pk_lin_nw_int = self.get_pk_int(self.irres.get_pk_nw, kmin=kmin, kmax=kmax, limit=1000)
         self.sigmav2 = self.pk_lin_int / 3
+
+        self.compute_1loop_terms()
 
     def set_bias_params(self, bias1={}, bias2={}):
         self.bias = bias1
@@ -145,10 +152,7 @@ class PowerSpectrum1Loop:
         self.k_nl = k_nl
 
     def get_pk_lin(self, k, khigh=None): # in unit of [h^{-3} Mpc^3]
-        """
-        The linear matter power spectrum
-        """
-        pk_lin = np.exp(self.pk_lin_spl(np.log(k)))
+        pk_lin = np.exp(self.pk_lin_spl(np.log(k))) * self.Dgrowth**2
         if khigh != None:
             pk_lin = pk_lin * np.exp(-(k / khigh))
         return pk_lin
@@ -168,10 +172,10 @@ class PowerSpectrum1Loop:
 
     def get_pk_mm_irres(self, k, mode='LO'):
         plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
         plin_w = plin - plin_nw
         if mode == 'LO':
-            pk = plin_nw + np.exp(-k**2 * self.Sigma2) * plin_w
+            pk = plin_nw + np.exp(-k**2 * self.Dgrowth**2 * self.Sigma2) * plin_w
         return pk
 
     def get_pk_1loop_data(self, name, sub_k0=True, mode='full'):
@@ -211,8 +215,9 @@ class PowerSpectrum1Loop:
     def get_pk_1loop(self, k, name, sub_k0=True):
         alpha = 1.5
         kn, pk_data = self.get_pk_1loop_data(name=name, sub_k0=sub_k0)
-        pk_interp = ius(kn, kn**alpha * pk_data)
+        pk_interp = InterpolatedUnivariateSpline(kn, kn**alpha * pk_data)
         pk = pk_interp(k) * k**(-alpha)
+        pk = self.Dgrowth**4 * pk
         return pk
 
     def get_pk_gg_raw(self, k):
@@ -258,7 +263,7 @@ class PowerSpectrum1Loop:
 
         return pkmu
 
-    def get_pk_ell_gg(self, l, k, irres=True, ctr_multipole=True, cross=False):
+    def get_pk_ell_gg(self, k, ells, irres=True, ctr_multipole=True, cross=False):
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
 
@@ -269,19 +274,20 @@ class PowerSpectrum1Loop:
             pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
             pkmu = pkmu - pkmu_ctr
 
-        # compute the Legendre multipole moment
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        # compute the Legendre multipole moments
+        pkmu = np.tile(pkmu, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        pk_ell = romb(pkmu * legendre, dx=dmu, axis=2)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
-            pk_ell_ctr = self.get_pk_ell_ctr(l, k, irres=irres)
+            pk_ell_ctr = self.get_pk_ell_ctr(k, ells, irres=irres)
             pk_ell = pk_ell + pk_ell_ctr
 
         return pk_ell
 
     def get_pk_gg_ref(self, k_ref, alpha_perp, alpha_para, irres=True, cross=False):
-        pk = self.get_pkmu_gg_ref(k_ref, 0, alpha_perp, alpha_para, irres=irres, cross=cross)
+        pk = self.get_pkmu_gg_ref(k_ref, 0., alpha_perp, alpha_para, irres=irres, cross=cross)
         return pk
 
     def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=False, cross=False):
@@ -294,45 +300,43 @@ class PowerSpectrum1Loop:
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        kn = np.geomspace(np.min(k), np.max(k), 1000)
-        pkmu = self.get_pkmu_gg(kn, mu, irres=irres, cross=cross)
+        k_grid = np.geomspace(np.min(k), np.max(k), 200)
+        mu_grid = np.linspace(0., 1., 51)
+        pkmu_grid = self.get_pkmu_gg(k_grid, mu_grid, irres=irres, cross=cross)
 
         # subtract ctr part from P(k, mu)
         if ctr_multipole:
-            pkmu_ctr = self.get_pkmu_ctr(kn, mu, irres=irres)
-            pkmu = pkmu - pkmu_ctr
+            pkmu_ctr = self.get_pkmu_ctr(k_grid, mu_grid, irres=irres)
+            pkmu_grid = pkmu_grid - pkmu_ctr
 
-        alpha = 1.5
-        if len(mu) == 1:
-            pkmu_interp = ius(kn, pkmu * kn**alpha)
-            pkmu = pkmu_interp(np.ravel(k)) * np.ravel(k)**(-alpha)
-        else:
-            k_tile = np.tile(kn, (len(mu),1)).T
-            pkmu_interp = rbs(kn, mu, pkmu * k_tile**alpha)
-            pkmu = np.array([pkmu_interp(k[:,i], mu)[:,i] * k[:,i]**(-alpha) for i in range(len(mu_ref))]).T
-
+        pkmu_interp = RectBivariateSpline(k_grid, mu_grid, pkmu_grid)
+        pkmu = pkmu_interp.ev(k, np.tile(mu, (len(k_ref), 1)))
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
+
+        if len(k_ref) == 1 or len(mu_ref) == 1:
+            pkmu = np.ravel(pkmu)
         return pkmu
     
-    def get_pk_ell_gg_ref(self, l, k_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
+    def get_pk_ell_gg_ref(self, k_ref, ells, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.linspace(0.,1.,2**8+1)
         dmu = mu_ref[1] - mu_ref[0]
 
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
 
-        legendre = np.tile(lpmv(0,l,mu_ref), (len(k_ref),1))
-        pk_ell = (2*l+1) * romb(pkmu_ref * legendre, axis=1, dx=dmu)
+        pkmu_ref = np.tile(pkmu_ref, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu_ref), (len(k_ref),1)) for l in ells])
+        pk_ell = romb(pkmu_ref * legendre, dx=dmu, axis=2)
 
         # add ctr part to P_ell(k)
         if ctr_multipole:
-            pk_ell_ctr = self.get_pk_ell_ctr(l, k_ref, irres=irres)
+            pk_ell_ctr = self.get_pk_ell_ctr(k_ref, ells, irres=irres)
             pk_ell = pk_ell + pk_ell_ctr
 
         return pk_ell
 
     def get_pk_gg_lin(self, k):
-        pk = self.get_pkmu_gg_lin(k, 0)
+        pk = self.get_pkmu_gg_lin(k, 0.)
         return pk
 
     def get_pkmu_gg_lin(self, k, mu):
@@ -348,14 +352,24 @@ class PowerSpectrum1Loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pk_ell_gg_lin(self, l, k):
+    def get_pk_ell_gg_lin(self, k, ells):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
-        pkmu = self.get_pkmu_gg_lin(k,mu)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        pkmu = self.get_pkmu_gg_lin(k, mu)
+        pkmu = np.tile(pkmu, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        pk_ell = romb(pkmu * legendre, dx=dmu, axis=2)
         return pk_ell
+    
+    def compute_1loop_terms(self):
+        term_names = self.name_pkmu_gg_terms['tot']
+        self.pk_data_dict = {}
+
+        for mode in ['full', 'no-wiggle']:
+            for term in term_names:
+                kn, pk_data = self.get_pk_rsd_1loop_data(term, mode=mode)
+                self.pk_data_dict[(term, mode)] = (kn, pk_data)
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
         # UV limit of the 1-3 term
@@ -379,9 +393,9 @@ class PowerSpectrum1Loop:
         Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
 
         if mode == 'full':
-            pk_fac = self.get_pk_lin(k) * self.pk_lin_int
+            pk_fac = self.get_pk_lin(k) * (self.pk_lin_int * self.Dgrowth**2)
         elif mode == 'no-wiggle':
-            pk_fac = self.irres.get_pk_nw(k) * self.pk_lin_nw_int
+            pk_fac = (self.irres.get_pk_nw(k) * self.pk_lin_nw_int * self.Dgrowth**4)
         else:
             raise ValueError('Invalid mode.')
 
@@ -421,15 +435,14 @@ class PowerSpectrum1Loop:
             raise KeyError('PT kernel name is invalid.')
         return kn, pk_data
 
-    def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
-        k = np.atleast_1d(k)
+    def get_pkmu_gg_1loop_data(self, mu, name='tot', mode='full'):
         mu = np.atleast_1d(mu)
 
         if name == 'tot':
-            pkmu_22 = self.get_pkmu_gg_1loop(k, mu, name='22_gg', mode=mode)
-            pkmu_13 = self.get_pkmu_gg_1loop(k, mu, name='13_gg', mode=mode)
-            pkmu = pkmu_22 + pkmu_13
-            return pkmu
+            kn, pkmu_22 = self.get_pkmu_gg_1loop_data(mu, name='22_gg', mode=mode)
+            kn, pkmu_13 = self.get_pkmu_gg_1loop_data(mu, name='13_gg', mode=mode)
+            pkmu_data = pkmu_22 + pkmu_13
+            return kn, pkmu_data
 
         term_names = self.name_pkmu_gg_terms[name]
         pkmu_tab = []
@@ -454,33 +467,42 @@ class PowerSpectrum1Loop:
 
             fac = bias_fac * self.fgrowth**nf
 
-            kn, pk_data = self.get_pk_rsd_1loop_data(term, sub_k0=True, mode=mode)
+            kn, pk_data = self.pk_data_dict[(term, mode)]
 
             pkmu = fac * np.kron(pk_data, mu**nmu).reshape(len(kn),len(mu))
             pkmu_tab.append(pkmu)
         pkmu_tab = np.array(pkmu_tab)
-        pkmu_data = np.sum(pkmu_tab, axis=0)
+        pkmu_data = self.Dgrowth**4 * np.sum(pkmu_tab, axis=0)
 
         if name == '13_gg':
             pkmu_UV = self.get_pkmu_13_UV(kn, mu, mode=mode)
             pkmu_data += pkmu_UV
 
+        return kn, pkmu_data
+
+    def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
+
+        kn, pkmu_data = self.get_pkmu_gg_1loop_data(mu, name=name, mode=mode)
+
         if len(mu) == 1:
-            pkmu_interp = ius(kn, np.ravel(pkmu_data))
+            pkmu_interp = InterpolatedUnivariateSpline(kn, np.ravel(pkmu_data))
             pkmu = pkmu_interp(k)
         else:
-            pkmu_interp = rbs(kn, mu, pkmu_data)
+            pkmu_interp = RectBivariateSpline(kn, mu, pkmu_data)
             pkmu = pkmu_interp(k, mu)
 
         return pkmu
 
-    def get_pk_ell_gg_1loop(self, l, k, name='tot', mode='full'):
+    def get_pk_ell_gg_1loop(self, k, ells, name='tot', mode='full'):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1] - mu[0]
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell = (2*l+1) * romb(pkmu * legendre, axis=1, dx=dmu)
+        pkmu = np.tile(pkmu, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        pk_ell = romb(pkmu * legendre, dx=dmu, axis=2)
         return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
@@ -489,7 +511,7 @@ class PowerSpectrum1Loop:
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
-        plin_nw = self.irres.get_pk_nw(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
         plin_w = plin - plin_nw
 
         # BAO damping factor in redshift space
@@ -501,7 +523,7 @@ class PowerSpectrum1Loop:
         Z1_tile2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
         plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
         plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-        damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+        damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
         if len(k) == 1 or len(mu) == 1:
             Z1_tile1 = np.ravel(Z1_tile1)
@@ -551,7 +573,7 @@ class PowerSpectrum1Loop:
         if irres:
             # wiggly-non-wiggly decomposition
             plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k)
+            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
             plin_w = plin - plin_nw
 
             # BAO damping factor in redshift space
@@ -561,10 +583,9 @@ class PowerSpectrum1Loop:
 
             plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
             plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+            damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
             pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
-
             pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
             pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
         else:
@@ -577,7 +598,7 @@ class PowerSpectrum1Loop:
             pkmu = np.ravel(pkmu)
         return pkmu
 
-    def get_pk_ell_ctr(self, l, k, irres=True):
+    def get_pk_ell_ctr(self, k, ells, irres=True):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
         dmu = mu[1]-mu[0]
@@ -587,7 +608,7 @@ class PowerSpectrum1Loop:
         if irres:
             # wiggly-non-wiggly decomposition
             plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k)
+            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
             plin_w = plin - plin_nw
 
             # BAO damping factor in redshift space
@@ -597,7 +618,7 @@ class PowerSpectrum1Loop:
 
             plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
             plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, Sigma2_tot).reshape(len(k),len(mu))
+            damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
 
             pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
             pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
@@ -605,22 +626,29 @@ class PowerSpectrum1Loop:
             pk_lin = self.get_pk_lin(k)
             pkmu_ctr2 = - np.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
             pk = np.tile(pk_lin, (len(mu),1)).T
+        
+        pk = np.tile(pk, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1)) for l in ells])
+        pk_ell_ctr1 = - 2 * romb(pk * legendre, dx=dmu, axis=2) * np.tile(k**2, (len(ells), 1))
 
-        legendre = np.tile(lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1))
-        pk_ell_ctr1 = - 2 * (2*l+1) * romb(pk * legendre, axis=1, dx=dmu) * k**2
+        coeffs = np.array([self.get_coeff_ctr_multipole(l) for l in ells])
+        coeffs = np.tile(coeffs, (len(k), 1)).T
+        
+        pk_ell_ctr1 = coeffs * pk_ell_ctr1
 
+        pkmu_ctr2 = np.tile(pkmu_ctr2, (len(ells),1,1))
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        pk_ell_ctr2 = romb(pkmu_ctr2 * legendre, dx=dmu, axis=2)
+
+        pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
+        return pk_ell_ctr
+    
+    def get_coeff_ctr_multipole(self, l):
         if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
         elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
         elif l == 4: cl = (self.ctr1['c4'] + self.ctr2['c4']) / 2
         else: cl = 0.
-        
-        pk_ell_ctr1 = cl * pk_ell_ctr1
-
-        legendre = np.tile(lpmv(0,l,mu), (len(k),1))
-        pk_ell_ctr2 = (2*l+1) * romb(pkmu_ctr2 * legendre, axis=1, dx=dmu)
-
-        pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
-        return pk_ell_ctr
+        return cl
 
     def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)

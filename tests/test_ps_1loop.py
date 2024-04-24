@@ -38,12 +38,13 @@ def test_PowerSpectrum1loop(config_name: str, term_name: str):
 
     ## Specify the linear matter power spectrum
     d = np.loadtxt(os.path.join(test_data_dir, 'input/pk_lin_%s.txt' % (config_name)))
-    model.set_pk_lin(d[:,0], d[:,1])
+    model.set_pk_lin(d[:,0], d[:,1] / config['cosmology']['Dgrowth']**2)
     
     ## Preparation for computing 1-loop terms
     model.set_1loop(hubble=config['cosmology']['h'])
 
-    ## Specify the linear growth rate f
+    ## Set the redshift
+    model.set_Dgrowth(Dgrowth=config['cosmology']['Dgrowth'])
     model.set_fgrowth(fgrowth=config['cosmology']['fgrowth'])
 
     ## Set galaxy bias parameters
