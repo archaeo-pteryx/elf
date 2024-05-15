@@ -271,20 +271,20 @@ class PowerSpectrum1Loop:
 
         pkmu = self.get_pkmu_gg(k, mu, irres=irres, cross=cross)
         
-        # subtract ctr part from P(k, mu)
+        # subtract ctr1 part from P(k, mu)
         if ctr_multipole:
-            pkmu_ctr = self.get_pkmu_ctr(k, mu, irres=irres)
-            pkmu = pkmu - pkmu_ctr
+            pkmu_ctr1 = self.get_pkmu_ctr1(k, mu, irres=irres)
+            pkmu = pkmu - pkmu_ctr1
 
         # compute the Legendre multipole moments
         pkmu = np.tile(pkmu, (len(ells),1,1))
         legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
         pk_ell = romb(pkmu * legendre, dx=dmu, axis=2)
 
-        # add ctr part to P_ell(k)
+        # add ctr1 part to P_ell(k)
         if ctr_multipole:
-            pk_ell_ctr = self.get_pk_ell_ctr(k, ells, irres=irres)
-            pk_ell = pk_ell + pk_ell_ctr
+            pk_ell_ctr1 = self.get_pk_ell_ctr1(k, ells, irres=irres)
+            pk_ell = pk_ell + pk_ell_ctr1
 
         return pk_ell
 
@@ -302,14 +302,14 @@ class PowerSpectrum1Loop:
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        k_grid = np.geomspace(np.max(np.min(k), self._kmin_fft), np.min(np.max(k), self._kmax_fft), self._nmax_fft)
+        k_grid = np.geomspace(np.max([np.min(k), self._kmin_fft]), np.min([np.max(k), self._kmax_fft]), self._nmax_fft)
         mu_grid = np.linspace(0., 1., 51)
         pkmu_grid = self.get_pkmu_gg(k_grid, mu_grid, irres=irres, cross=cross)
 
-        # subtract ctr part from P(k, mu)
+        # subtract ctr1 part from P(k, mu)
         if ctr_multipole:
-            pkmu_ctr = self.get_pkmu_ctr(k_grid, mu_grid, irres=irres)
-            pkmu_grid = pkmu_grid - pkmu_ctr
+            pkmu_ctr1 = self.get_pkmu_ctr1(k_grid, mu_grid, irres=irres)
+            pkmu_grid = pkmu_grid - pkmu_ctr1
 
         pkmu_interp = RectBivariateSpline(k_grid, mu_grid, pkmu_grid)
         pkmu = pkmu_interp.ev(k, np.tile(mu, (len(k_ref), 1)))
@@ -330,10 +330,10 @@ class PowerSpectrum1Loop:
         legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu_ref), (len(k_ref),1)) for l in ells])
         pk_ell = romb(pkmu_ref * legendre, dx=dmu, axis=2)
 
-        # add ctr part to P_ell(k)
+        # add ctr1 part to P_ell(k)
         if ctr_multipole:
-            pk_ell_ctr = self.get_pk_ell_ctr(k_ref, ells, irres=irres)
-            pk_ell = pk_ell + pk_ell_ctr
+            pk_ell_ctr1 = self.get_pk_ell_ctr1_ref(k_ref, ells, alpha_perp, alpha_para, irres=irres)
+            pk_ell = pk_ell + pk_ell_ctr1
 
         return pk_ell
 
@@ -580,6 +580,10 @@ class PowerSpectrum1Loop:
 
         pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
         return pk
+    
+    def get_pkmu_ctr(self, k, mu, irres=True):
+        pkmu_ctr = self.get_pkmu_ctr1(k, mu, irres=irres) + self.get_pkmu_ctr2(k, mu, irres=irres)
+        return pkmu_ctr
 
     def get_pkmu_ctr1(self, k, mu, irres=True):
         k = np.atleast_1d(k)
@@ -646,7 +650,7 @@ class PowerSpectrum1Loop:
 
         return pk_ell_ctr1
     
-    def get_pkmu_ctr1_ref_redefined(self, l, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
+    def get_pkmu_ctr1_ref(self, l, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
         k_ref = np.atleast_1d(k_ref)
         mu_ref = np.atleast_1d(mu_ref)
 
@@ -656,7 +660,7 @@ class PowerSpectrum1Loop:
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation of mu^l k^2 P_lin(k)
-        k_grid = np.geomspace(np.max(np.min(k), self._kmin_fft), np.min(np.max(k), self._kmax_fft), self._nmax_fft)
+        k_grid = np.geomspace(np.max([np.min(k), self._kmin_fft]), np.min([np.max(k), self._kmax_fft]), self._nmax_fft)
         mu_grid = np.linspace(0., 1., 51)
         k2mul = np.kron(k_grid**2, mu_grid**l).reshape(len(k_grid), len(mu_grid))
         if irres:
@@ -680,7 +684,7 @@ class PowerSpectrum1Loop:
         coeffs = np.array([self.get_coeff_ctr1_multipole(l) for l in ells])
         coeffs = np.tile(coeffs, (len(k_ref), 1)).T
 
-        pkmu_ref = np.array([self.get_pkmu_ctr1_ref_redefined(l, k_ref, mu_ref, alpha_perp, alpha_para, irres=irres) for l in ells])
+        pkmu_ref = np.array([self.get_pkmu_ctr1_ref(l, k_ref, mu_ref, alpha_perp, alpha_para, irres=irres) for l in ells])
         legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu_ref), (len(k_ref),1)) for l in ells])
         pk_ell_ctr1 = - 2 * romb(pkmu_ref * legendre, dx=dmu, axis=2)
         pk_ell_ctr1 = coeffs * pk_ell_ctr1
