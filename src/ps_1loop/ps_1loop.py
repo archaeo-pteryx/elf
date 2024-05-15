@@ -17,18 +17,20 @@ from .ir_resum import IRResum
 
 class PowerSpectrum1Loop:
 
-    def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
+    def __init__(self, config_fft=None, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True, num_k_interp=256):
         
         # set up the FFTLog-based power-law decomposition
-        if config_fft == None:
-            config_fft = {
-                'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-                'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-                'plin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-                'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-                'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-                'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
-            }
+        config_fft = {
+            'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+            'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+            'plin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+            'plin nu=-0.3 (no-wiggle)': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+            'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+            'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
+        }
+        self._kmin_fft = kmin_fft
+        self._kmax_fft = kmax_fft
+        self._nmax_fft = nmax_fft
         self.config_fft = config_fft
         self.set_power_law_decomp(config_fft)
 
@@ -300,7 +302,7 @@ class PowerSpectrum1Loop:
         k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        k_grid = np.geomspace(np.min(k), np.max(k), 200)
+        k_grid = np.geomspace(np.max(np.min(k), self._kmin_fft), np.min(np.max(k), self._kmax_fft), self._nmax_fft)
         mu_grid = np.linspace(0., 1., 51)
         pkmu_grid = self.get_pkmu_gg(k_grid, mu_grid, irres=irres, cross=cross)
 
@@ -519,11 +521,12 @@ class PowerSpectrum1Loop:
         Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
         Sigma2_tot = Sigma2_1 + Sigma2_2
 
-        Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
-        Z1_tile2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
         plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
         plin_w_tile = np.tile(plin_w, (len(mu),1)).T
         damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
+
+        Z1_tile1 = np.tile(self.bias1['b1'] + self.fgrowth * mu**2, (len(k), 1))
+        Z1_tile2 = np.tile(self.bias2['b1'] + self.fgrowth * mu**2, (len(k), 1))
 
         if len(k) == 1 or len(mu) == 1:
             Z1_tile1 = np.ravel(Z1_tile1)
@@ -559,8 +562,26 @@ class PowerSpectrum1Loop:
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
+    
+    def get_pk_lin_irres_rsd(self, k, mu):
+        # wiggly-non-wiggly decomposition
+        plin = self.get_pk_lin(k)
+        plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
+        plin_w = plin - plin_nw
 
-    def get_pkmu_ctr(self, k, mu, irres=True):
+        # BAO damping factor in redshift space
+        Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * self.Sigma2
+        Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
+        Sigma2_tot = Sigma2_1 + Sigma2_2
+
+        plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
+        plin_w_tile = np.tile(plin_w, (len(mu),1)).T
+        damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
+
+        pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
+        return pk
+
+    def get_pkmu_ctr1(self, k, mu, irres=True):
         k = np.atleast_1d(k)
         mu = np.atleast_1d(mu)
 
@@ -568,87 +589,103 @@ class PowerSpectrum1Loop:
         ctr1_mu = (self.ctr1['c0'] + self.ctr2['c0']) / 2 
         ctr1_mu = ctr1_mu + (self.ctr1['c2'] + self.ctr2['c2']) / 2 * self.fgrowth * mu**2
         ctr1_mu = ctr1_mu + (self.ctr1['c4'] + self.ctr2['c4']) / 2 * self.fgrowth**2 * mu**4
-        ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
 
         if irres:
-            # wiggly-non-wiggly decomposition
-            plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
-            plin_w = plin - plin_nw
-
-            # BAO damping factor in redshift space
-            Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * self.Sigma2
-            Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
-            Sigma2_tot = Sigma2_1 + Sigma2_2
-
-            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
-
-            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
-            pkmu_ctr1 = - 2 * np.tile(ctr1_mu, (len(k),1)) * np.tile(k**2, (len(mu),1)).T * pk
-            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
+            pk = self.get_pk_lin_irres_rsd(k, mu)
+            pkmu_ctr1 = - 2 * np.kron(k**2, ctr1_mu).reshape(len(k),len(mu)) * pk
         else:
             pk = self.get_pk_lin(k)
             pkmu_ctr1 = - 2 * np.kron(k**2 * pk, ctr1_mu).reshape(len(k),len(mu))
-            pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
 
-        pkmu = pkmu_ctr1 + pkmu_ctr2
+        pkmu = pkmu_ctr1
         if len(k) == 1 or len(mu) == 1:
             pkmu = np.ravel(pkmu)
         return pkmu
+    
+    def get_pkmu_ctr2(self, k, mu, irres=True):
+        k = np.atleast_1d(k)
+        mu = np.atleast_1d(mu)
 
-    def get_pk_ell_ctr(self, k, ells, irres=True):
+        # cross power spectrum
+        ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
+
+        if irres:
+            pk = self.get_pk_lin_irres_rsd(k, mu)
+            pkmu_ctr2 = - np.kron(k**4, ctr2_mu).reshape(len(k),len(mu)) * pk
+        else:
+            pk = self.get_pk_lin(k)
+            pkmu_ctr2 = - np.kron(k**4 * pk, ctr2_mu).reshape(len(k),len(mu))
+
+        pkmu = pkmu_ctr2
+        if len(k) == 1 or len(mu) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+    
+    def get_coeff_ctr1_multipole(self, l):
+        cl = (self.ctr1['c%s' % (l)] + self.ctr2['c%s' % (l)]) / 2. if l in [0,2,4] else 0.
+        return cl
+
+    def get_pk_ell_ctr1(self, k, ells, irres=True):
         k = np.atleast_1d(k)
         mu = np.linspace(0.,1.,2**8+1)
-        dmu = mu[1]-mu[0]
+        dmu = mu[1] - mu[0]
 
-        ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
-        
+        coeffs = np.array([self.get_coeff_ctr1_multipole(l) for l in ells])
+        coeffs = np.tile(coeffs, (len(k), 1)).T
+
         if irres:
-            # wiggly-non-wiggly decomposition
-            plin = self.get_pk_lin(k)
-            plin_nw = self.irres.get_pk_nw(k) * self.Dgrowth**2
-            plin_w = plin - plin_nw
-
-            # BAO damping factor in redshift space
-            Sigma2_1 = (1 + mu**2 * self.fgrowth * (2 + self.fgrowth)) * self.Sigma2
-            Sigma2_2 = self.fgrowth**2 * mu**2 * (mu**2 - 1) * self.dSigma2
-            Sigma2_tot = Sigma2_1 + Sigma2_2
-
-            plin_nw_tile = np.tile(plin_nw, (len(mu),1)).T
-            plin_w_tile = np.tile(plin_w, (len(mu),1)).T
-            damp_fac = np.kron(k**2, self.Dgrowth**2 * Sigma2_tot).reshape(len(k),len(mu))
-
-            pk = plin_nw_tile + np.exp(-damp_fac) * plin_w_tile
-            pkmu_ctr2 = - np.tile(ctr2_mu, (len(k),1)) * np.tile(k**4, (len(mu),1)).T * pk
+            pk = self.get_pk_lin_irres_rsd(k, mu)
         else:
             pk_lin = self.get_pk_lin(k)
-            pkmu_ctr2 = - np.kron(k**4 * pk_lin, ctr2_mu).reshape(len(k),len(mu))
             pk = np.tile(pk_lin, (len(mu),1)).T
         
         pk = np.tile(pk, (len(ells),1,1))
         legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1)) for l in ells])
         pk_ell_ctr1 = - 2 * romb(pk * legendre, dx=dmu, axis=2) * np.tile(k**2, (len(ells), 1))
-
-        coeffs = np.array([self.get_coeff_ctr_multipole(l) for l in ells])
-        coeffs = np.tile(coeffs, (len(k), 1)).T
-        
         pk_ell_ctr1 = coeffs * pk_ell_ctr1
 
-        pkmu_ctr2 = np.tile(pkmu_ctr2, (len(ells),1,1))
-        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
-        pk_ell_ctr2 = romb(pkmu_ctr2 * legendre, dx=dmu, axis=2)
-
-        pk_ell_ctr = pk_ell_ctr1 + pk_ell_ctr2
-        return pk_ell_ctr
+        return pk_ell_ctr1
     
-    def get_coeff_ctr_multipole(self, l):
-        if l == 0: cl = (self.ctr1['c0'] + self.ctr2['c0']) / 2
-        elif l == 2: cl = (self.ctr1['c2'] + self.ctr2['c2']) / 2
-        elif l == 4: cl = (self.ctr1['c4'] + self.ctr2['c4']) / 2
-        else: cl = 0.
-        return cl
+    def get_pkmu_ctr1_ref_redefined(self, l, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
+        k_ref = np.atleast_1d(k_ref)
+        mu_ref = np.atleast_1d(mu_ref)
+
+        # mapping of (k, mu)
+        fac = np.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
+        mu = mu_ref * (alpha_perp / alpha_para) / fac
+        k = np.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
+
+        # spline interpolation of mu^l k^2 P_lin(k)
+        k_grid = np.geomspace(np.max(np.min(k), self._kmin_fft), np.min(np.max(k), self._kmax_fft), self._nmax_fft)
+        mu_grid = np.linspace(0., 1., 51)
+        k2mul = np.kron(k_grid**2, mu_grid**l).reshape(len(k_grid), len(mu_grid))
+        if irres:
+            pkmu_grid = self.fgrowth**(l/2) * k2mul * self.get_pk_lin_irres_rsd(k_grid, mu_grid)
+        else:
+            pkmu_grid = self.fgrowth**(l/2) * k2mul * np.tile(self.get_pk_lin(k_grid), (len(mu_grid),1)).T
+
+        pkmu_interp = RectBivariateSpline(k_grid, mu_grid, pkmu_grid)
+        pkmu = pkmu_interp.ev(k, np.tile(mu, (len(k_ref), 1)))
+        pkmu = pkmu / (alpha_perp**2 * alpha_para)
+
+        if len(k_ref) == 1 or len(mu_ref) == 1:
+            pkmu = np.ravel(pkmu)
+        return pkmu
+    
+    def get_pk_ell_ctr1_ref(self, k_ref, ells, alpha_perp, alpha_para, irres=True):
+        k_ref = np.atleast_1d(k_ref)
+        mu_ref = np.linspace(0.,1.,2**8+1)
+        dmu = mu_ref[1] - mu_ref[0]
+
+        coeffs = np.array([self.get_coeff_ctr1_multipole(l) for l in ells])
+        coeffs = np.tile(coeffs, (len(k_ref), 1)).T
+
+        pkmu_ref = np.array([self.get_pkmu_ctr1_ref_redefined(l, k_ref, mu_ref, alpha_perp, alpha_para, irres=irres) for l in ells])
+        legendre = np.array([np.tile((2*l+1) * lpmv(0,l,mu_ref), (len(k_ref),1)) for l in ells])
+        pk_ell_ctr1 = - 2 * romb(pkmu_ref * legendre, dx=dmu, axis=2)
+        pk_ell_ctr1 = coeffs * pk_ell_ctr1
+
+        return pk_ell_ctr1
 
     def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)
