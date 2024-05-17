@@ -20,7 +20,7 @@ class PowerSpectrum1Loop:
     def __init__(self, kmin_fft=1e-5, kmax_fft=1e+3, nmax_fft=256, precompute=True):
         
         # set up the FFTLog-based power-law decomposition
-        config_fft = {
+        self.config_fft = {
             'plin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
             'plin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
             'plin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
@@ -28,11 +28,10 @@ class PowerSpectrum1Loop:
             'plin nu=-0.7 (no-wiggle)': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
             'plin nu=-1.6 (no-wiggle)': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nmax':nmax_fft},
         }
+        self.set_power_law_decomp(self.config_fft)
         self._kmin_fft = kmin_fft
         self._kmax_fft = kmax_fft
         self._nmax_fft = nmax_fft
-        self.config_fft = config_fft
-        self.set_power_law_decomp(config_fft)
 
         # store the names of 1-loop terms calculated with the FFTLog-based method
         self.name_pkmu_gg_terms = {}
