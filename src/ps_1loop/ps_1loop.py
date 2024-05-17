@@ -136,12 +136,13 @@ class PowerSpectrum1Loop:
         if bias2 == {}:
             self.bias2 = copy.deepcopy(bias1)
 
-    def set_ctr_params(self, ctr1={}, ctr2={}):
+    def set_ctr_params(self, ctr1={}, ctr2={}, sigma_vel=0.):
         self.ctr = ctr1
         self.ctr1 = ctr1
         self.ctr2 = ctr2
         if ctr2 == {}:
             self.ctr2 = copy.deepcopy(ctr1)
+        self.sigma_vel = sigma_vel
 
     def set_stoch_params(self, stoch={}, ndens=1, ndens2=None, k_nl=1):
         self.stoch = stoch
@@ -261,6 +262,10 @@ class PowerSpectrum1Loop:
         # stochasticity
         pkmu_stoch = self.get_pkmu_stoch(k, mu, cross=cross)
         pkmu = pkmu + pkmu_stoch
+
+        # Finger-of-God damping factor
+        if self.sigma_vel != 0.:
+            pkmu = pkmu * self.get_damp_factor(k, mu, self.sigma_vel)
 
         return pkmu
 
@@ -696,6 +701,10 @@ class PowerSpectrum1Loop:
         pk_ell_ctr1 = coeffs * pk_ell_ctr1
 
         return pk_ell_ctr1
+    
+    def get_damp_factor(self, k, mu, sigma_vel=0.):
+        kmu = np.kron(k, mu).reshape(len(k), len(mu))
+        return np.exp(- (kmu * self.fgrowth * sigma_vel)**2 / 2.)
 
     def get_pkmu_stoch(self, k, mu, cross=False):
         k = np.atleast_1d(k)
