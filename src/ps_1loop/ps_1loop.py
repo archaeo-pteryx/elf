@@ -168,7 +168,13 @@ class PowerSpectrum1Loop:
             k = np.exp(logk)
             Delta2_lin = k**3 * self.get_pk_lin(k) / (2 * np.pi**2)
             return np.log(Delta2_lin)
-        root = fsolve(func, x0=np.log(k0)) # solve Delta2_lin(k_nl) = 1
+        
+        crit = False
+        while crit == False:
+            root = fsolve(func, x0=np.log(k0), xtol=1e-8, maxfev=1000) # solve Delta2_lin(k_nl) = 1
+            k0 = np.exp(root[0])
+            crit = (np.abs(func(np.log(k0))) < 1e-8)
+
         k_nl = np.exp(root[0])
         return k_nl
 
