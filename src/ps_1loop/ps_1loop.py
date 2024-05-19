@@ -171,9 +171,9 @@ class PowerSpectrum1Loop:
         
         crit = False
         while crit == False:
-            root = fsolve(func, x0=np.log(k0), xtol=1e-8, maxfev=1000) # solve Delta2_lin(k_nl) = 1
+            root = fsolve(func, x0=np.log(k0), xtol=1e-6, maxfev=1000) # solve Delta2_lin(k_nl) = 1
             k0 = np.exp(root[0])
-            crit = (np.abs(func(np.log(k0))) < 1e-8)
+            crit = (np.abs(func(np.log(k0))) < 1e-6)
 
         k_nl = np.exp(root[0])
         return k_nl
