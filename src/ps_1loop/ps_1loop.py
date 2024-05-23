@@ -313,7 +313,7 @@ class PowerSpectrum1Loop:
         k = jnp.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation
-        k_grid = jnp.geomspace(jnp.max([jnp.min(k), self._kmin_fft]), jnp.min([jnp.max(k), self._kmax_fft]), self._nmax_fft)
+        k_grid = jnp.geomspace(jnp.max(jnp.array([jnp.min(k), self._kmin_fft])), jnp.min(jnp.array([jnp.max(k), self._kmax_fft])), self._nmax_fft)
         mu_grid = jnp.linspace(0., 1., 51)
         pkmu_grid = self.get_pkmu_gg(k_grid, mu_grid, irres=irres, cross=cross)
 
@@ -676,7 +676,7 @@ class PowerSpectrum1Loop:
         k = jnp.kron(k_ref, fac).reshape(len(k_ref), len(mu_ref)) / alpha_perp
 
         # spline interpolation of mu^l k^2 P_lin(k)
-        k_grid = jnp.geomspace(jnp.max([jnp.min(k), self._kmin_fft]), jnp.min([jnp.max(k), self._kmax_fft]), self._nmax_fft)
+        k_grid = jnp.geomspace(jnp.max(jnp.array([jnp.min(k), self._kmin_fft])), jnp.min(jnp.array([jnp.max(k), self._kmax_fft])), self._nmax_fft)
         mu_grid = jnp.linspace(0., 1., 51)
         # k2mul = jnp.kron(k_grid**2, mu_grid**l).reshape(len(k_grid), len(mu_grid))
         if irres:
