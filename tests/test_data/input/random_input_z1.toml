@@ -1,15 +1,16 @@
 [cosmology]
+h = 0.824621125123532
 omega_b = 0.02
 omega_c = 0.15
 omega_nu = 0
 Omega_m = 0.25
-h = 0.824621125123532
 As = 2.5e-9
 ns = 1.1
 w0 = -1
 
-redshift = 1
-fgrowth = 0.8399155977907
+redshift = 1.0
+Dgrowth = 0.6309307238193198
+fgrowth = 0.8399155977907007
 
 [galaxy_bias]
 b1 = 3

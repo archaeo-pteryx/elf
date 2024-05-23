@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ps_1loop"
-version = "0.1.0"
+version = "0.3.0"
 authors = [
   {name = "Yosuke Kobayashi", email = "yosukekobayashi@arizona.edu"},
 ]
@@ -14,9 +14,10 @@ license = {file = "LICENSE"}
 requires-python = ">=3.8"
 dependencies = [
     "numpy",
-    "scipy>=1.10.0",
+    "scipy",
     "sympy>=1.11.0",
-    "jax==0.4.14",
+    "jax==0.4.28",
+    "jaxlib==0.4.28",
     "quadax",
     "interpax"
 ]
@@ -38,4 +39,4 @@ where = ["src"]
 ps_1loop = ["pt_matrix/*/*/*.txt"]
 
 [project.urls]
-Homepage = "https://github.com/SPHEREx/PowerSpectrumTheory"
+Homepage = "https://github.com/archaeo-pteryx/ps_1loop"
