@@ -16,8 +16,8 @@ dependencies = [
     "numpy",
     "scipy",
     "sympy>=1.11.0",
-    "jax==0.4.28",
-    "jaxlib==0.4.28",
+    "jax>=0.4.26",
+    "jaxlib>=0.4.26",
     "quadax",
     "interpax"
 ]
