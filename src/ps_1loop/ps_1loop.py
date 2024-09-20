@@ -4,13 +4,13 @@ import copy
 import jax.numpy as jnp
 import quadax
 import interpax
-from scipy.special import lpmv
 from scipy.optimize import fsolve
 
 from .power_law_decomp import PowerLawDecomp
 from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_log_extrap
+from .utils_math import get_legendre
 from .ir_resum import IRResum
 
 
@@ -289,7 +289,7 @@ class PowerSpectrum1Loop:
 
         # compute the Legendre multipole moments
         pkmu = jnp.tile(pkmu, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l, mu), (len(k),1)) for l in ells])
         pk_ell = quadax.simpson(pkmu * legendre, x=mu, axis=2)
 
         # add ctr1 part to P_ell(k)
@@ -339,7 +339,7 @@ class PowerSpectrum1Loop:
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
 
         pkmu_ref = jnp.tile(pkmu_ref, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu_ref), (len(k_ref),1)) for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l,mu_ref), (len(k_ref),1)) for l in ells])
         pk_ell = quadax.simpson(pkmu_ref * legendre, x=mu_ref, axis=2)
 
         # add ctr1 part to P_ell(k)
@@ -372,7 +372,7 @@ class PowerSpectrum1Loop:
         mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_lin(k, mu)
         pkmu = jnp.tile(pkmu, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l, mu), (len(k),1)) for l in ells])
         pk_ell = quadax.simpson(pkmu * legendre, x=mu, axis=2)
         return pk_ell
     
@@ -519,7 +519,7 @@ class PowerSpectrum1Loop:
         mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
         pkmu = jnp.tile(pkmu, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu), (len(k),1)) for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l, mu), (len(k),1)) for l in ells])
         pk_ell = quadax.simpson(pkmu * legendre, x=mu, axis=2)
         return pk_ell
 
@@ -660,7 +660,7 @@ class PowerSpectrum1Loop:
             pk = jnp.tile(pk_lin, (len(mu),1)).T
         
         pk = jnp.tile(pk, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu) * mu**l * self.fgrowth**(l/2), (len(k),1)) for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l, mu) * mu**l * self.fgrowth**(l/2), (len(k),1)) for l in ells])
         pk_ell_ctr1 = - 2 * quadax.simpson(pk * legendre, x=mu, axis=2) * jnp.tile(k**2, (len(ells), 1))
         pk_ell_ctr1 = coeffs * pk_ell_ctr1
 
@@ -709,7 +709,7 @@ class PowerSpectrum1Loop:
         pkmu_ref = self.get_pkmu_for_ctr1_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres)
 
         pkmu_ref = jnp.tile(pkmu_ref, (len(ells),1,1))
-        legendre = jnp.array([jnp.tile((2*l+1) * lpmv(0,l,mu_ref) * mu**l * self.fgrowth**(l/2), (len(k_ref),1)) * k**2 for l in ells])
+        legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l,mu_ref) * mu**l * self.fgrowth**(l/2), (len(k_ref),1)) * k**2 for l in ells])
         pk_ell_ctr1 = - 2 * quadax.simpson(pkmu_ref * legendre, x=mu, axis=2)
         pk_ell_ctr1 = coeffs * pk_ell_ctr1
 
@@ -726,15 +726,15 @@ class PowerSpectrum1Loop:
         # auto power spectrum
         if cross == False:
             pkmu = self.stoch['P_shot']
-            pkmu = pkmu + self.stoch['a0'] * jnp.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
-            pkmu = pkmu + self.stoch['a2'] * jnp.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+            pkmu = pkmu + self.stoch['a0'] * jnp.kron((k / self.k_nl)**2, get_legendre(0,mu)).reshape(len(k), len(mu))
+            pkmu = pkmu + self.stoch['a2'] * jnp.kron((k / self.k_nl)**2, get_legendre(2,mu)).reshape(len(k), len(mu))
             pkmu = 1. / self.ndens * pkmu
         # cross power spectrum
         else:
             try:
                 pkmu = self.stoch['P_shot_cross']
-                pkmu = pkmu + self.stoch['a0_cross'] * jnp.kron((k / self.k_nl)**2, lpmv(0,0,mu)).reshape(len(k), len(mu))
-                pkmu = pkmu + self.stoch['a2_cross'] * jnp.kron((k / self.k_nl)**2, lpmv(0,2,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a0_cross'] * jnp.kron((k / self.k_nl)**2, get_legendre(0,mu)).reshape(len(k), len(mu))
+                pkmu = pkmu + self.stoch['a2_cross'] * jnp.kron((k / self.k_nl)**2, get_legendre(2,mu)).reshape(len(k), len(mu))
                 pkmu = (1. / self.ndens1 + 1. / self.ndens2) / 2. * pkmu
             except KeyError:
                 pkmu = jnp.zeros((len(k), len(mu)))

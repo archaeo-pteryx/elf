@@ -1,19 +1,9 @@
 import jax.numpy as jnp
+from jax.scipy.special import lpmn
 
-def eval_legendre(n, x):
+def get_legendre(n, x):
     x = jnp.atleast_1d(x)
-    if n == 0:
-        return jnp.ones(len(x))
-    elif n == 1:
-        return x
-    elif n == 2:
-        return (3 * x**2 - 1) / 2
-    elif n == 3:
-        return (5 * x**3 - 3 * x) / 2
-    elif n == 4:
-        return (35 * x**4 - 30 * x**2 + 3) / 8
-    else:
-        raise NotImplementedError
+    return lpmn(n, n, x)[0][0, -1]
 
 def spherical_jn(n, x):
     x = jnp.atleast_1d(x)
