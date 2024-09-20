@@ -7,12 +7,12 @@ from .utils_math import spherical_jn
 
 class IRResum:
 
-    def __init__(self, pk_lin, hubble, rbao=110, khmin=7e-5, khmax=7, n_min=120, n_max=240,
+    def __init__(self, pk_lin, hubble, rbao=110, khmin=7e-5, khmax=7,
                 kmin_interp=1e-7, kmax_interp=1e+7, kwarg={}):
         self.rbao = rbao
         kh = jnp.linspace(khmin, khmax, 2**16) # in unit of 1/Mpc
         plin = pk_lin(kh / hubble, **kwarg) * hubble**(-3) # in unit of Mpc^3
-        plin_nw = self.remove_wiggle(kh, plin, n_min, n_max) # in unit of Mpc^3
+        plin_nw = self.remove_wiggle(kh, plin) # in unit of Mpc^3
         
         # ad-hoc adjustment at high k for extrapolation
         plin_nw = plin_nw.at[-10:].set(plin[-10:])
@@ -26,7 +26,7 @@ class IRResum:
         # spline interpolation
         self.pk_nw_interp = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(plin_nw_extrap))
         
-    def remove_wiggle(self, kh, plin, n_min, n_max):
+    def remove_wiggle(self, kh, plin):
         # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
 
         # harms = dst(jnp.log(kh * plin))
@@ -43,9 +43,13 @@ class IRResum:
         harms_even = harms[i_even]
 
         n = n[:int(len(harms)/2)]
-        n_sd = jnp.hstack((n[n <= n_min], n[n >= n_max]))
-        harms_odd_sd = jnp.hstack((harms_odd[n <= n_min], harms_odd[n >= n_max]))
-        harms_even_sd = jnp.hstack((harms_even[n <= n_min], harms_even[n >= n_max]))
+
+        # fix the array size to be JIT compilable
+        n_min = 120
+        n_max = 240
+        n_sd = jnp.hstack((n[:n_min], n[n_max:]))
+        harms_odd_sd = jnp.hstack((harms_odd[:n_min], harms_odd[n_max:]))
+        harms_even_sd = jnp.hstack((harms_even[:n_min], harms_even[n_max:]))
 
         harms_odd_s = interpax.interp1d(n, n_sd, harms_odd_sd, method="cubic")
         harms_even_s = interpax.interp1d(n, n_sd, harms_even_sd, method="cubic")

@@ -111,7 +111,7 @@ class PowerSpectrum1Loop:
 
         # set up the IR resummation
         self.irres = IRResum(self.get_pk_lin, hubble=hubble, rbao=rbao, 
-                            khmin=7e-5, khmax=7, n_min=120, n_max=240,
+                            khmin=7e-5, khmax=7,
                             kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-0.7 (no-wiggle)'].compute(self.irres.get_pk_nw)
