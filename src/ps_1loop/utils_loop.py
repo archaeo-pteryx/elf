@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import re
 
@@ -59,25 +60,25 @@ def get_deg_info(name):
     return nf, nmu, deg_dict
 
 def get_log_extrap(x, y, xmin, xmax):
-    x_low = x_high = []
-    y_low = y_high = []
+    num_extrap = 10 # JIT compilation requires an array to have a fixed size.
     
-    if xmin < x[0]:
-        dlnx_low = jnp.log(x[1]/x[0])
-        num_low = int(jnp.log(x[0]/xmin) / dlnx_low) + 1
-        x_low = x[0] * jnp.exp(dlnx_low * jnp.arange(-num_low, 0))
-        
-        dlny_low = jnp.log(y[1]/y[0])
-        y_low = y[0] * jnp.exp(dlny_low * jnp.arange(-num_low, 0))
+    dlnx_low = jnp.log(x[1] / x[0])
+    dlny_low = jnp.log(y[1] / y[0])
+    num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int)
+    num_low = jax.lax.cond(num_low <= 0, lambda x: 1, lambda x: x, num_low)
 
-    if xmax > x[-1]:
-        dlnx_high= jnp.log(x[-1]/x[-2])
-        num_high = int(jnp.log(xmax/x[-1]) / dlnx_high) + 1
-        x_high = x[-1] * jnp.exp(dlnx_high * jnp.arange(1, num_high+1))
+    x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
+    y_low = y[0] * jnp.exp(dlny_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
 
-        dlny_high = jnp.log(y[-1]/y[-2])
-        y_high = y[-1] * jnp.exp(dlny_high * jnp.arange(1, num_high+1))
+    dlnx_high= jnp.log(x[-1] / x[-2])
+    dlny_high = jnp.log(y[-1] / y[-2])
+    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int)
+    num_high = jax.lax.cond(num_high <= 0, lambda x: 1, lambda x: x, num_high)
+
+    x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
+    y_high = y[-1] * jnp.exp(dlny_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
 
     x_extrap = jnp.hstack((x_low, x, x_high))
     y_extrap = jnp.hstack((y_low, y, y_high))
+    
     return x_extrap, y_extrap
