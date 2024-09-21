@@ -76,7 +76,7 @@ class IRResum:
         res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
         return res
 
-    def get_sigmav2(self, kmin=1e-7, kmax=1e+7, num=1000):
+    def get_sigmav2(self, kmin=1e-6, kmax=1e+6, num=1000):
         q = jnp.geomspace(kmin, kmax, num)
         integrand = q * self.get_pk_nw(q)
         res = quadax.simpson(integrand, x=jnp.log(q)) / (6 * jnp.pi**2)

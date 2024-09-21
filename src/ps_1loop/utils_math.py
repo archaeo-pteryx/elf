@@ -2,11 +2,11 @@ import jax.numpy as jnp
 from jax.scipy.special import lpmn
 
 def get_legendre(n, x):
-    x = jnp.atleast_1d(x)
+    x = jnp.atleast_1d(x).astype(float)
     return lpmn(n, n, x)[0][0, -1]
 
 def spherical_jn(n, x):
-    x = jnp.atleast_1d(x)
+    x = jnp.atleast_1d(x).astype(float)
     if n == 0:
         return jnp.sin(x) / x
     elif n == 1:

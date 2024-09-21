@@ -101,7 +101,7 @@ class PowerSpectrum1Loop:
     def set_fgrowth(self, fgrowth):
         self.fgrowth = fgrowth
 
-    def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-7, kmax=1e+7, khigh=None):
+    def set_1loop(self, hubble, ks=0.2, rbao=110., kmin=1e-6, kmax=1e+6, khigh=None):
         self.Dgrowth = 1.
 
         # FFTLog-based power-law decomposition
@@ -112,7 +112,7 @@ class PowerSpectrum1Loop:
         # set up the IR resummation
         self.irres = IRResum(self.get_pk_lin, hubble=hubble, rbao=rbao, 
                             khmin=7e-5, khmax=7,
-                            kmin_interp=kmin, kmax_interp=kmax, kwarg={'khigh':khigh})
+                            kmin_interp=1e-7, kmax_interp=1e+7, kwarg={'khigh':khigh})
         self.decomp['plin nu=-0.3 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-0.7 (no-wiggle)'].compute(self.irres.get_pk_nw)
         self.decomp['plin nu=-1.6 (no-wiggle)'].compute(self.irres.get_pk_nw)
@@ -158,7 +158,7 @@ class PowerSpectrum1Loop:
             pk_lin = pk_lin * jnp.exp(-(k / khigh))
         return pk_lin
 
-    def get_pk_int(self, get_pk, kmin=1e-7, kmax=1e+7, num=1000, kwarg={}):
+    def get_pk_int(self, get_pk, kmin=1e-6, kmax=1e+6, num=1000, kwarg={}):
         q = jnp.geomspace(kmin, kmax, num)
         integrand = q * get_pk(q)
         res = quadax.simpson(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
