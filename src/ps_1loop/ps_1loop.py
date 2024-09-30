@@ -323,7 +323,7 @@ class PowerSpectrum1Loop:
             pkmu_grid = pkmu_grid - pkmu_ctr1
 
         mu_tile = jnp.tile(mu, (len(k_ref), 1))
-        pkmu = interpax.interp2d(jnp.ravel(k), jnp.ravel(mu_tile), k_grid, mu_grid, pkmu_grid)
+        pkmu = interpax.interp2d(jnp.ravel(k), jnp.ravel(mu_tile), k_grid, mu_grid, pkmu_grid, extrap=True)
         pkmu = pkmu.reshape(len(k_ref), len(mu_ref))
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
 
@@ -337,7 +337,7 @@ class PowerSpectrum1Loop:
         mu_ref = jnp.linspace(0., 1., num)
 
         pkmu_ref = self.get_pkmu_gg_ref(k_ref, mu_ref, alpha_perp, alpha_para, irres=irres, ctr_multipole=ctr_multipole, cross=cross)
-
+        
         pkmu_ref = jnp.tile(pkmu_ref, (len(ells),1,1))
         legendre = jnp.array([jnp.tile((2*l+1) * get_legendre(l,mu_ref), (len(k_ref),1)) for l in ells])
         pk_ell = quadax.simpson(pkmu_ref * legendre, x=mu_ref, axis=2)
@@ -685,7 +685,7 @@ class PowerSpectrum1Loop:
             pkmu_grid = jnp.tile(self.get_pk_lin(k_grid), (len(mu_grid),1)).T
 
         mu_tile = jnp.tile(mu, (len(k_ref), 1))
-        pkmu = interpax.interp2d(jnp.ravel(k), jnp.ravel(mu_tile), k_grid, mu_grid, pkmu_grid)
+        pkmu = interpax.interp2d(jnp.ravel(k), jnp.ravel(mu_tile), k_grid, mu_grid, pkmu_grid, extrap=True)
         pkmu = pkmu.reshape(len(k_ref), len(mu_ref))
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
 
