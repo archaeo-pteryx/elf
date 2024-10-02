@@ -59,6 +59,7 @@ def get_deg_info(name):
     _ = deg_dict.pop('mu')
     return nf, nmu, deg_dict
 
+@jax.jit
 def get_log_extrap(x, y, xmin, xmax):
     num_extrap = 10 # JIT compilation requires an array to have a fixed size.
     
