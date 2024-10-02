@@ -25,7 +25,8 @@ class IRResum:
 
         # spline interpolation
         self.pk_nw_interp = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(plin_nw_extrap))
-        
+    
+    @jax.jit
     def remove_wiggle(self, kh, plin):
         # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
 
@@ -60,28 +61,28 @@ class IRResum:
         plin_nw = jnp.exp(jax.scipy.fft.idct(harms_s[::-1]) * signs) / kh # in unit of Mpc^3
 
         return plin_nw
-
+    
     def get_pk_nw(self, k):
         return jnp.exp(self.pk_nw_interp(jnp.log(k)))
-
+    
     def get_Sigma2(self, ks, kmin=1e-4, num=1000):
         q = jnp.linspace(kmin, ks, num)
         integrand = self.get_pk_nw(q) * (1 - spherical_jn(0, self.rbao * q) + 2 * spherical_jn(2, self.rbao * q))
         res = quadax.simpson(integrand, x=q) / (6 * jnp.pi**2)
         return res
-
+    
     def get_dSigma2(self, ks, kmin=1e-4, num=1000):
         q = jnp.linspace(kmin, ks, num)
         integrand = self.get_pk_nw(q) * spherical_jn(2, self.rbao * q)
         res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
         return res
-
+    
     def get_sigmav2(self, kmin=1e-6, kmax=1e+6, num=1000):
         q = jnp.geomspace(kmin, kmax, num)
         integrand = q * self.get_pk_nw(q)
         res = quadax.simpson(integrand, x=jnp.log(q)) / (6 * jnp.pi**2)
         return res
-
+    
     def get_Sigma2_rsd(self, fgrowth, mu, ks=0.2):
         Sigma2_1 = (1 + mu**2 * fgrowth * (2 + fgrowth)) * self.get_Sigma2(ks)
         Sigma2_2 = fgrowth**2 * mu**2 * (mu**2 - 1) * self.get_dSigma2(ks)
