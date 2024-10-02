@@ -1,6 +1,7 @@
 import jax
 jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
+from functools import partial
 
 
 class PowerLawDecomp:
@@ -18,11 +19,7 @@ class PowerLawDecomp:
 
     def compute(self, func, kwarg={}):
         fn_biased = func(self.kn, **kwarg) * (self.kn / self.kmin)**(-self.nu)
-        c_m = jnp.fft.fft(fn_biased) / self.nmax
-        c_m_sym = self.kmin**(-self.nu_m) * jnp.hstack((c_m[1:int(self.nmax//2)+1][::-1].conj(), c_m[:int(self.nmax//2)+1]))
-        c_m_sym = c_m_sym.at[0].set(c_m_sym[0] / 2)
-        c_m_sym = c_m_sym.at[-1].set(c_m_sym[-1] / 2)
-        self.c_m = c_m_sym
+        self.c_m = get_c_m(fn_biased, self.nmax, self.kmin, self.nu_m)
 
         # reconstruct
         self.c_m_tile = jnp.tile(self.c_m, (len(self.kn), 1)).T
@@ -34,3 +31,11 @@ class PowerLawDecomp:
 
     def reconstruct(self):
         return self.func_rec
+    
+@partial(jax.jit, static_argnums=1)
+def get_c_m(fn, nmax, kmin, nu_m):
+    c_m = jnp.fft.fft(fn) / nmax
+    c_m_sym = kmin**(-nu_m) * jnp.hstack((c_m[1:nmax//2+1][::-1].conj(), c_m[:nmax//2+1]))
+    c_m_sym = c_m_sym.at[0].set(c_m_sym[0] / 2)
+    c_m_sym = c_m_sym.at[-1].set(c_m_sym[-1] / 2)
+    return c_m_sym
