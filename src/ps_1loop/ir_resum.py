@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from functools import partial
 import quadax
 import interpax
 from .utils_math import spherical_jn
@@ -26,11 +27,10 @@ class IRResum:
         # spline interpolation
         self.pk_nw_interp = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(plin_nw_extrap))
     
-    @jax.jit
+    @partial(jax.jit, static_argnums=0)
     def remove_wiggle(self, kh, plin):
         # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
 
-        # harms = dst(jnp.log(kh * plin))
         signs = (-1)**jnp.arange(0, len(plin))
         harms = jax.scipy.fft.dct(jnp.log(kh * plin) * signs)[::-1]
 
@@ -57,11 +57,12 @@ class IRResum:
 
         i_rec = jnp.argsort(jnp.hstack((n_odd, n_even)))
         harms_s = jnp.hstack((harms_odd_s, harms_even_s))[i_rec]
-        # plin_nw = jnp.exp(idst(harms_s)) / kh # in unit of Mpc^3
+
         plin_nw = jnp.exp(jax.scipy.fft.idct(harms_s[::-1]) * signs) / kh # in unit of Mpc^3
 
         return plin_nw
     
+    @partial(jax.jit, static_argnums=0)
     def get_pk_nw(self, k):
         return jnp.exp(self.pk_nw_interp(jnp.log(k)))
     
@@ -77,6 +78,7 @@ class IRResum:
         res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
         return res
     
+    @partial(jax.jit, static_argnums=0)
     def get_sigmav2(self, kmin=1e-6, kmax=1e+6, num=1000):
         q = jnp.geomspace(kmin, kmax, num)
         integrand = q * self.get_pk_nw(q)
