@@ -304,8 +304,8 @@ class PowerSpectrum1Loop:
         return pk
 
     def get_pkmu_gg_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True, ctr_multipole=False, cross=False):
-        k_ref = jnp.atleast_1d(k_ref)
-        mu_ref = jnp.atleast_1d(mu_ref)
+        k_ref = jnp.atleast_1d(k_ref).astype(float)
+        mu_ref = jnp.atleast_1d(mu_ref).astype(float)
 
         # mapping of (k, mu)
         fac = jnp.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
@@ -332,7 +332,7 @@ class PowerSpectrum1Loop:
         return pkmu
     
     def get_pk_ell_gg_ref(self, k_ref, ells, alpha_perp, alpha_para, irres=True, ctr_multipole=True, cross=False):
-        k_ref = jnp.atleast_1d(k_ref)
+        k_ref = jnp.atleast_1d(k_ref).astype(float)
         num = 256
         mu_ref = jnp.linspace(0., 1., num)
 
@@ -354,8 +354,8 @@ class PowerSpectrum1Loop:
         return pk
 
     def get_pkmu_gg_lin(self, k, mu):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         Z1_1 = self.bias1['b1'] + self.fgrowth * mu**2
         Z1_2 = self.bias2['b1'] + self.fgrowth * mu**2
@@ -367,7 +367,7 @@ class PowerSpectrum1Loop:
         return pkmu
 
     def get_pk_ell_gg_lin(self, k, ells):
-        k = jnp.atleast_1d(k)
+        k = jnp.atleast_1d(k).astype(float)
         num = 256
         mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_lin(k, mu)
@@ -386,8 +386,8 @@ class PowerSpectrum1Loop:
                 self.pk_data_dict[(term, mode)] = (kn, pk_data)
 
     def get_pkmu_13_UV(self, k, mu, mode='full'):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
         
         # UV limit of the 1-3 term
 
@@ -453,7 +453,7 @@ class PowerSpectrum1Loop:
         return kn, pk_data
 
     def get_pkmu_gg_1loop_data(self, mu, name='tot', mode='full'):
-        mu = jnp.atleast_1d(mu)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         if name == 'tot':
             kn, pkmu_22 = self.get_pkmu_gg_1loop_data(mu, name='22_gg', mode=mode)
@@ -498,8 +498,8 @@ class PowerSpectrum1Loop:
         return kn, pkmu_data
 
     def get_pkmu_gg_1loop(self, k, mu, name='tot', mode='full'):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         kn, pkmu_data = self.get_pkmu_gg_1loop_data(mu, name=name, mode=mode)
 
@@ -514,7 +514,7 @@ class PowerSpectrum1Loop:
         return pkmu
 
     def get_pk_ell_gg_1loop(self, k, ells, name='tot', mode='full'):
-        k = jnp.atleast_1d(k)
+        k = jnp.atleast_1d(k).astype(float)
         num = 256
         mu = jnp.linspace(0., 1., num)
         pkmu = self.get_pkmu_gg_1loop(k, mu, name=name, mode=mode)
@@ -524,8 +524,8 @@ class PowerSpectrum1Loop:
         return pk_ell
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
@@ -602,8 +602,8 @@ class PowerSpectrum1Loop:
         return pkmu_ctr
 
     def get_pkmu_ctr1(self, k, mu, irres=True):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         # cross power spectrum
         ctr1_mu = (self.ctr1['c0'] + self.ctr2['c0']) / 2 
@@ -623,8 +623,8 @@ class PowerSpectrum1Loop:
         return pkmu
     
     def get_pkmu_ctr2(self, k, mu, irres=True):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         # cross power spectrum
         ctr2_mu = (self.ctr1['cfog'] + self.ctr2['cfog']) / 2 * self.fgrowth**4 * mu**4 * (self.bias1['b1'] + self.fgrowth * mu**2) * (self.bias2['b1'] + self.fgrowth * mu**2)
@@ -646,7 +646,7 @@ class PowerSpectrum1Loop:
         return cl
 
     def get_pk_ell_ctr1(self, k, ells, irres=True):
-        k = jnp.atleast_1d(k)
+        k = jnp.atleast_1d(k).astype(float)
         num = 256
         mu = jnp.linspace(0., 1., num)
 
@@ -667,8 +667,8 @@ class PowerSpectrum1Loop:
         return pk_ell_ctr1
     
     def get_pkmu_for_ctr1_ref(self, k_ref, mu_ref, alpha_perp, alpha_para, irres=True):
-        k_ref = jnp.atleast_1d(k_ref)
-        mu_ref = jnp.atleast_1d(mu_ref)
+        k_ref = jnp.atleast_1d(k_ref).astype(float)
+        mu_ref = jnp.atleast_1d(mu_ref).astype(float)
 
         # mapping of (k, mu)
         fac = jnp.sqrt(1 + mu_ref**2 * ((alpha_perp / alpha_para)**2 - 1))
@@ -694,7 +694,7 @@ class PowerSpectrum1Loop:
         return pkmu
     
     def get_pk_ell_ctr1_ref(self, k_ref, ells, alpha_perp, alpha_para, irres=True):
-        k_ref = jnp.atleast_1d(k_ref)
+        k_ref = jnp.atleast_1d(k_ref).astype(float)
         num = 256
         mu_ref = jnp.linspace(0., 1., num)
 
@@ -720,8 +720,8 @@ class PowerSpectrum1Loop:
         return jnp.exp(- (kmu * self.fgrowth * sigma_vel)**2 / 2.)
 
     def get_pkmu_stoch(self, k, mu, cross=False):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
         
         # auto power spectrum
         if cross == False:

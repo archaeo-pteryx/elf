@@ -108,7 +108,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         return pk_lin / Mk
 
     def get_pk_gg_lin(self, k):
-        k = jnp.atleast_1d(k)
+        k = jnp.atleast_1d(k).astype(float)
 
         Z1_1 = self.bias1['b1'] + self.bias1['bphi'] * self.f_nl / self.get_Mk(k)
         Z1_2 = self.bias2['b1'] + self.bias2['bphi'] * self.f_nl / self.get_Mk(k)
@@ -118,8 +118,8 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         return pk
 
     def get_pkmu_gg_lin(self, k, mu):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         Z1_1 = self.bias1['b1'] + self.fgrowth * mu**2
         Z1_lpng_1 = self.bias1['bphi'] * self.f_nl / self.get_Mk(k)
@@ -220,7 +220,7 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         return kn, pk_data
 
     def get_pkmu_gg_1loop_data(self, mu, name='tot', mode='full'):
-        mu = jnp.atleast_1d(mu)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         if name == 'tot':
             # Gaussian terms
@@ -332,8 +332,8 @@ class PowerSpectrum1LoopLPNG(PowerSpectrum1Loop):
         return kn, pkmu_data
 
     def get_pkmu_gg_irres(self, k, mu, mode='LO+NLO'):
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
 
         # wiggly-non-wiggly decomposition
         plin = self.get_pk_lin(k)
