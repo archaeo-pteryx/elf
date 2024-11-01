@@ -1,28 +1,25 @@
 import jax
+jax.config.update('jax_enable_x64', True)
+from jax import jit
 import jax.numpy as jnp
-from functools import partial
+# from functools import partial
 
-
-@partial(jax.jit, static_argnums=0)
-def get_legendre(n, x):
+@jit
+def legendre(n, x):
     x = jnp.atleast_1d(x).astype(float)
-    if n == 0:
-        return jnp.ones(x.shape)
-    elif n == 1:
-        return x
-    else:
-        l1 = get_legendre(n - 1, x)
-        l2 = get_legendre(n - 2, x)
-        return ((2 * n - 1) * x * l1 - (n - 1) * l2) / n
+    res = jax.lax.cond(n == 0, 
+                       lambda: jnp.ones(x.shape), 
+                       lambda: jax.lax.cond(n == 2, 
+                                            lambda: 1.5 * x**2 - 0.5, 
+                                            lambda: 4.375 * x**4 - 3.75 * x**2 + 0.375))
+    return res
 
-@partial(jax.jit, static_argnums=0)
+@jit
 def spherical_jn(n, x):
     x = jnp.atleast_1d(x).astype(float)
-    if n == 0:
-        return jnp.sin(x) / x
-    elif n == 1:
-        return (jnp.sin(x) / (x**2)) - (jnp.cos(x) / x)
-    else:
-        jn1 = spherical_jn(n - 1, x)
-        jn2 = spherical_jn(n - 2, x)
-        return ((2 * n - 1) / x) * jn1 - jn2
+    res = jax.lax.cond(n == 0, 
+                       lambda: jnp.sin(x) / x, 
+                       lambda: jax.lax.cond(n == 1, 
+                                            lambda: (jnp.sin(x) - x * jnp.cos(x)) / x**2, 
+                                            lambda: ((3 - x**2) * jnp.sin(x) - 3 * x * jnp.cos(x)) / x**3))
+    return res
