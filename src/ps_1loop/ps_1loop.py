@@ -23,6 +23,7 @@ class PowerSpectrum1Loop:
                  do_irres=True,
                  rbao=110.,
                  ks=0.2,
+                 cross=False, 
                  stoch_cross=False, 
                  subtract_k0_limit=True,
                  kmin_fft=1e-5,
@@ -65,6 +66,7 @@ class PowerSpectrum1Loop:
         self.rbao = rbao
         self.ks = ks
 
+        self.cross = cross # flag to enable the calculation of cross power spectra
         self.stoch_cross = stoch_cross # flag to calculate the stochasticity term between two different tracers
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
 
@@ -178,27 +180,29 @@ class PowerSpectrum1Loop:
         return pk
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2):
+    def get_pkmu(self, k, mu, pk_data, params):
 
         if self.do_irres:
-            pkmu = self.get_pkmu_irres_LO_NLO(k, mu, pk_data, h, f, bias1, bias2)
+            pkmu = self.get_pkmu_irres_LO_NLO(k, mu, pk_data, params)
         else:
-            pkmu_tree = self.get_pkmu_lin(k, mu, pk_data, f, bias1, bias2)
-            pkmu_1loop = self.get_pkmu_1loop(k, mu, pk_data, f, bias1, bias2)
+            pkmu_tree = self.get_pkmu_lin(k, mu, pk_data, params)
+            pkmu_1loop = self.get_pkmu_1loop(k, mu, pk_data, params)
             pkmu = pkmu_tree + pkmu_1loop
             
-        pkmu_ctr = self.get_pkmu_ctr(k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2)
+        pkmu_ctr_k2 = self.get_pkmu_ctr_k2(k, mu, pk_data, params)
+        pkmu_ctr_k4 = self.get_pkmu_ctr_k4(k, mu, pk_data, params)
+        pkmu_ctr = pkmu_ctr_k2 + pkmu_ctr_k4
         pkmu = pkmu + pkmu_ctr
         
         return pkmu
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_ell(self, k, l, pk_data, h, f, bias1, bias2, ctr1, ctr2):
+    def get_pk_ell(self, k, l, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         num = 256
         mu = jnp.linspace(0., 1., num)
 
-        pkmu = self.get_pkmu(k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2)
+        pkmu = self.get_pkmu(k, mu, pk_data, params)
 
         leg = jnp.tile((2*l+1) * legendre(l, mu), (len(k), 1))
         pk_ell = quadax.simpson(pkmu * leg, x=mu, axis=1)
@@ -206,7 +210,7 @@ class PowerSpectrum1Loop:
         return pk_ell
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, h, f, bias1, bias2, ctr1, ctr2):
+    def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
@@ -216,7 +220,7 @@ class PowerSpectrum1Loop:
         k_true = jnp.kron(k, fac).reshape(len(k), len(mu)) / alpha_perp
 
         # spline interpolation
-        pkmu_grid = self.get_pkmu(self._kn, self._mu, pk_data, h, f, bias1, bias2, ctr1, ctr2)
+        pkmu_grid = self.get_pkmu(self._kn, self._mu, pk_data, params)
         mu_tile = jnp.tile(mu_true, (len(k), 1))
         pkmu = interpax.interp2d(jnp.ravel(k_true), jnp.ravel(mu_tile), self._kn, self._mu, pkmu_grid, extrap=True)
         pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
@@ -224,12 +228,12 @@ class PowerSpectrum1Loop:
         return pkmu
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_ell_ref(self, k, l, alpha_perp, alpha_para, pk_data, h, f, bias1, bias2, ctr1, ctr2):
+    def get_pk_ell_ref(self, k, l, alpha_perp, alpha_para, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         num = 256
         mu = jnp.linspace(0., 1., num)
 
-        pkmu = self.get_pkmu_ref(k, mu, alpha_perp, alpha_para, pk_data, h, f, bias1, bias2, ctr1, ctr2)
+        pkmu = self.get_pkmu_ref(k, mu, alpha_perp, alpha_para, pk_data, params)
 
         leg = jnp.tile((2*l+1) * legendre(l, mu), (len(k), 1))
         pk_ell = quadax.simpson(pkmu * leg, x=mu, axis=1)
@@ -237,9 +241,13 @@ class PowerSpectrum1Loop:
         return pk_ell
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_lin(self, k, mu, pk_data, f, bias1, bias2):
+    def get_pkmu_lin(self, k, mu, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
+
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
 
         Z1_1 = bias1['b1'] + f * mu**2
         Z1_2 = bias2['b1'] + f * mu**2
@@ -276,7 +284,11 @@ class PowerSpectrum1Loop:
         return pk_dict
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_data(self, pk_data, f, bias1, bias2):
+    def get_pkmu_data(self, pk_data, params):
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
+
         pk_dict = self.get_pkmu_dict(pk_data)
 
         pkmu = jnp.zeros((len(self._kn), len(self._mu)))
@@ -290,14 +302,18 @@ class PowerSpectrum1Loop:
             pkmu_term = bias_factor * f**nf * jnp.kron(pk_dict[name], self._mu**nmu).reshape(len(self._kn), len(self._mu))
             pkmu = pkmu + pkmu_term
 
-        pkmu = pkmu + self.get_pkmu_13_UV(self._kn, self._mu, pk_data, f, bias1, bias2)
+        pkmu = pkmu + self.get_pkmu_13_UV(self._kn, self._mu, pk_data, params)
 
         return pkmu
     
     @partial(jax.jit, static_argnames=['self'])
-    def get_pkmu_13_UV(self, k, mu, pk_data, f, bias1, bias2):
+    def get_pkmu_13_UV(self, k, mu, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
+
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
 
         Z1_g = bias1['b1'] + f * mu**2
         Z3_g_UV = - 61./315. * bias2['b1'] - 64./21. * bias2['bG2'] - 128./105. * bias2['bGamma3']
@@ -325,11 +341,11 @@ class PowerSpectrum1Loop:
         return pkmu_13
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_1loop(self, k, mu, pk_data, f, bias1, bias2):
+    def get_pkmu_1loop(self, k, mu, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        pkmu_data = self.get_pkmu_data(pk_data, f, bias1, bias2)
+        pkmu_data = self.get_pkmu_data(pk_data, params)
 
         k_tile = jnp.tile(k, (len(mu), 1)).T
         mu_tile = jnp.tile(mu, (len(k), 1))
@@ -339,7 +355,12 @@ class PowerSpectrum1Loop:
         return pkmu
     
     @partial(jax.jit, static_argnames=['self'])
-    def get_pkmu_irres_LO_NLO(self, k, mu, pk_data, h, f, bias1, bias2):
+    def get_pkmu_irres_LO_NLO(self, k, mu, pk_data, params):
+        h = params['h']
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
+
         # wiggly-non-wiggly decomposition
         pk_nw_data = ir_resum.get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=self._kmin, kmax_interp=self._kmax)
 
@@ -362,8 +383,8 @@ class PowerSpectrum1Loop:
         pkmu_irres_tree = Z1_factor * (pk_nw_tile + jnp.exp(-damp_fac) * pk_w_tile * (1 + damp_fac))
         
         # NLO term
-        pkmu_1loop = self.get_pkmu_1loop(k, mu, pk_data, f, bias1, bias2)
-        pkmu_1loop_nw = self.get_pkmu_1loop(k, mu, pk_nw_data, f, bias1, bias2)
+        pkmu_1loop = self.get_pkmu_1loop(k, mu, pk_data, params)
+        pkmu_1loop_nw = self.get_pkmu_1loop(k, mu, pk_nw_data, params)
         pkmu_1loop_w = pkmu_1loop - pkmu_1loop_nw
         pkmu_irres_1loop = pkmu_1loop_nw + jnp.exp(-damp_fac) * pkmu_1loop_w
 
@@ -372,16 +393,14 @@ class PowerSpectrum1Loop:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ctr(self, k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2):
-        pkmu_ctr_k2 = self.get_pkmu_ctr_k2(k, mu, pk_data, h, f, ctr1, ctr2)
-        pkmu_ctr_k4 = self.get_pkmu_ctr_k4(k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2)
-        pkmu_ctr = pkmu_ctr_k2 + pkmu_ctr_k4
-        return pkmu_ctr
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_ctr_k2(self, k, mu, pk_data, h, f, ctr1, ctr2):
+    def get_pkmu_ctr_k2(self, k, mu, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
+
+        h = params['h']
+        f = params['f']
+        ctr1 = params['ctr']
+        ctr2 = params['ctr2'] if self.cross else params['ctr']
 
         ctr_k2_mu = (ctr1['c0'] + ctr2['c0']) / 2
         ctr_k2_mu = ctr_k2_mu + (ctr1['c2'] + ctr2['c2']) / 2 * f * mu**2
@@ -397,9 +416,16 @@ class PowerSpectrum1Loop:
         return pkmu_ctr_k2
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ctr_k4(self, k, mu, pk_data, h, f, bias1, bias2, ctr1, ctr2):
+    def get_pkmu_ctr_k4(self, k, mu, pk_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
+
+        h = params['h']
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
+        ctr1 = params['ctr']
+        ctr2 = params['ctr2'] if self.cross else params['ctr']
 
         ctr_k4_mu = (ctr1['cfog'] + ctr2['cfog']) / 2 * f**4 * mu**4 * (bias1['b1'] + f * mu**2) * (bias2['b1'] + f * mu**2)
 

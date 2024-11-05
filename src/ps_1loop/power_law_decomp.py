@@ -18,7 +18,7 @@ class PowerLawDecomp:
         self.kn_tile = jnp.tile(self.kn, (len(self.nu_m), 1))
         self.nu_m_tile = jnp.tile(self.nu_m, (len(self.kn), 1)).T
 
-    @partial(jit, static_argnums=0)
+    @partial(jit, static_argnames=['self'])
     def get_c_m(self, data_array):
         fn_biased = data_array * (self.kn / self.kmin)**(-self.nu)
         c_m = jnp.fft.fft(fn_biased) / self.nfft
@@ -27,7 +27,7 @@ class PowerLawDecomp:
         c_m = c_m.at[-1].set(c_m[-1] / 2)
         return c_m
 
-    @partial(jit, static_argnums=0)
+    @partial(jit, static_argnames=['self'])
     def get_decomposed_data(self, data_array):
         c_m = self.get_c_m(data_array)
         c_m_tile = jnp.tile(c_m, (len(self.kn), 1)).T
