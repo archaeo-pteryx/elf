@@ -1,6 +1,8 @@
 import jax
 jax.config.update('jax_enable_x64', True)
 from jax import jit
+from functools import partial
+
 import jax.numpy as jnp
 import quadax
 import interpax
@@ -31,8 +33,8 @@ def get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=1e-7, kmax_inte
     pk_data = {'k': k_extrap, 'pk': pk_nw_extrap}
     return pk_data
     
-@jit
-def remove_wiggle(kh, pk):
+@partial(jit, static_argnames=['n_min', 'n_max'])
+def remove_wiggle(kh, pk, n_min=140, n_max=210):
     # wiggly-non-wiggly splitting of linear power spectrum using DST (Sec. 4.2 of arXiv:2004.10607)
 
     signs = (-1)**jnp.arange(0, len(pk))
@@ -48,8 +50,6 @@ def remove_wiggle(kh, pk):
     harms_even = harms[i_even]
 
     n = n[:int(len(harms)/2)]
-    n_min = 140
-    n_max = 210
     n_sd = jnp.hstack((n[:n_min], n[n_max:]))
     harms_odd_sd = jnp.hstack((harms_odd[:n_min], harms_odd[n_max:]))
     harms_even_sd = jnp.hstack((harms_even[:n_min], harms_even[n_max:]))
@@ -69,17 +69,15 @@ def get_pk_nw(k, pk_data):
     pk_nw = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(pk_data['k']), jnp.log(pk_data['pk']), method='cubic'))
     return pk_nw
     
-@jit
-def get_Sigma2(pk_data, rbao, ks, kmin=1e-4):
-    num = 1000
+@partial(jit, static_argnames=['num'])
+def get_Sigma2(pk_data, rbao, ks, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, ks, num)
     integrand = get_pk_nw(q, pk_data) * (1 - spherical_jn(0, rbao * q) + 2 * spherical_jn(2, rbao * q))
     res = quadax.simpson(integrand, x=q) / (6 * jnp.pi**2)
     return res
     
-@jit
-def get_dSigma2(pk_data, rbao, ks, kmin=1e-4):
-    num = 1000
+@partial(jit, static_argnames=['num'])
+def get_dSigma2(pk_data, rbao, ks, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, ks, num)
     integrand = get_pk_nw(q, pk_data) * spherical_jn(2, rbao * q)
     res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
