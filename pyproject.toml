@@ -3,10 +3,10 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ps_1loop"
-version = "0.3.0"
+name = "ps_1loop_jax"
+version = "0.1.0"
 authors = [
-  {name = "Yosuke Kobayashi", email = "yosukekobayashi@arizona.edu"},
+  {name = "Yosuke Kobayashi", email = "yosuke.kobayashi@cc.kyoto-su.ac.jp"},
 ]
 description = "Theory code for galaxy power spectrum based on one-loop perturbation theory"
 readme = "README.md"
@@ -39,4 +39,4 @@ where = ["src"]
 ps_1loop = ["pt_matrix/*/*/*.txt"]
 
 [project.urls]
-Homepage = "https://github.com/archaeo-pteryx/ps_1loop"
+Homepage = "https://github.com/archaeo-pteryx/ps_1loop_jax"

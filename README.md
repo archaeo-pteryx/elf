@@ -1,4 +1,4 @@
-# ps_1loop
+# ps_1loop_jax
 
 A Python code to compute the one-loop galaxy power spectrum, including Primordial non-Gaussianity (currently local PNG only).
 
@@ -11,7 +11,7 @@ The implementation includes the galaxy bias expansion up to the third order, the
 After cloning this repository, run 
 
 ```bash
-cd ps_1loop
+cd ps_1loop_jax
 python -m pip install -e .
 ```
 
@@ -26,7 +26,7 @@ You can find an example Jupyter notebook [here](example/ps_1loop.ipynb).
 
 ### Authors
 
-- Yosuke Kobayashi (yosukekobayashi@arizona.edu)
+- Yosuke Kobayashi (yosuke.kobayashi@cc.kyoto-su.ac.jp)
 
 ### Citations
 
