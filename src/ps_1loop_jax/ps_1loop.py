@@ -160,18 +160,27 @@ class PowerSpectrum1Loop:
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params):
-        # tree + 1-loop
+        
         if self.do_irres:
-            pkmu = self.get_pkmu_irres_LO_NLO(k, mu, pk_data, params)
+            # tree + 1-loop
+            h = params['h']
+            pk_nw_data = ir_resum.get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=self._kmin, kmax_interp=self._kmax)
+            pkmu = self.get_pkmu_irres_LO_NLO(k, mu, pk_data, pk_nw_data, params)
+
+            # counterterm
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(k, mu, pk_data, pk_nw_data, params)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(k, mu, pk_data, pk_nw_data, params)
+            pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
+            # tree + 1-loop
             pkmu_tree = self.get_pkmu_lin(k, mu, pk_data, params)
             pkmu_1loop = self.get_pkmu_1loop(k, mu, pk_data, params)
             pkmu = pkmu_tree + pkmu_1loop
-        
-        # counterterm
-        pkmu_ctr_k2 = self.get_pkmu_ctr_k2(k, mu, pk_data, params)
-        pkmu_ctr_k4 = self.get_pkmu_ctr_k4(k, mu, pk_data, params)
-        pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
+
+            # counterterm
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(k, mu, pk_data, {}, params)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(k, mu, pk_data, {}, params)
+            pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         # NOTE: can be removed
         # stochasticity
@@ -331,24 +340,13 @@ class PowerSpectrum1Loop:
         return pkmu
     
     @partial(jax.jit, static_argnames=['self'])
-    def get_pkmu_irres_LO_NLO(self, k, mu, pk_data, params):
+    def get_pkmu_irres_LO_NLO(self, k, mu, pk_data, pk_nw_data, params):
         h = params['h']
         f = params['f']
         bias1 = params['bias']
         bias2 = params['bias2'] if self.cross else params['bias']
 
-        # wiggly-non-wiggly decomposition
-        pk_nw_data = ir_resum.get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=self._kmin, kmax_interp=self._kmax)
-
-        pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_nw = get_pk(k, pk_nw_data, kmin=self._kmin, kmax=self._kmax)
-        pk_w = pk - pk_nw
-
-        # BAO damping factor in redshift space
-        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.rbao, self.ks)
-        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.rbao, self.ks)
-        Sigma2_tot = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
-        damp_fac = jnp.kron(k**2, Sigma2_tot).reshape(len(k), len(mu))
+        pk_nw, pk_w, damp_fac = self._get_irres_components(k, mu, pk_data, pk_nw_data, f)
 
         # LO term
         pk_nw_tile = jnp.tile(pk_nw, (len(mu), 1)).T
@@ -369,7 +367,7 @@ class PowerSpectrum1Loop:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ctr_k2(self, k, mu, pk_data, params):
+    def get_pkmu_ctr_k2(self, k, mu, pk_data, pk_nw_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
@@ -378,12 +376,12 @@ class PowerSpectrum1Loop:
         ctr1 = params['ctr']
         ctr2 = params['ctr2'] if self.cross else params['ctr']
 
-        ctr_k2_mu = (ctr1['c0'] + ctr2['c0']) / 2
-        ctr_k2_mu = ctr_k2_mu + (ctr1['c2'] + ctr2['c2']) / 2 * f * mu**2
-        ctr_k2_mu = ctr_k2_mu + (ctr1['c4'] + ctr2['c4']) / 2 * f**2 * mu**4
+        ctr_k2_mu = (ctr1['c0'] + ctr2['c0']) / 2 \
+                    + (ctr1['c2'] + ctr2['c2']) / 2 * f * mu**2 \
+                    + (ctr1['c4'] + ctr2['c4']) / 2 * f**2 * mu**4
 
         if self.do_irres:
-            pk = self._get_pk_irres_rsd(k, mu, pk_data, h, f)
+            pk = self._get_pk_irres_rsd(k, mu, pk_data, pk_nw_data, f)
             pkmu_ctr_k2 = - 2 * jnp.kron(k**2, ctr_k2_mu).reshape(len(k), len(mu)) * pk
         else:
             pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -392,7 +390,7 @@ class PowerSpectrum1Loop:
         return pkmu_ctr_k2
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ctr_k4(self, k, mu, pk_data, params):
+    def get_pkmu_ctr_k4(self, k, mu, pk_data, pk_nw_data, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
@@ -403,10 +401,11 @@ class PowerSpectrum1Loop:
         ctr1 = params['ctr']
         ctr2 = params['ctr2'] if self.cross else params['ctr']
 
-        ctr_k4_mu = (ctr1['cfog'] + ctr2['cfog']) / 2 * f**4 * mu**4 * (bias1['b1'] + f * mu**2) * (bias2['b1'] + f * mu**2)
+        ctr_k4_mu = (ctr1['cfog'] + ctr2['cfog']) / 2 * f**4 * mu**4 \
+                    * (bias1['b1'] + f * mu**2) * (bias2['b1'] + f * mu**2)
 
         if self.do_irres:
-            pk = self._get_pk_irres_rsd(k, mu, pk_data, h, f)
+            pk = self._get_pk_irres_rsd(k, mu, pk_data, pk_nw_data, f)
             pkmu_ctr_k4 = - jnp.kron(k**4, ctr_k4_mu).reshape(len(k), len(mu)) * pk
         else:
             pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -415,11 +414,11 @@ class PowerSpectrum1Loop:
         return pkmu_ctr_k4
 
     @partial(jit, static_argnames=['self'])
-    def _get_pk_irres_rsd(self, k, mu, pk_data, h, f):
+    def _get_pk_irres_rsd(self, k, mu, pk_data, pk_nw_data, f):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        pk_nw, pk_w, damp_fac = self._get_irres_components(k, mu, pk_data, h, f)
+        pk_nw, pk_w, damp_fac = self._get_irres_components(k, mu, pk_data, pk_nw_data, f)
 
         pk_nw_tile = jnp.tile(pk_nw, (len(mu), 1)).T
         pk_w_tile = jnp.tile(pk_w, (len(mu), 1)).T
@@ -428,10 +427,8 @@ class PowerSpectrum1Loop:
         return pk
 
     @partial(jit, static_argnames=['self'])
-    def _get_irres_components(self, k, mu, pk_data, h, f):
+    def _get_irres_components(self, k, mu, pk_data, pk_nw_data, f):
         # wiggly-non-wiggly decomposition
-        pk_nw_data = ir_resum.get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=self._kmin, kmax_interp=self._kmax)
-
         pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_nw = get_pk(k, pk_nw_data, kmin=self._kmin, kmax=self._kmax)
         pk_w = pk - pk_nw
