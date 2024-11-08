@@ -111,51 +111,79 @@ class PowerSpectrum1Loop:
     def get_pk_dict(self, pk_data):
         pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
 
-        name_list = ['22_dd','13_dd','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
         pk_dict = {}
         pk_dict['tree'] = pk_lin
-
-        p1_q, p1_k, p1_k0 = self.decomp['pk_lin nu=-0.3'].get_decomposed_data(pk_lin)
-        p2_q, p2_k, p2_k0 = self.decomp['pk_lin nu=-0.3'].get_decomposed_data(pk_lin)
         
+        name_list = ['22_dd','13_dd','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
+        p_q, p_k, p_k0 = self.decomp['pk_lin nu=-0.3'].get_decomposed_data(pk_lin)
+
         for name in name_list:
 
             if '22' in name or 'I' in name:
-                pk = self._kn**3 * jnp.diag(jnp.dot(p1_q.T, jnp.dot(self.matrix[name], p2_q)).real)
+                pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
                 if self.subtract_k0_limit:
-                    pk_k0 = self._kmin**3 * jnp.dot(p1_k0, jnp.dot(self.matrix[name], p2_k0)).real
+                    pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
                     pk = pk - pk_k0
 
             elif '13' in name or 'F' in name:
-                pk = self._kn**3 * p2_k * jnp.dot(self.matrix[name], p1_q).real
+                pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
                 if name == '13_dd':
                     pk_lin_int = get_pk_int(pk_data)
-                    pk = pk - (61. / 315.) * self._kn**2 * p2_k * pk_lin_int
+                    pk = pk - (61. / 315.) * self._kn**2 * p_k * pk_lin_int
+
+            pk_dict[name] = pk
+
+        name_list = ['I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
+        p_q, p_k, p_k0 = self.decomp['pk_lin nu=-1.6'].get_decomposed_data(pk_lin)
+
+        for name in name_list:
+
+            if '22' in name or 'I' in name:
+                pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
+                if self.subtract_k0_limit:
+                    pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
+                    pk = pk - pk_k0
+
+            elif '13' in name or 'F' in name:
+                pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
+                if name == '13_dd':
+                    pk_lin_int = get_pk_int(pk_data)
+                    pk = pk - (61. / 315.) * self._kn**2 * p_k * pk_lin_int
 
             pk_dict[name] = pk
 
         return pk_dict
 
     @partial(jit, static_argnames=['self'])
-    def get_source(self, pk_data, coeff):
+    def get_pk_real(self, k, pk_data, params): # no IR resummation
+        k = jnp.atleast_1d(k).astype(float)
+
         pk_dict = self.get_pk_dict(pk_data)
 
-        Sk = coeff['b1']**2 * (pk_dict['tree'] + pk_dict['22_dd'] + pk_dict['13_dd']) \
-            + coeff['b1'] * coeff['b2'] * pk_dict['I_d2'] \
-            + 2 * coeff['b1'] * coeff['bG2'] * pk_dict['I_G2'] \
-            + coeff['b2']**2 / 4 * pk_dict['I_d2_d2'] \
-            + coeff['bG2']**2 * pk_dict['I_G2_G2'] \
-            + coeff['b2'] * coeff['bG2'] * pk_dict['I_d2_G2'] \
-            + 2 * coeff['b1'] * coeff['bG2'] * pk_dict['F_G2'] \
-            + (4 / 5) * coeff['b1'] * coeff['bGamma3'] * pk_dict['F_G2']
+        bias = params['bias']
+        ctr = params['ctr']
+        stoch = params['stoch']
+        k_nl = params['k_nl']
+        ndens = params['ndens']
 
-        return Sk
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pk_1loop(self, k, pk_data, coeff):
-        Sk = self.get_source(pk_data, coeff)
-        pk_interp = interpax.Interpolator1D(self._kn, Sk)
-        pk = pk_interp(k)
+        pk_tree = bias['b1']**2 * pk_dict['tree']
+
+        pk_1loop = bias['b1']**2 * (pk_dict['22_dd'] + pk_dict['13_dd']) \
+            + bias['b1'] * bias['b2'] * pk_dict['I_d2'] \
+            + 2 * bias['b1'] * bias['bG2'] * pk_dict['I_G2'] \
+            + bias['b2']**2 / 4 * pk_dict['I_d2_d2'] \
+            + bias['bG2']**2 * pk_dict['I_G2_G2'] \
+            + bias['b2'] * bias['bG2'] * pk_dict['I_d2_G2'] \
+            + 2 * bias['b1'] * bias['bG2'] * pk_dict['F_G2'] \
+            + (4 / 5) * bias['b1'] * bias['bGamma3'] * pk_dict['F_G2']
+            
+        pk_ctr = - 2 * self._kn**2 * ctr['c0'] * pk_dict['tree']
+
+        pk = interpax.interp1d(k, self._kn, pk_tree + pk_1loop + pk_ctr, method='cubic')
+        pk_stoch = (stoch['P_shot'] + stoch['a0'] * (k / k_nl)**2) / ndens
+        
+        pk = pk + pk_stoch
+        
         return pk
 
     @partial(jit, static_argnames=['self'])
