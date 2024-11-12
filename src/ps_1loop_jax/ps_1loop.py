@@ -114,7 +114,7 @@ class PowerSpectrum1Loop:
         pk_dict = {}
         pk_dict['tree'] = pk_lin
         
-        name_list = ['22_dd','13_dd','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
+        name_list = ['22_dd','13_dd']
         p_q, p_k, p_k0 = self.decomp['pk_lin nu=-0.3'].get_decomposed_data(pk_lin)
 
         for name in name_list:
