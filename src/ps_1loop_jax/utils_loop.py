@@ -67,21 +67,17 @@ def get_degree_info(name):
 
 def get_bias_factor(degree_dict, bias1, bias2):
     keys = list(degree_dict.keys())
-
-    if len(degree_dict) == 0:
+    num = len(degree_dict)
+    
+    if num == 0:
         bias_factor = 1.
-    elif len(degree_dict) == 1:
-        key = keys[0]
-        if degree_dict[key] == 1:
-            bias_factor = (bias1[key] + bias2[key]) / 2.
-        elif degree_dict[key] == 2:
-            bias_factor = bias1[key] * bias2[key]
-    elif len(degree_dict) == 2:
-        key1 = keys[0]
-        key2 = keys[1]
-        bias_factor = (bias1[key1] * bias2[key2] + bias2[key1] * bias1[key2]) / 2.
+    elif num == 1:
+        if degree_dict[keys[0]] == 1:
+            bias_factor = (bias1[keys[0]] + bias2[keys[0]]) / 2.
+        else:
+            bias_factor = bias1[keys[0]] * bias2[keys[0]]
     else:
-        raise ValueError('Invalid numbers of bias parameters.')
+        bias_factor = (bias1[keys[0]] * bias2[keys[1]] + bias2[keys[0]] * bias1[keys[1]]) / 2.
     
     return bias_factor
 

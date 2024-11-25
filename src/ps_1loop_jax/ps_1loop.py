@@ -53,6 +53,12 @@ class PowerSpectrum1Loop:
         self.name_pkmu_terms['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_terms['tot'] = self.name_pkmu_terms['22'] + self.name_pkmu_terms['13']
 
+        self.degree_info = {}
+        for name in self.name_pkmu_terms['tot']:
+            # degrees of f, mu, and galaxy bias parameters
+            nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
+            self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree_dict}
+
         self.mat = {}
         self.matrix = {}
         # precompute the PT matrices
@@ -119,13 +125,13 @@ class PowerSpectrum1Loop:
 
         for name in name_list:
 
-            if '22' in name or 'I' in name:
+            if '22' in name:
                 pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
                 if self.subtract_k0_limit:
                     pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
                     pk = pk - pk_k0
 
-            elif '13' in name or 'F' in name:
+            elif '13' in name:
                 pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
                 if name == '13_dd':
                     pk_lin_int = get_pk_int(pk_data)
@@ -138,17 +144,14 @@ class PowerSpectrum1Loop:
 
         for name in name_list:
 
-            if '22' in name or 'I' in name:
+            if 'I' in name:
                 pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
                 if self.subtract_k0_limit:
                     pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
                     pk = pk - pk_k0
 
-            elif '13' in name or 'F' in name:
+            elif 'F' in name:
                 pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
-                if name == '13_dd':
-                    pk_lin_int = get_pk_int(pk_data)
-                    pk = pk - (61. / 315.) * self._kn**2 * p_k * pk_lin_int
 
             pk_dict[name] = pk
 
@@ -307,7 +310,9 @@ class PowerSpectrum1Loop:
         pkmu = jnp.zeros((len(self._kn), len(self._mu)))
         for name in self.name_pkmu_terms['tot']:
             # degrees of f, mu, and galaxy bias parameters
-            nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
+            nf = self.degree_info[name]['f']
+            nmu = self.degree_info[name]['mu']
+            bias_degree_dict = self.degree_info[name]['bias']
 
             # calculate the coefficient that consists of bias parameters
             bias_factor = utils_loop.get_bias_factor(bias_degree_dict, bias1, bias2)
