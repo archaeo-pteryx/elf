@@ -10,42 +10,42 @@ import re
 
 kernel_to_decomp_dict = {
     # matter
-    '22_dd': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
-    '13_dd': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
-    '22_dv': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
-    '13_dv': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
-    '22_vv': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
-    '13_vv': ['pk_lin nu=-0.3','pk_lin nu=-0.3'],
+    '22_dd': [('pk_lin', -0.3), ('pk_lin', -0.3)],
+    '13_dd': [('pk_lin', -0.3), ('pk_lin', -0.3)],
+    '22_dv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
+    '13_dv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
+    '22_vv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
+    '13_vv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
     # biased tracer (Gaussian)
-    'I_d2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_G2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_d2_d2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_d2_G2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_G2_G2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'F_G2': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_d2_v': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
-    'I_s2_v': ['pk_lin nu=-1.6','pk_lin nu=-1.6'],
+    'I_d2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_d2_d2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_d2_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_G2_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'F_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_d2_v': [('pk_lin', -1.6), ('pk_lin', -1.6)],
+    'I_s2_v': [('pk_lin', -1.6), ('pk_lin', -1.6)],
     # local PNG
-    'I_phi': ['pk_1phi nu=-1.6','pk_lin nu=-0.3'],
-    'I_phi-d': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'I_d2_phi': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'I_G2_phi': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'I_d2_phi-d': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'I_G2_phi-d': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'F_phi': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
-    'F_G2_LPNG': ['pk_lin nu=-1.6','pk_1phi nu=-1.6'],
-    'I_phi_tilde': ['pk_1phi nu=-2.1','pk_1phi nu=-2.1'],
-    'I_phi_tilde_d2': ['pk_1phi nu=-2.1','pk_1phi nu=-2.1'],
-    'I_phi_tilde_G2': ['pk_1phi nu=-2.1','pk_1phi nu=-2.1'],
+    'I_phi': [('pk_1phi', -1.6), ('pk_lin', -0.3)],
+    'I_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'I_d2_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'I_G2_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'I_d2_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'I_G2_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'F_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    'F_G2_LPNG': [('pk_lin', -1.6), ('pk_1phi', -1.6)],
+    'I_phi_tilde': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
+    'I_phi_tilde_d2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
+    'I_phi_tilde_G2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
     # biased tracer in redshift space (Gaussian)
-    '22': ['pk_lin nu=-0.7','pk_lin nu=-0.7'],
-    '13': ['pk_lin nu=-0.7','pk_lin nu=-0.7'],
+    '22': [('pk_lin', -0.7), ('pk_lin', -0.7)],
+    '13': [('pk_lin', -0.7), ('pk_lin', -0.7)],
     # biased tracer in redshift space (local PNG contribution)
-    '12_lpng1': ['pk_1phi nu=-1.6','Mk nu=0.2'],
-    '12_lpng2': ['pk_1phi nu=-2.1','pk_1phi nu=-2.1'],
-    '22_lpng': ['pk_lin nu=-0.7','pk_1phi nu=-0.9'],
-    '13_lpng1': ['pk_lin nu=-0.7','pk_1phi nu=-0.9'],
-    '13_lpng3': ['pk_1phi nu=-1.6','pk_lin nu=-1.6'],
+    '12_lpng1': [('pk_1phi', -1.6), ('Mk', 0.2)],
+    '12_lpng2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
+    '22_lpng': [('pk_lin', -0.7), ('pk_1phi', -0.9)],
+    '13_lpng1': [('pk_lin', -0.7), ('pk_1phi', -0.9)],
+    '13_lpng3': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
 }
 
 def get_degree_info(name):
@@ -65,6 +65,7 @@ def get_degree_info(name):
     _ = degree_dict.pop('mu')
     return nf, nmu, degree_dict
 
+# maybe unnecessary
 def get_bias_factor(degree_dict, bias1, bias2):
     keys = list(degree_dict.keys())
     num = len(degree_dict)
