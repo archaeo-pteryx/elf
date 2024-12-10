@@ -65,23 +65,6 @@ def get_degree_info(name):
     _ = degree_dict.pop('mu')
     return nf, nmu, degree_dict
 
-# maybe unnecessary
-def get_bias_factor(degree_dict, bias1, bias2):
-    keys = list(degree_dict.keys())
-    num = len(degree_dict)
-    
-    if num == 0:
-        bias_factor = 1.
-    elif num == 1:
-        if degree_dict[keys[0]] == 1:
-            bias_factor = (bias1[keys[0]] + bias2[keys[0]]) / 2.
-        else:
-            bias_factor = bias1[keys[0]] * bias2[keys[0]]
-    else:
-        bias_factor = (bias1[keys[0]] * bias2[keys[1]] + bias2[keys[0]] * bias1[keys[1]]) / 2.
-    
-    return bias_factor
-
 @jit
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
     k_extrap, pk_extrap = get_log_extrap(pk_data['k'], pk_data['pk'], kmin, kmax)
