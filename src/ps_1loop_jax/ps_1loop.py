@@ -7,14 +7,19 @@ from jax import jit
 from functools import partial
 
 import jax.numpy as jnp
+import numpy as np
 import quadax
 import interpax
 
+from .hankel import Hankel
 from .power_law_decomp import PowerLawDecomp
+
+from . import pt_coeff
 from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_pk, get_pk_int
 from .utils_math import legendre
+
 from . import ir_resum
 
 
@@ -31,6 +36,16 @@ class PowerSpectrum1Loop:
                  nfft=256,
                  ):
         
+        self._initialize_loop_matrix(kmin_fft, kmax_fft, nfft)
+        self._initialize_loop_coeff(kmin_fft, kmax_fft, nfft)
+
+        self.do_irres = do_irres # flag to perform the IR resummation
+        self.rbao = rbao
+        self.ks = ks
+        self.cross = cross # flag to enable the calculation of cross power spectra
+        self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
+
+    def _initialize_loop_matrix(self, kmin_fft, kmax_fft, nfft):
         # set up the FFTLog-based power-law decomposition
         self.config_fft = {
             'pk_lin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nfft':nfft},
@@ -45,7 +60,7 @@ class PowerSpectrum1Loop:
         self._mu = jnp.linspace(0., 1., 51)
 
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        self.name_pk_terms = ['22_dd','13_dd','I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
+        self.name_pk_terms = ['22_dd', '13_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2', 'F_G2']
         self.name_pkmu_terms = {}
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M22_*.txt')
         self.name_pkmu_terms['22'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
@@ -53,22 +68,16 @@ class PowerSpectrum1Loop:
         self.name_pkmu_terms['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_terms['tot'] = self.name_pkmu_terms['22'] + self.name_pkmu_terms['13']
 
-        self.degree_info = {}
-        for name in self.name_pkmu_terms['tot']:
-            # degrees of f, mu, and galaxy bias parameters
-            nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
-            self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree_dict}
-
+        # precompute the PT matrices
         self.mat = {}
         self.matrix = {}
-        # precompute the PT matrices
         self._set_matrix(self.name_pk_terms + self.name_pkmu_terms['tot'])
 
-        self.do_irres = do_irres # flag to perform the IR resummation
-        self.rbao = rbao
-        self.ks = ks
-        self.cross = cross # flag to enable the calculation of cross power spectra
-        self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
+        # make a dictionary of the degrees of f, mu, and galaxy bias parameters
+        self.degree_info = {}
+        for name in self.name_pkmu_terms['tot']:
+            nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
+            self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree_dict}
 
     def _set_power_law_decomp(self, config_fft):
         # set multiple instances of PowerLawDecomp class.
@@ -82,11 +91,11 @@ class PowerSpectrum1Loop:
 
     def _set_matrix(self, names=[]):
         for name in names:
-            matfile = glob.glob(os.path.dirname(__file__)+'/pt_matrix/*/*/%s.txt' % (name))[0]
+            mat_file = glob.glob(os.path.dirname(__file__)+'/pt_matrix/*/*/%s.txt' % (name))[0]
             if '22' in name or 'I' in name or '12' in name:
-                self.mat[name] = pt_matrix.PTMatrix22(matfile)
+                self.mat[name] = pt_matrix.PTMatrix22(mat_file)
             elif '13' in name or 'F' in name:
-                self.mat[name] = pt_matrix.PTMatrix13(matfile)
+                self.mat[name] = pt_matrix.PTMatrix13(mat_file)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
         
@@ -110,8 +119,39 @@ class PowerSpectrum1Loop:
             elif '13' in name or 'F' in name:
                 nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
                 self.matrix[name] = self.mat[name](nu_m1)
-            else:
-                raise KeyError('PT kernel name %s is invalid.' % (name))
+            
+    def _initialize_loop_coeff(self, kmin_fft, kmax_fft, nfft):
+        # store the names of 1-loop terms calculated with the FFTLog-based method
+        self.name_pkmu_coeffs = {}
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/22_*.txt')
+        self.name_pkmu_coeffs['22'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/13_*.txt')
+        self.name_pkmu_coeffs['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
+        self.name_pkmu_coeffs['tot'] = self.name_pkmu_coeffs['22'] + self.name_pkmu_coeffs['13']
+
+        self.coeff_info = {'22': {}, '13': {}}
+        l_list = []
+        for name in self.name_pkmu_coeffs['tot']:
+            str_list = re.split('_', name)
+            term_name = str_list[0]
+            index = (int(str_list[1]), int(str_list[2]), int(str_list[3]))
+            coeff_file = glob.glob(os.path.dirname(__file__)+'/pt_coeff/%s.txt' % (name))[0]
+
+            self.coeff_info[term_name][index] = pt_coeff.get_coeff_info(coeff_file)
+            l_list.append(int(str_list[1]))
+        l_list = np.sort(np.unique(l_list))
+
+        self._kmin = kmin_fft
+        self._kmax = kmax_fft
+        self._nfft = nfft
+        self._kn = jnp.geomspace(kmin_fft, kmax_fft, nfft)
+        self._mu = jnp.linspace(0., 1., 51)
+
+        # set the Hankel transforms
+        self.hankel = {}
+        nu = 1.1
+        for l in l_list:
+            self.hankel[l] = Hankel(l, nu, self._kn)
     
     @partial(jit, static_argnames=['self'])
     def get_pk_dict(self, pk_data):
@@ -307,7 +347,7 @@ class PowerSpectrum1Loop:
         # pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_dict = self.get_pkmu_dict(pk_data)
 
-        pkmu = jnp.zeros((len(self._kn), len(self._mu)))
+        pkmu = jnp.zeros(len(self._kn) * len(self._mu))
         for name in self.name_pkmu_terms['tot']:
             # degrees of f, mu, and galaxy bias parameters
             nf = self.degree_info[name]['f']
@@ -315,11 +355,18 @@ class PowerSpectrum1Loop:
             bias_degree_dict = self.degree_info[name]['bias']
 
             # calculate the coefficient that consists of bias parameters
-            bias_factor = utils_loop.get_bias_factor(bias_degree_dict, bias1, bias2)
+            # bias_factor = utils_loop.get_bias_factor(bias_degree_dict, bias1, bias2)
+            # coeff = bias_factor * f**nf * self._mu**nmu
 
-            pkmu_term = bias_factor * f**nf * jnp.kron(pk_dict[name], self._mu**nmu).reshape(len(self._kn), len(self._mu))
+            # trial version only for auto power spectrum
+            coeff = f**nf * self._mu**nmu
+            for pname in bias_degree_dict.keys():
+                coeff = coeff * bias1[pname]**bias_degree_dict[pname]
+
+            pkmu_term = jnp.kron(pk_dict[name], coeff)
             pkmu = pkmu + pkmu_term
 
+        pkmu = pkmu.reshape(len(self._kn), len(self._mu))
         pkmu = pkmu + self.get_pkmu_13_UV(self._kn, self._mu, pk_data, params)
 
         return pkmu
@@ -357,6 +404,57 @@ class PowerSpectrum1Loop:
         pkmu_13 = jnp.kron(k**2 * pk * pk_int, Z1Z3_UV).reshape(len(k), len(mu))
 
         return pkmu_13
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_22_1dfft(self, pk_data, params):
+        f = params['f']
+        bias = params['bias']
+
+        pk = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+
+        pkmu = jnp.zeros((len(self._kn), len(self._mu)))
+        for (l, n1, n2) in self.coeff_info['22'].keys():
+            
+            r = self.hankel[l].y
+            xi_l_n1 = self.hankel[l](pk * self._kn**(n1+3)) / (2 * jnp.pi**2)
+            xi_l_n2 = self.hankel[l](pk * self._kn**(n2+3)) / (2 * jnp.pi**2)
+            pk_l_n1_n2 = self.hankel[l](xi_l_n1 * xi_l_n2 * r**3)
+
+            coeff_all = 0.
+            for coeff_info in self.coeff_info['22'][(l, n1, n2)]:
+                coeff = coeff_info['coeff'] * f**coeff_info['f'] * self._mu**coeff_info['mu']
+                for pname in ['b1', 'b2', 'bG2', 'bGamma3']:
+                    coeff = coeff * bias[pname]**coeff_info[pname]
+                coeff_all = coeff_all + coeff
+
+            pkmu = pkmu + jnp.kron(pk_l_n1_n2, coeff_all).reshape(len(self._kn), len(self._mu))
+
+        return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_13_1dfft(self, pk_data, params):
+        f = params['f']
+        bias = params['bias']
+
+        pk = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        
+        pkmu = jnp.zeros((len(self._kn), len(self._mu)))
+        for (l, n, m) in self.coeff_info['13'].keys():
+            
+            r = self.hankel[l].y
+            xi_l_n = self.hankel[l](pk * self._kn**(n+3)) / (2 * jnp.pi**2)
+            pk_l_n = self.hankel[l](xi_l_n * r**2)
+
+            coeff_all = 0.
+            for coeff_info in self.coeff_info['13'][(l, n, m)]:
+                coeff = coeff_info['coeff'] * f**coeff_info['f'] * self._mu**coeff_info['mu']
+                for pname in ['b1', 'b2', 'bG2', 'bGamma3']:
+                    coeff = coeff * bias[pname]**coeff_info[pname]
+                coeff_all = coeff_all + coeff
+
+            pkmu = pkmu + jnp.kron(self._kn**m * pk_l_n, coeff_all).reshape(len(self._kn), len(self._mu))
+
+        return pkmu
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop(self, k, mu, pk_data, params):
