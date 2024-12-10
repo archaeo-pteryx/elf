@@ -45,7 +45,7 @@ class PowerSpectrum1Loop:
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
-        self._kn = jnp.geomspace(kmin_fft, kmax_fft, nfft)
+        self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
 
         self._initialize_loop_matrix()
@@ -64,7 +64,7 @@ class PowerSpectrum1Loop:
         # set up the FFTLog-based power-law decomposition
         self.decomp = {}
         for nu in [-0.3, -0.7, -1.6]:
-            self.decomp[nu] = PowerLawDecomp(nu, self._kn)
+            self.decomp[nu] = PowerLawDecomp(nu, self._k)
 
         # precompute the PT matrices
         self.mat = {}
@@ -150,11 +150,11 @@ class PowerSpectrum1Loop:
         self.hankel = {}
         nu = 1.1
         for l in l_list:
-            self.hankel[l] = Hankel(l, nu, self._kn)
+            self.hankel[l] = Hankel(l, nu, self._k)
     
     @partial(jit, static_argnames=['self'])
     def get_pk_dict(self, pk_data):
-        pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
 
         pk_dict = {}
         pk_dict['tree'] = pk_lin
@@ -165,16 +165,16 @@ class PowerSpectrum1Loop:
         for name in name_list:
 
             if '22' in name:
-                pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
+                pk = self._k**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
                 if self.subtract_k0_limit:
                     pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
                     pk = pk - pk_k0
 
             elif '13' in name:
-                pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
+                pk = self._k**3 * p_k * jnp.dot(self.matrix[name], p_q).real
                 if name == '13_dd':
                     pk_lin_int = get_pk_int(pk_data)
-                    pk = pk - (61. / 315.) * self._kn**2 * p_k * pk_lin_int
+                    pk = pk - (61. / 315.) * self._k**2 * p_k * pk_lin_int
 
             pk_dict[name] = pk
 
@@ -184,13 +184,13 @@ class PowerSpectrum1Loop:
         for name in name_list:
 
             if 'I' in name:
-                pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
+                pk = self._k**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
                 if self.subtract_k0_limit:
                     pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
                     pk = pk - pk_k0
 
             elif 'F' in name:
-                pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
+                pk = self._k**3 * p_k * jnp.dot(self.matrix[name], p_q).real
 
             pk_dict[name] = pk
 
@@ -219,9 +219,9 @@ class PowerSpectrum1Loop:
             + 2 * bias['b1'] * bias['bG2'] * pk_dict['F_G2'] \
             + (4 / 5) * bias['b1'] * bias['bGamma3'] * pk_dict['F_G2']
             
-        pk_ctr = - 2 * self._kn**2 * ctr['c0'] * pk_dict['tree']
+        pk_ctr = - 2 * self._k**2 * ctr['c0'] * pk_dict['tree']
 
-        pk = interpax.interp1d(k, self._kn, pk_tree + pk_1loop + pk_ctr, method='cubic')
+        pk = interpax.interp1d(k, self._k, pk_tree + pk_1loop + pk_ctr, method='cubic')
         pk_stoch = (stoch['P_shot'] + stoch['a0'] * (k / k_nl)**2) / ndens
         
         pk = pk + pk_stoch
@@ -282,9 +282,9 @@ class PowerSpectrum1Loop:
         k_true = jnp.kron(k, fac).reshape(len(k), len(mu)) / alpha_perp
 
         # spline interpolation
-        pkmu_grid = self.get_pkmu(self._kn, self._mu, pk_data, params)
+        pkmu_grid = self.get_pkmu(self._k, self._mu, pk_data, params)
         mu_tile = jnp.tile(mu_true, (len(k), 1))
-        pkmu = interpax.interp2d(jnp.ravel(k_true), jnp.ravel(mu_tile), self._kn, self._mu, pkmu_grid, extrap=True)
+        pkmu = interpax.interp2d(jnp.ravel(k_true), jnp.ravel(mu_tile), self._k, self._mu, pkmu_grid, extrap=True)
         pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
 
         return pkmu
@@ -377,14 +377,14 @@ class PowerSpectrum1Loop:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_data(self, pk_data, params):
-        pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         p_q, p_k, p_k0 = self.decomp[-0.7].get_decomp_data(pk_lin)
         
-        pkmu = jnp.zeros(len(self._kn) * len(self._mu))
+        pkmu = jnp.zeros(len(self._k) * len(self._mu))
 
         matrix_mu = self.get_pkmu_22_matrix_mu(params)
         for nmu, matrix in matrix_mu.items():
-            pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(matrix, p_q)).real)
+            pk = self._k**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(matrix, p_q)).real)
             if self.subtract_k0_limit:
                 pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(matrix, p_k0)).real
                 pk = pk - pk_k0
@@ -392,11 +392,11 @@ class PowerSpectrum1Loop:
         
         matrix_mu = self.get_pkmu_13_matrix_mu(params)
         for nmu, matrix in matrix_mu.items():
-            pk = self._kn**3 * p_k * jnp.dot(matrix, p_q).real
+            pk = self._k**3 * p_k * jnp.dot(matrix, p_q).real
             pkmu = pkmu + jnp.kron(pk, self._mu**nmu)
 
-        pkmu = pkmu.reshape(len(self._kn), len(self._mu))
-        pkmu = pkmu + self.get_pkmu_13_UV(self._kn, self._mu, pk_data, params)
+        pkmu = pkmu.reshape(len(self._k), len(self._mu))
+        pkmu = pkmu + self.get_pkmu_13_UV(self._k, self._mu, pk_data, params)
 
         return pkmu
     
@@ -435,14 +435,14 @@ class PowerSpectrum1Loop:
         f = params['f']
         bias = params['bias']
 
-        pk = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
 
-        pkmu = jnp.zeros((len(self._kn), len(self._mu)))
+        pkmu = jnp.zeros((len(self._k), len(self._mu)))
         for (l, n1, n2) in self.coeff_info['22'].keys():
             
             r = self.hankel[l].y
-            xi_l_n1 = self.hankel[l](pk * self._kn**(n1+3)) / (2 * jnp.pi**2)
-            xi_l_n2 = self.hankel[l](pk * self._kn**(n2+3)) / (2 * jnp.pi**2)
+            xi_l_n1 = self.hankel[l](pk * self._k**(n1+3)) / (2 * jnp.pi**2)
+            xi_l_n2 = self.hankel[l](pk * self._k**(n2+3)) / (2 * jnp.pi**2)
             pk_l_n1_n2 = self.hankel[l](xi_l_n1 * xi_l_n2 * r**3)
 
             coeff_all = 0.
@@ -452,7 +452,7 @@ class PowerSpectrum1Loop:
                     coeff = coeff * bias[pname]**coeff_info[pname]
                 coeff_all = coeff_all + coeff
 
-            pkmu = pkmu + jnp.kron(pk_l_n1_n2, coeff_all).reshape(len(self._kn), len(self._mu))
+            pkmu = pkmu + jnp.kron(pk_l_n1_n2, coeff_all).reshape(len(self._k), len(self._mu))
 
         return pkmu
     
@@ -461,13 +461,13 @@ class PowerSpectrum1Loop:
         f = params['f']
         bias = params['bias']
 
-        pk = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         
-        pkmu = jnp.zeros((len(self._kn), len(self._mu)))
+        pkmu = jnp.zeros((len(self._k), len(self._mu)))
         for (l, n, m) in self.coeff_info['13'].keys():
             
             r = self.hankel[l].y
-            xi_l_n = self.hankel[l](pk * self._kn**(n+3)) / (2 * jnp.pi**2)
+            xi_l_n = self.hankel[l](pk * self._k**(n+3)) / (2 * jnp.pi**2)
             pk_l_n = self.hankel[l](xi_l_n * r**2)
 
             coeff_all = 0.
@@ -477,7 +477,7 @@ class PowerSpectrum1Loop:
                     coeff = coeff * bias[pname]**coeff_info[pname]
                 coeff_all = coeff_all + coeff
 
-            pkmu = pkmu + jnp.kron(self._kn**m * pk_l_n, coeff_all).reshape(len(self._kn), len(self._mu))
+            pkmu = pkmu + jnp.kron(self._k**m * pk_l_n, coeff_all).reshape(len(self._k), len(self._mu))
 
         return pkmu
     
@@ -490,7 +490,7 @@ class PowerSpectrum1Loop:
 
         k_tile = jnp.tile(k, (len(mu), 1)).T
         mu_tile = jnp.tile(mu, (len(k), 1))
-        pkmu = interpax.interp2d(jnp.ravel(k_tile), jnp.ravel(mu_tile), self._kn, self._mu, pkmu_data)
+        pkmu = interpax.interp2d(jnp.ravel(k_tile), jnp.ravel(mu_tile), self._k, self._mu, pkmu_data)
         pkmu = pkmu.reshape(len(k), len(mu))
 
         return pkmu
