@@ -35,9 +35,6 @@ class PowerSpectrum1Loop:
                  kmax_fft=1e3,
                  nfft=256,
                  ):
-        
-        self._initialize_loop_matrix(kmin_fft, kmax_fft, nfft)
-        self._initialize_loop_coeff(kmin_fft, kmax_fft, nfft)
 
         self.do_irres = do_irres # flag to perform the IR resummation
         self.rbao = rbao
@@ -45,28 +42,29 @@ class PowerSpectrum1Loop:
         self.cross = cross # flag to enable the calculation of cross power spectra
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
 
-    def _initialize_loop_matrix(self, kmin_fft, kmax_fft, nfft):
-        # set up the FFTLog-based power-law decomposition
-        self.config_fft = {
-            'pk_lin nu=-0.3': {'nu':-0.3, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nfft':nfft},
-            'pk_lin nu=-0.7': {'nu':-0.7, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nfft':nfft},
-            'pk_lin nu=-1.6': {'nu':-1.6, 'kmin':kmin_fft, 'kmax':kmax_fft, 'nfft':nfft},
-        }
-        self._set_power_law_decomp(self.config_fft)
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
         self._kn = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
 
+        self._initialize_loop_matrix()
+        self._initialize_loop_coeff()
+
+    def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
         self.name_pk_terms = ['22_dd', '13_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2', 'F_G2']
         self.name_pkmu_terms = {}
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M22_*.txt')
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/22*.txt')
         self.name_pkmu_terms['22'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/M13_*.txt')
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/13*.txt')
         self.name_pkmu_terms['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_terms['tot'] = self.name_pkmu_terms['22'] + self.name_pkmu_terms['13']
+
+        # set up the FFTLog-based power-law decomposition
+        self.decomp = {}
+        for nu in [-0.3, -0.7, -1.6]:
+            self.decomp[nu] = PowerLawDecomp(nu, self._kn)
 
         # precompute the PT matrices
         self.mat = {}
@@ -78,16 +76,6 @@ class PowerSpectrum1Loop:
         for name in self.name_pkmu_terms['tot']:
             nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
             self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree_dict}
-
-    def _set_power_law_decomp(self, config_fft):
-        # set multiple instances of PowerLawDecomp class.
-        self.decomp = {}
-        for name, config in config_fft.items():
-            nu = config['nu']
-            kmin = config['kmin']
-            kmax = config['kmax']
-            nfft = config['nfft']
-            self.decomp[name] = PowerLawDecomp(nu, kmin, kmax, nfft)
 
     def _set_matrix(self, names=[]):
         for name in names:
@@ -102,35 +90,37 @@ class PowerSpectrum1Loop:
         # precompute the PT matrices for appropriate FFT settings.
         for name in names:
             if name in utils_loop.kernel_to_decomp_dict.keys():
-                name_dec = utils_loop.kernel_to_decomp_dict[name]
+                decomp_info = utils_loop.kernel_to_decomp_dict[name]
             else:
                 species_list = list(self.name_pkmu_terms.keys())
                 species_list.remove('tot')
                 for species in species_list:
                     if name in self.name_pkmu_terms[species]:
-                        name_dec = utils_loop.kernel_to_decomp_dict[species]
+                        decomp_info = utils_loop.kernel_to_decomp_dict[species]
                         break
 
             if '22' in name or 'I' in name or '12' in name:
-                nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
-                nu_m2 = -0.5 * self.decomp[name_dec[1]].nu_m
+                nu_m1 = -0.5 * self.decomp[decomp_info[0][1]].nu_m
+                nu_m2 = -0.5 * self.decomp[decomp_info[1][1]].nu_m
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m1, nu_m2)
                 self.matrix[name] = self.mat[name](nu_m1, nu_m2).T
+
             elif '13' in name or 'F' in name:
-                nu_m1 = -0.5 * self.decomp[name_dec[0]].nu_m
+                nu_m1 = -0.5 * self.decomp[decomp_info[0][1]].nu_m
                 self.matrix[name] = self.mat[name](nu_m1)
             
-    def _initialize_loop_coeff(self, kmin_fft, kmax_fft, nfft):
+    def _initialize_loop_coeff(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
         self.name_pkmu_coeffs = {}
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/22_*.txt')
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/22*.txt')
         self.name_pkmu_coeffs['22'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/13_*.txt')
+        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/13*.txt')
         self.name_pkmu_coeffs['13'] = [re.split('/', fname)[-1][:-4] for fname in fnames]
         self.name_pkmu_coeffs['tot'] = self.name_pkmu_coeffs['22'] + self.name_pkmu_coeffs['13']
 
         self.coeff_info = {'22': {}, '13': {}}
         l_list = []
+
         for name in self.name_pkmu_coeffs['tot']:
             str_list = re.split('_', name)
             term_name = str_list[0]
@@ -139,13 +129,8 @@ class PowerSpectrum1Loop:
 
             self.coeff_info[term_name][index] = pt_coeff.get_coeff_info(coeff_file)
             l_list.append(int(str_list[1]))
-        l_list = np.sort(np.unique(l_list))
 
-        self._kmin = kmin_fft
-        self._kmax = kmax_fft
-        self._nfft = nfft
-        self._kn = jnp.geomspace(kmin_fft, kmax_fft, nfft)
-        self._mu = jnp.linspace(0., 1., 51)
+        l_list = np.sort(np.unique(l_list))
 
         # set the Hankel transforms
         self.hankel = {}
@@ -161,7 +146,7 @@ class PowerSpectrum1Loop:
         pk_dict['tree'] = pk_lin
         
         name_list = ['22_dd','13_dd']
-        p_q, p_k, p_k0 = self.decomp['pk_lin nu=-0.3'].get_decomposed_data(pk_lin)
+        p_q, p_k, p_k0 = self.decomp[-0.3].get_decomp_data(pk_lin)
 
         for name in name_list:
 
@@ -180,7 +165,7 @@ class PowerSpectrum1Loop:
             pk_dict[name] = pk
 
         name_list = ['I_d2','I_G2','I_d2_d2','I_G2_G2','I_d2_G2','F_G2']
-        p_q, p_k, p_k0 = self.decomp['pk_lin nu=-1.6'].get_decomposed_data(pk_lin)
+        p_q, p_k, p_k0 = self.decomp[-1.6].get_decomp_data(pk_lin)
 
         for name in name_list:
 
@@ -321,7 +306,7 @@ class PowerSpectrum1Loop:
     @partial(jit, static_argnames=['self'])
     def get_pkmu_dict(self, pk_data):
         pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
-        p_q, p_k, p_k0 = self.decomp['pk_lin nu=-0.7'].get_decomposed_data(pk_lin)
+        p_q, p_k, p_k0 = self.decomp[-0.7].get_decomp_data(pk_lin)
         
         pk_dict = {}
 
@@ -352,16 +337,23 @@ class PowerSpectrum1Loop:
             # degrees of f, mu, and galaxy bias parameters
             nf = self.degree_info[name]['f']
             nmu = self.degree_info[name]['mu']
-            bias_degree_dict = self.degree_info[name]['bias']
+            bias_degree = self.degree_info[name]['bias']
+
+            coeff = f**nf * self._mu**nmu
 
             # calculate the coefficient that consists of bias parameters
-            # bias_factor = utils_loop.get_bias_factor(bias_degree_dict, bias1, bias2)
-            # coeff = bias_factor * f**nf * self._mu**nmu
+            pnames = list(bias_degree.keys())
+            if len(bias_degree) == 1:
+                if bias_degree[pnames[0]] == 1:
+                    coeff = coeff * (bias1[pnames[0]] + bias2[pnames[0]]) / 2.
+                else:
+                    coeff = coeff * bias1[pnames[0]] * bias2[pnames[0]]
+            elif len(bias_degree) == 2:
+                coeff = coeff * (bias1[pnames[0]] * bias2[pnames[1]] + bias2[pnames[0]] * bias1[pnames[1]]) / 2.
 
-            # trial version only for auto power spectrum
-            coeff = f**nf * self._mu**nmu
-            for pname in bias_degree_dict.keys():
-                coeff = coeff * bias1[pname]**bias_degree_dict[pname]
+            # # trial version only for auto power spectrum
+            # for pname in bias_degree.keys():
+            #     coeff = coeff * bias1[pname]**bias_degree[pname]
 
             pkmu_term = jnp.kron(pk_dict[name], coeff)
             pkmu = pkmu + pkmu_term
@@ -381,22 +373,18 @@ class PowerSpectrum1Loop:
         bias2 = params['bias2'] if self.cross else params['bias']
 
         Z1_g = bias1['b1'] + f * mu**2
-        Z3_g_UV = - 61./315. * bias2['b1'] - 64./21. * bias2['bG2'] - 128./105. * bias2['bGamma3']
-        Z3_g_UV += (- 3./5. + 2./105. * bias2['b1']) * f * mu**2
-        Z3_g_UV += (- 16./35. - 1./3. * bias2['b1']) * f**2 * mu**2
-        Z3_g_UV += (- 46./105.) * f**2 * mu**4
-        Z3_g_UV += (- 1./3.) * f**3 * mu**4
+        Z3_g_UV = - 61./315. * bias2['b1'] - 64./21. * bias2['bG2'] - 128./105. * bias2['bGamma3'] \
+                + ((- 3./5. + 2./105. * bias2['b1']) * f + (- 16./35. - 1./3. * bias2['b1']) * f**2) * mu**2 \
+                + ((- 46./105.) * f**2 + (- 1./3.) * f**3) * mu**4
         Z1Z3_UV_1 = Z1_g * Z3_g_UV
 
         Z1_g = bias2['b1'] + f * mu**2
-        Z3_g_UV = - 61./315. * bias1['b1'] - 64./21. * bias1['bG2'] - 128./105. * bias1['bGamma3']
-        Z3_g_UV += (- 3./5. + 2./105. * bias1['b1']) * f * mu**2
-        Z3_g_UV += (- 16./35. - 1./3. * bias1['b1']) * f**2 * mu**2
-        Z3_g_UV += (- 46./105.) * f**2 * mu**4
-        Z3_g_UV += (- 1./3.) * f**3 * mu**4
+        Z3_g_UV = - 61./315. * bias1['b1'] - 64./21. * bias1['bG2'] - 128./105. * bias1['bGamma3'] \
+                + ((- 3./5. + 2./105. * bias1['b1']) * f + (- 16./35. - 1./3. * bias1['b1']) * f**2) * mu**2 \
+                + ((- 46./105.) * f**2 + (- 1./3.) * f**3) * mu**4
         Z1Z3_UV_2 = Z1_g * Z3_g_UV
 
-        Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2
+        Z1Z3_UV = (Z1Z3_UV_1 + Z1Z3_UV_2) / 2.
 
         pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_int = get_pk_int(pk_data)
