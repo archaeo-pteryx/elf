@@ -74,8 +74,22 @@ class PowerSpectrum1Loop:
         # make a dictionary of the degrees of f, mu, and galaxy bias parameters
         self.degree_info = {}
         for name in self.name_pkmu_terms['tot']:
-            nf, nmu, bias_degree_dict = utils_loop.get_degree_info(name)
-            self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree_dict}
+            nf, nmu, bias_degree = utils_loop.get_degree_info(name)
+            self.degree_info[name] = {'f': nf, 'mu': nmu, 'bias': bias_degree}
+
+        nmu_list = np.sort(np.unique([self.degree_info[name]['mu'] for name in self.name_pkmu_terms['22']]))
+        name_pkmu_terms = {nmu: [] for nmu in nmu_list}
+        for name in self.name_pkmu_terms['22']:
+            nmu = self.degree_info[name]['mu']
+            name_pkmu_terms[nmu].append(name)
+        self.name_pkmu_terms['22'] = name_pkmu_terms
+
+        nmu_list = np.sort(np.unique([self.degree_info[name]['mu'] for name in self.name_pkmu_terms['13']]))
+        name_pkmu_terms = {nmu: [] for nmu in nmu_list}
+        for name in self.name_pkmu_terms['13']:
+            nmu = self.degree_info[name]['mu']
+            name_pkmu_terms[nmu].append(name)
+        self.name_pkmu_terms['13'] = name_pkmu_terms
 
     def _set_matrix(self, names=[]):
         for name in names:
@@ -302,61 +316,84 @@ class PowerSpectrum1Loop:
         pkmu = jnp.kron(pk_lin, Z1_1 * Z1_2).reshape(len(k), len(mu))
 
         return pkmu
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_dict(self, pk_data):
-        pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
-        p_q, p_k, p_k0 = self.decomp[-0.7].get_decomp_data(pk_lin)
-        
-        pk_dict = {}
 
-        for name in self.name_pkmu_terms['22']:
-            pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
-            if self.subtract_k0_limit:
-                pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
-                pk = pk - pk_k0
-            pk_dict[name] = pk
-        
-        for name in self.name_pkmu_terms['13']:
-            pk = self._kn**3 * p_k * jnp.dot(self.matrix[name], p_q).real
-            pk_dict[name] = pk
-
-        return pk_dict
-    
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_data(self, pk_data, params):
+    def get_pkmu_22_matrix_mu(self, params):
         f = params['f']
         bias1 = params['bias']
         bias2 = params['bias2'] if self.cross else params['bias']
 
-        # pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_dict = self.get_pkmu_dict(pk_data)
+        matrix_mu = {}
+        for nmu, name_list in self.name_pkmu_terms['22'].items():
+            matrix = jnp.zeros((self._nfft + 1, self._nfft + 1))
+            for name in name_list:
+                # degrees of f and galaxy bias parameters
+                nf = self.degree_info[name]['f']
+                coeff = f**nf
+                # calculate the coefficient that consists of bias parameters
+                bias_degree = self.degree_info[name]['bias']
+                pnames = list(bias_degree.keys())
+                if len(bias_degree) == 1:
+                    if bias_degree[pnames[0]] == 1:
+                        coeff = coeff * (bias1[pnames[0]] + bias2[pnames[0]]) / 2.
+                    else:
+                        coeff = coeff * bias1[pnames[0]] * bias2[pnames[0]]
+                elif len(bias_degree) == 2:
+                    coeff = coeff * (bias1[pnames[0]] * bias2[pnames[1]] + bias2[pnames[0]] * bias1[pnames[1]]) / 2.
+                
+                matrix = matrix + coeff * self.matrix[name]
+            matrix_mu[nmu] = matrix
 
+        return matrix_mu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_13_matrix_mu(self, params):
+        f = params['f']
+        bias1 = params['bias']
+        bias2 = params['bias2'] if self.cross else params['bias']
+
+        matrix_mu = {}
+        for nmu, name_list in self.name_pkmu_terms['13'].items():
+            matrix = jnp.zeros(self._nfft + 1)
+            for name in name_list:
+                # degrees of f and galaxy bias parameters
+                nf = self.degree_info[name]['f']
+                coeff = f**nf
+                # calculate the coefficient that consists of bias parameters
+                bias_degree = self.degree_info[name]['bias']
+                pnames = list(bias_degree.keys())
+                if len(bias_degree) == 1:
+                    if bias_degree[pnames[0]] == 1:
+                        coeff = coeff * (bias1[pnames[0]] + bias2[pnames[0]]) / 2.
+                    else:
+                        coeff = coeff * bias1[pnames[0]] * bias2[pnames[0]]
+                elif len(bias_degree) == 2:
+                    coeff = coeff * (bias1[pnames[0]] * bias2[pnames[1]] + bias2[pnames[0]] * bias1[pnames[1]]) / 2.
+                
+                matrix = matrix + coeff * self.matrix[name]
+            matrix_mu[nmu] = matrix
+
+        return matrix_mu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_data(self, pk_data, params):
+        pk_lin = get_pk(self._kn, pk_data, kmin=self._kmin, kmax=self._kmax)
+        p_q, p_k, p_k0 = self.decomp[-0.7].get_decomp_data(pk_lin)
+        
         pkmu = jnp.zeros(len(self._kn) * len(self._mu))
-        for name in self.name_pkmu_terms['tot']:
-            # degrees of f, mu, and galaxy bias parameters
-            nf = self.degree_info[name]['f']
-            nmu = self.degree_info[name]['mu']
-            bias_degree = self.degree_info[name]['bias']
 
-            coeff = f**nf * self._mu**nmu
-
-            # calculate the coefficient that consists of bias parameters
-            pnames = list(bias_degree.keys())
-            if len(bias_degree) == 1:
-                if bias_degree[pnames[0]] == 1:
-                    coeff = coeff * (bias1[pnames[0]] + bias2[pnames[0]]) / 2.
-                else:
-                    coeff = coeff * bias1[pnames[0]] * bias2[pnames[0]]
-            elif len(bias_degree) == 2:
-                coeff = coeff * (bias1[pnames[0]] * bias2[pnames[1]] + bias2[pnames[0]] * bias1[pnames[1]]) / 2.
-
-            # # trial version only for auto power spectrum
-            # for pname in bias_degree.keys():
-            #     coeff = coeff * bias1[pname]**bias_degree[pname]
-
-            pkmu_term = jnp.kron(pk_dict[name], coeff)
-            pkmu = pkmu + pkmu_term
+        matrix_mu = self.get_pkmu_22_matrix_mu(params)
+        for nmu, matrix in matrix_mu.items():
+            pk = self._kn**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(matrix, p_q)).real)
+            if self.subtract_k0_limit:
+                pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(matrix, p_k0)).real
+                pk = pk - pk_k0
+            pkmu = pkmu + jnp.kron(pk, self._mu**nmu)
+        
+        matrix_mu = self.get_pkmu_13_matrix_mu(params)
+        for nmu, matrix in matrix_mu.items():
+            pk = self._kn**3 * p_k * jnp.dot(matrix, p_q).real
+            pkmu = pkmu + jnp.kron(pk, self._mu**nmu)
 
         pkmu = pkmu.reshape(len(self._kn), len(self._mu))
         pkmu = pkmu + self.get_pkmu_13_UV(self._kn, self._mu, pk_data, params)
