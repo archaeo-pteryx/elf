@@ -77,6 +77,12 @@ def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     res = quadax.simpson(q * get_pk(q, pk_data, kmin, kmax), x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
+@partial(jit, static_argnames=['num'])
+def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
+    q = jnp.geomspace(kmin, kmax, num)
+    res = quadax.simpson(q**3 * get_pk(q, pk_data, kmin, kmax)**2, x=jnp.log(q)) / (2 * jnp.pi**2)
+    return res
+
 @partial(jit, static_argnames=['num_extrap'])
 def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
 

@@ -20,7 +20,8 @@ class Hankel:
         dlnx = jnp.log(x[1] / x[0])
         eta_m = 2 * jnp.pi / (nfft * dlnx) * jnp.arange(nfft//2+1)
         g_l = get_g_l(l, nu + 1j * eta_m)
-        y = (l + 1.) / x[::-1]
+        # y = (l + 1.) / x[::-1]
+        y = 1 / x[::-1]
         
         self.u_m = (x[0] * y[0])**(-1j * eta_m) * g_l
         self.l = l
