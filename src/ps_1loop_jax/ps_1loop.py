@@ -328,7 +328,7 @@ class PowerSpectrum1Loop:
 
         matrix_mu = {}
         for nmu, name_list in self.name_pkmu_terms['22'].items():
-            matrix = jnp.zeros((self._nfft + 1, self._nfft + 1))
+            matrix = jnp.zeros((self._nfft, self._nfft))
             for name in name_list:
                 # degrees of f and galaxy bias parameters
                 nf = self.degree_info[name]['f']
@@ -357,7 +357,7 @@ class PowerSpectrum1Loop:
 
         matrix_mu = {}
         for nmu, name_list in self.name_pkmu_terms['13'].items():
-            matrix = jnp.zeros(self._nfft + 1)
+            matrix = jnp.zeros(self._nfft)
             for name in name_list:
                 # degrees of f and galaxy bias parameters
                 nf = self.degree_info[name]['f']
