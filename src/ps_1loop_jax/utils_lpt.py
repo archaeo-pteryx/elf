@@ -23,3 +23,30 @@ def get_G_0_m(m, A, B, C, coeff, nmax=10):
 
     return jnp.sum(res, axis=0)
 
+@jit
+def get_G_0_0_m(m, A, B, C, coeff):
+    rho2 = A**2 + C**2
+    res = jnp.zeros(A.shape)
+    for i in range(m):
+        for k in range(m):
+            res = res + coeff[m][k, i] * (- B)**i * (C**2 / rho2)**(i - k)
+    res = res * jnp.exp(- B * C**2 / rho2)
+    return res
+
+@jit
+def get_G_0_0(A, B, C, coeff):
+    rho2 = A**2 + C**2
+    res = jnp.zeros(A.shape)
+    m = len(coeff)
+    for i in range(m):
+        for k in range(m):
+            res = res + coeff[k, i] * (- B)**i * (C**2 / rho2)**(i - k)
+    res = res * jnp.exp(- B * C**2 / rho2)
+    return res
+
+@jit
+def get_cs_mu(f, mu):
+    denom = jnp.sqrt(1 + f * (2 + f) * mu**2)
+    c = (1 + f * mu**2) / denom
+    s = f * mu * jnp.sqrt(1 - mu**2) / denom
+    return c, s
