@@ -6,42 +6,32 @@ from jax.scipy.special import gamma
 from functools import partial
 
 @jit
-def get_hypergerom_2F1(m, n, z, coeff):
-    res = jnp.array([coeff[m][n, i] * z**i for i in range(m+1)])
-    return jnp.sum(res, axis=0)
+def get_coeff(m, n, k):
+    res = (-1)**(k+m) * gamma(n+1) * gamma(1/2+k-n) / (gamma(m+1) * gamma(k+1) * gamma(1/2+k-m-n) * gamma(1-k+n) * gamma(1-m+n))
+    return res
 
 @partial(jit, static_argnames=['nmax'])
-def get_G_0_m(m, A, B, C, coeff, nmax=10):
-    n_list = jnp.arange(m, nmax+1)
-    f_nm = gamma(m + n_list + 1/2) / (gamma(m + 1) * gamma(n_list + 1/2) * gamma(1 - m + n_list))
+def get_G_0_0_m(m, A, B, C, nmax=10):
+    rho2 = A**2 + C**2
+    x = B
+    y = A**2 / rho2
     
-    rho2 = A**2 + C**2
-    x = rho2 / A**2
-    z = rho2 / C**2
-    hypergerom = jnp.array([(1 - x)**n * get_hypergerom_2F1(m, n, z, coeff) for n in n_list])
-    res = jnp.array([f_nm[n] * (B * A**2 / rho2)**n * hypergerom[n] for n in n_list])
-
-    return jnp.sum(res, axis=0)
-
-@jit
-def get_G_0_0_m(m, A, B, C, coeff):
-    rho2 = A**2 + C**2
     res = jnp.zeros(A.shape)
-    for i in range(m):
-        for k in range(m):
-            res = res + coeff[m][k, i] * (- B)**i * (C**2 / rho2)**(i - k)
-    res = res * jnp.exp(- B * C**2 / rho2)
+    for n in range(nmax+1):
+        for k in range(n+1):
+            res = res + jnp.heaviside(n-m, 1.) * get_coeff(m, n, k) * x**n * y**(n-k)
+
     return res
 
 @jit
 def get_G_0_0(A, B, C, coeff):
-    rho2 = A**2 + C**2
+    x = C**2 / (A**2 + C**2)
     res = jnp.zeros(A.shape)
     m = len(coeff)
     for i in range(m):
         for k in range(m):
-            res = res + coeff[k, i] * (- B)**i * (C**2 / rho2)**(i - k)
-    res = res * jnp.exp(- B * C**2 / rho2)
+            res = res + coeff[k, i] * (- B)**(m + i) * x**(m + i - k)
+    res = res * jnp.exp(- B * x)
     return res
 
 @jit
