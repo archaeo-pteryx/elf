@@ -5,33 +5,43 @@ import jax.numpy as jnp
 from jax.scipy.special import gamma
 from functools import partial
 
-@jit
-def get_coeff(m, n, k):
-    res = (-1)**(k+m) * gamma(n+1) * gamma(1/2+k-n) / (gamma(m+1) * gamma(k+1) * gamma(1/2+k-m-n) * gamma(1-k+n) * gamma(1-m+n))
-    return res
+# @jit
+# def get_coeff(m, n, k):
+#     res = (-1)**(k+m) * gamma(n+1) * gamma(1/2+k-n) / (gamma(m+1) * gamma(k+1) * gamma(1/2+k-m-n) * gamma(1-k+n) * gamma(1-m+n))
+#     return res
 
-@partial(jit, static_argnames=['nmax'])
-def get_G_0_0_m(m, A, B, C, nmax=10):
-    rho2 = A**2 + C**2
-    x = B
-    y = A**2 / rho2
+# @partial(jit, static_argnames=['nmax'])
+# def get_G_0_0_m(m, A, B, C, nmax=10):
+#     rho2 = A**2 + C**2
+#     x = B
+#     y = A**2 / rho2
     
-    res = jnp.zeros(A.shape)
-    for n in range(nmax+1):
-        for k in range(n+1):
-            res = res + jnp.heaviside(n-m, 1.) * get_coeff(m, n, k) * x**n * y**(n-k)
+#     res = jnp.zeros(A.shape)
+#     for n in range(nmax+1):
+#         for k in range(n+1):
+#             res = res + jnp.heaviside(n-m, 1.) * get_coeff(m, n, k) * x**n * y**(n-k)
 
-    return res
+#     return res
+
+# @jit
+# def get_G_0_0(A, B, C, coeff):
+#     x = C**2 / (A**2 + C**2)
+#     res = 0
+#     m = len(coeff) - 1
+#     for i in range(m+1):
+#         for k in range(m+1):
+#             res = res + coeff[k, i] * (- B)**(m + i) * x**(m + i - k)
+#     res = res * jnp.exp(- B * x)
+#     return res
 
 @jit
-def get_G_0_0(A, B, C, coeff):
-    x = C**2 / (A**2 + C**2)
-    res = jnp.zeros(A.shape)
-    m = len(coeff)
-    for i in range(m):
-        for k in range(m):
-            res = res + coeff[k, i] * (- B)**(m + i) * x**(m + i - k)
-    res = res * jnp.exp(- B * x)
+def get_G_0_0(x, y, coeff):
+    res = 0
+    m = len(coeff) - 1
+    for i in range(m+1):
+        for k in range(m+1):
+            res = res + coeff[k, i] * x**(m + i) * y**(m + i - k)
+    res = res * jnp.exp(x * y)
     return res
 
 @jit
