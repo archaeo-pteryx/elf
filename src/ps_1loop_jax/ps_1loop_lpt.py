@@ -13,14 +13,9 @@ import interpax
 
 from .hankel import Hankel
 
-from . import pt_coeff
-from . import pt_matrix
-from . import utils_loop
 from .utils_loop import get_pk, get_pk_int, get_pk_int2
 from .utils_math import legendre
-from . import utils_lpt
-
-from . import ir_resum
+from .utils_lpt import get_G00, get_G01, get_G02, get_G10, get_G20, get_G21, get_G30, get_G40
 
 
 class PowerSpectrum1LoopLPT:
@@ -58,9 +53,12 @@ class PowerSpectrum1LoopLPT:
             self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/10.), c_window_width=0.2)
             self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=1e4, c_window_width=0.2)
         
-        # load the coefficients of G_0_0
-        loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G_0_0_coeffs.npz')
-        self.G_0_0_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
+        # load the coefficients of G00
+        loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
+        self.G00_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
+
+        self.get_G = {(0,0): get_G00, (0,1): get_G01, (0,2): get_G02, (1,0): get_G10, \
+                      (2,0): get_G20, (2,1): get_G21, (3,0): get_G30, (4,0): get_G40}
 
     @partial(jit, static_argnames=['self'])
     def get_xi_ln(self, pk_data):
@@ -94,16 +92,65 @@ class PowerSpectrum1LoopLPT:
         X = corrs['X_lin']
         Y = corrs['Y_lin']
         
-        Ksq = k**2 * (1 + f * (2 + f) * mu**2)
-        s = f * mu * jnp.sqrt(1 - mu**2) / jnp.sqrt(1 + f * (2 + f) * mu**2)
+        Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
+        Ksq = (k * Kfac)**2
+        c = (1 + f * mu**2) / Kfac
+        s = f * mu * jnp.sqrt(1 - mu**2) / Kfac
+        
+        A = k * self._q * c
+        B = - 0.5 * Ksq * Y
+        C = k * self._q * s
 
         base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (X + Y))
         
         pk = 0.
         for l in range(self.lmax + 1):
-            coeff = self.G_0_0_coeffs[l]
-            integrand = base * (-2 / (k * self._q))**(l) * utils_lpt.get_G_0_0(0.5 * Ksq * Y, s**2, coeff)
+            coeff = self.G00_coeffs[l]
+            integrand = base * (-2 / (k * self._q))**(l) * self.get_G[(0,0)](A, B, C, coeff)
             k_fft, pk_fft = self.hankel_xi2pk[l](integrand)
             pk = pk + interpax.interp1d(jnp.log(k), jnp.log(k_fft), pk_fft)
 
         return pk
+
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_dict(self, k, mu, f, pk_data):
+        corrs = self.get_corrs(pk_data)
+
+        Xlin = corrs['X_lin']
+        Ylin = corrs['Y_lin']
+        Xlin_gt = corrs['Xlin_gt']
+        Ylin_gt = corrs['Ylin_gt']
+        X22 = corrs['X22']
+        Y22 = corrs['Y22']
+        X13 = corrs['X13']
+        Y13 = corrs['Y13']
+
+        Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
+        Ksq = (k * Kfac)**2
+        c = (1 + f * mu**2) / Kfac
+        s = f * mu * jnp.sqrt(1 - mu**2) / Kfac
+
+        A = k * self._q * c
+        B = - 0.5 * Ksq * Ylin
+        C = k * self._q * s
+
+        base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (Xlin + Ylin))
+
+        integrands = {}
+
+        for l in range(self.lmax + 1):
+
+            G = {(m,n): self.get_G[(m,n)](A, B, C, [self.G00_coeffs[l-i] for i in range(m+n)]) for (m,n) in self.mn_list}
+
+            integrands['zeldovich'] = G[(0,0)] - 0.5 * Ksq * (Xlin_gt * G[(0,0)] + Ylin_gt * G[(2,0)])
+            
+            integrands['Aij_22'] = -0.5 * k**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu**2) * G[(0,0)] * X13 + \
+                                              2 * (Kfac**2 * G[(2,0)] + 2 * f * Kfac * mu * mu_nq1) * Y13 + \
+                                            (Kfac**2 + 2 * f * (1 + f) * mu**2 + f**2 * mu**2) * G[(0,0)] * X22 + \
+                                            (Kfac**2 * G[(2,0)] + 2 * f * Kfac * mu * mu_nq1 + f**2 * mu**2 * nq2) * Y22) \
+                                  + Ksq**2 / 8 * (Xlin_gt**2 * G[(0,0)] + 2 * Xlin_gt * Ylin_gt * G[(2,0)] + Ylin_gt**2 * mu4)
+
+            k_fft, pk_fft = self.hankel_xi2pk[l](integrands)
+            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(k_fft), pk_fft)
+
+        return pkmu_dict
