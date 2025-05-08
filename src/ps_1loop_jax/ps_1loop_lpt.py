@@ -15,7 +15,7 @@ from .hankel import Hankel
 
 from .utils_loop import get_pk, get_pk_int, get_pk_int2
 from .utils_math import legendre
-from .utils_lpt import get_G00, get_G01, get_G02, get_G10, get_G20, get_G21, get_G30, get_G40
+from .utils_lpt import get_G00, get_G01, get_G02, get_G10, get_G11, get_G20, get_G21, get_G30, get_G40
 
 
 class PowerSpectrum1LoopLPT:
@@ -51,14 +51,14 @@ class PowerSpectrum1LoopLPT:
         self.hankel_xi2pk = {}
         nu = 1.1
         for l in l_list:
-            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/10.), c_window_width=0.2)
-            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=1e4, c_window_width=0.2)
+            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.2)
+            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.2)
         
         # load the coefficients of G00
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
         self.G00_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
 
-        self.get_G = {(0,0): get_G00, (0,1): get_G01, (0,2): get_G02, (1,0): get_G10, \
+        self.get_G = {(0,0): get_G00, (0,1): get_G01, (0,2): get_G02, (1,0): get_G10, (1,1): get_G11, \
                       (2,0): get_G20, (2,1): get_G21, (3,0): get_G30, (4,0): get_G40}
 
     @partial(jit, static_argnames=['self'])
@@ -73,8 +73,8 @@ class PowerSpectrum1LoopLPT:
         return xi_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_xi_ln_lt(self, pk_data):
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+    def get_xi_ln_lt(self, pk_data, k_IR=0.2):
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax) * jnp.exp(-0.5 * (self._k / k_IR)**2)
 
         xi_ln = {}
         for (l, n) in self.ln_list:
@@ -82,57 +82,6 @@ class PowerSpectrum1LoopLPT:
             xi_ln[(l, n)] = xi / (2 * jnp.pi**2)
         
         return xi_ln
-    
-    @partial(jit, static_argnames=['self'])
-    def get_QR(self, xi_ln, pk_data):
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-
-        integrand_Q1 = 8/15 * xi_ln[(0,0)]**2 - 16/21 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2
-        _, Q1 = self.hankel_xi2pk[0](4 * jnp.pi * self._q**3 * integrand_Q1)
-
-        integrand_R1 = 8/15 * xi_ln[(0,0)] - 16/21 * xi_ln[(2,0)] + 8/35 * xi_ln[(4,0)]
-        _ R1 = self.hankel_xi2pk[0](4 * jnp.pi * self._q**3 * integrand_R1)
-        R1 = R1 * self._k**2 * pk_lin
-
-        # for (l, n1, n2) in self.ln1n2_list['Q1']:
-        #     integrand = integrand + coeffs['Q1'][(l, n1, n2)] * xi_ln[(l, n1)] * xi_ln[(l, n2)]
-        #     _, pk = self.hankel_xi2pk[0](integrand)
-        #     QR_dict['Q1'] = pk
-
-        # for (l, n, m) in self.lmn_list['R1']:
-        #     integrand = integrand + coeffs['R1'][(l, n, m))] * xi_ln
-        #     self.hankel_xi2pk[0](integrand)
-    
-        return Q1, R1
-    
-    @partial(jit, static_argnames=['self'])
-    def get_corrs(self, pk_data):
-        xi_ln = self.get_xi_ln(pk_data)
-        xi_ln_lt = self.get_xi_ln_lt(pk_data)
-
-        corrs = {}
-
-        corrs['X_lin'] = 2./3 * (xi_ln[(0,-2)][0] - xi_ln[(0,-2)] - xi_ln[(2,-2)])
-        corrs['Y_lin'] = 2 * xi_ln[(2,-2)]
-
-        Xlin_lt = 2./3 * (xi_ln_lt[(0,-2)][0] - xi_ln_lt[(0,-2)] - xi_ln_lt[(2,-2)])
-        Ylin_lt = 2 * xi_ln_lt[(2,-2)]
-
-        corrs['X_lin_gt'] = corrs['X_lin'] - Xlin_lt
-        corrs['Y_lin_gt'] = corrs['Y_lin'] - Ylin_lt
-        
-        corrs['U_lin'] = - xi_ln[(1,-1)]
-        corrs['xi_lin'] = xi_ln[(0,0)]
-
-        if self._compute_1loop:
-            Q, R = self.get_QR(xi_ln)
-
-            for name in 
-            for (l, n) in coeffs[]
-                integrand = coeff[] * 
-                _, xi = self.hankel_pk2xi[l](integrand)
-
-        return corrs
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel(self, k, mu, f, pk_data):
@@ -155,8 +104,8 @@ class PowerSpectrum1LoopLPT:
         pk = 0.
         for l in range(self.lmax + 1):
             integrand = base * (-2 / (k * self._q))**(l) * self.get_G[(0,0)](A, B, C, [self.G00_coeffs[l]])
-            k_fft, pk_fft = self.hankel_xi2pk[l](integrand)
-            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(k_fft), pk_fft)
+            _, pk_fft = self.hankel_xi2pk[l](integrand)
+            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
         return pk
 
@@ -202,35 +151,32 @@ class PowerSpectrum1LoopLPT:
             
             integrands['A>A>'] = k**2 * Ksq**2 / 8 * (Xlin_gt**2 * G[(0,0)] + 2 * Xlin_gt * Ylin_gt * G[(2,0)] + Ylin_gt**2 * mu4)
 
-            integrands['W'] = 
 
-            k_fft, pk_fft = self.hankel_xi2pk[l](integrands)
-            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(k_fft), pk_fft)
+            _, pk_fft = self.hankel_xi2pk[l](integrands)
+            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
         return pk
     
     @partial(jit, static_argnames=['self'])
-    def get_QR(self, pk_data):
-        xi_ln = self.get_xi_ln(pk_data)
-        pk_lin = get_pk(k_fft, pk_data, kmin=kmin, kmax=kmax)
-
+    def get_QR(self, xi_ln, pk_lin):
+        
         integrand_Q1 = 8/15 * xi_ln[(0,0)]**2 - 16/21 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2
-        _, Q1 = self.hankel_xi2pk[0](4 * jnp.pi * q_fft**3 * integrand_Q1)
+        _, Q1 = hankel_xi2pk[0](4 * jnp.pi * q_fft**3 * integrand_Q1)
 
         coeffs = {(0,0,2): 8/15, (2,0,2): -16/21, (4,0,2): 8/35}
         R1 = 0.
         for (l,n,m) in coeffs.keys():
-            _, pk_ln = self.hankel_xi2pk[l](q_fft**2 * xi_ln[(l,n)])
+            _, pk_ln = hankel_xi2pk[l](q_fft**2 * xi_ln[(l,n)])
             R1 = R1 + coeffs[(l,n,m)] * pk_ln * k_fft**m * pk_lin
 
         integrand_Q2 = 4/5 * xi_ln[(0,0)]**2 - 4/7 * xi_ln[(2,0)]**2 - 8/35 * xi_ln[(4,0)]**2 \
                     - 4/5 * xi_ln[(1,-1)] * xi_ln[(1,1)] + 4/5 * xi_ln[(3,-1)] * xi_ln[(3,1)]
-        _, Q2 = self.hankel_xi2pk[0](4 * jnp.pi * q_fft**3 * integrand_Q2)
+        _, Q2 = hankel_xi2pk[0](4 * jnp.pi * q_fft**3 * integrand_Q2)
 
         coeffs = {(0,0,2): -2/15, (1,-1,3): 2/5, (2,0,2): -2/21, (3,-1,3): -2/5, (4,0,2): 8/35}
         R2 = 0.
         for (l,n,m) in coeffs.keys():
-            _, pk_ln = self.hankel_xi2pk[l](q_fft**2 * xi_ln[(l,n)])
+            _, pk_ln = hankel_xi2pk[l](q_fft**2 * xi_ln[(l,n)])
             R2 = R2 + coeffs[(l,n,m)] * pk_ln * k_fft**m * pk_lin
 
         QR_dict = {'Q1': Q1, 'R1': R1, 'Q2': Q2, 'R2': R2}
@@ -238,17 +184,16 @@ class PowerSpectrum1LoopLPT:
         return QR_dict
 
     @partial(jit, static_argnames=['self'])
-    def get_XY_1loop(self, pk_data):
-        QR_dict = self.get_QR(pk_data)
-
+    def get_corrs_1loop(self, QR_dict):
+        # X, Y for 1-loop A_{ij}
         xi_ln_22 = {}
         for (l, n) in [(0,-2), (2,-2)]:
-            _, xi = self.hankel_pk2xi[l](9/98 * QR_dict['Q1'] * k_fft**(n+3))
+            _, xi = hankel_pk2xi[l](9/98 * QR_dict['Q1'] * k_fft**(n+3))
             xi_ln_22[(l, n)] = xi / (2 * jnp.pi**2)
 
         xi_ln_13 = {}
         for (l, n) in [(0,-2), (2,-2)]:
-            _, xi = self.hankel_pk2xi[l](5/21 * QR_dict['R1'] * k_fft**(n+3))
+            _, xi = hankel_pk2xi[l](5/21 * QR_dict['R1'] * k_fft**(n+3))
             xi_ln_13[(l, n)] = xi / (2 * jnp.pi**2)
 
         X22 = 2./3 * (xi_ln_22[(0,-2)][0] - xi_ln_22[(0,-2)] - xi_ln_22[(2,-2)])
@@ -257,23 +202,47 @@ class PowerSpectrum1LoopLPT:
         X13 = 2./3 * (xi_ln_13[(0,-2)][0] - xi_ln_13[(0,-2)] - xi_ln_13[(2,-2)])
         Y13 = 2 * xi_ln_13[(2,-2)]
 
-        return X22, Y22, X13, Y13
-
-    @partial(jit, static_argnames=['self'])
-    def get_VT(self, pk_data):
-        QR_dict = self.get_QR(pk_data)
+        # V1, V3, T for W_[ijk}
         Q1 = QR_dict['Q1']
         Q2 = QR_dict['Q2']
         R1 = QR_dict['R1']
         R2 = QR_dict['R2']
         
-        _, T = self.hankel_pk2xi[3](3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
+        _, T = hankel_pk2xi[3](3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
         
-        _, V1 = self.hankel_pk2xi[1](-3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2))
+        _, V1 = hankel_pk2xi[1](-3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2))
         V1 = V1 - 1/5 * T
 
-        _, V3 = self.hankel_pk2xi[1](3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2))
+        _, V3 = hankel_pk2xi[1](3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2))
         V3 = V3 - 1/5 * T
 
-        VT_dict = {'V1': V1, 'V3': V3, 'T': T}
-        return VT_dict
+        # make a dict
+        corrs = {'X22': X22, 'Y22': Y22, 'X13': X13, 'Y13': Y13, 'V1': V1, 'V3': V3, 'T': T}
+        return corrs
+
+    @partial(jit, static_argnames=['self'])
+    def get_corrs(self, pk_data, k_IR=0.2):
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        xi_ln = self.get_xi_ln(pk_data)
+        xi_ln_lt = self.get_xi_ln_lt(pk_data, k_IR=k_IR)
+
+        corrs = {}
+
+        corrs['X_lin'] = 2./3 * (xi_ln[(0,-2)][0] - xi_ln[(0,-2)] - xi_ln[(2,-2)])
+        corrs['Y_lin'] = 2 * xi_ln[(2,-2)]
+
+        corrs['X_lin_lt'] = 2./3 * (xi_ln_lt[(0,-2)][0] - xi_ln_lt[(0,-2)] - xi_ln_lt[(2,-2)])
+        corrs['Y_lin_lt'] = 2 * xi_ln_lt[(2,-2)]
+
+        corrs['X_lin_gt'] = corrs['X_lin'] - corrs['X_lin_lt']
+        corrs['Y_lin_gt'] = corrs['Y_lin'] - corrs['Y_lin_lt']
+        
+        corrs['U_lin'] = - xi_ln[(1,-1)]
+        corrs['cor_lin'] = xi_ln[(0,0)]
+
+        # 1-loop terms
+        QR_dict = self.get_QR(xi_ln, pk_lin)
+        corrs_1loop = self.get_corrs_1loop(QR_dict)
+        corrs.update(corrs_1loop)
+        
+        return corrs
