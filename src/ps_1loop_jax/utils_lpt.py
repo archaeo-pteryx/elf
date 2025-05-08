@@ -74,7 +74,7 @@ get_dG00dC = jit(jax.vmap(nth_derivative(get_G00, 1, argnums=2), in_axes=(0, 0, 
 
 get_d2G00dA2 = jit(jax.vmap(nth_derivative(get_G00, 2, argnums=0), in_axes=(0, 0, 0, None)))
 get_d2G00dC2 = jit(jax.vmap(nth_derivative(get_G00, 2, argnums=2), in_axes=(0, 0, 0, None)))
-get_d2G00dAdC = jit(jax.vmap(jax.grad(get_G00, argnums=(0, 2)), in_axes=(0, 0, 0, None)))
+get_d2G00dAdC = jit(jax.vmap(jax.grad(jax.grad(get_G00, argnums=2), argnums=0), in_axes=(0, 0, 0, None)))
 
 get_d3G00dA3 = jit(jax.vmap(nth_derivative(get_G00, 3, argnums=0), in_axes=(0, 0, 0, None)))
 get_d3G00dA2dC = jit(jax.vmap(jax.grad(jax.grad(jax.grad(get_G00, argnums=2), argnums=0), argnums=0), in_axes=(0, 0, 0, None)))
