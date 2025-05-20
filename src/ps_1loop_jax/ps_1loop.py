@@ -156,8 +156,8 @@ class PowerSpectrum1Loop:
         self._q = 1 / self._k[::-1]
         nu = 1.1
         for l in l_list:
-            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/10.), c_window_width=0.2)
-            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=None, c_window_width=0.2)
+            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/100.), c_window_width=0.25)
+            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=None, c_window_width=0.25)
     
     @partial(jit, static_argnames=['self'])
     def get_pk_dict(self, pk_data):
