@@ -6,15 +6,13 @@ from jax import jit
 from functools import partial
 
 import jax.numpy as jnp
-import numpy as np
-import quadax
 import interpax
 
 from .hankel import Hankel
 
 from .utils_loop import get_pk, get_pk_int
-from .utils_math import legendre
 from .utils_lpt import get_G00, get_Gs
+
 
 class PowerSpectrum1LoopLPT:
 
@@ -24,10 +22,12 @@ class PowerSpectrum1LoopLPT:
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=256,
+                 use_galileon=True,
                  ):
         
         self.cross = cross # flag to enable the calculation of cross power spectra
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
+        self.use_galileon = use_galileon
 
         self._kmin = kmin_fft
         self._kmax = kmax_fft
@@ -56,30 +56,16 @@ class PowerSpectrum1LoopLPT:
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
         self.G00_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
 
-    @partial(jit, static_argnames=['self'])
     def get_xi_ln(self, l, n, array):
         _, xi_ln = self.hankel_pk2xi[l](array * self._k**(n+3) / (2 * jnp.pi**2))
         return xi_ln
     
-    @partial(jit, static_argnames=['self'])
     def get_pk_ln(self, l, n, array):
         _, pk_ln = self.hankel_xi2pk[l](array * self._q**(n+3))
         return pk_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_xi_ln_dict(self, pk_data):
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        xi_ln_dict = {(l, n): self.get_xi_ln(l, n, pk_lin) for (l, n) in self.ln_list}
-        return xi_ln_dict
-    
-    @partial(jit, static_argnames=['self'])
-    def get_xi_ln_lt_dict(self, pk_data, k_IR=0.2):
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax) * jnp.exp(-0.5 * (self._k / k_IR)**2)
-        xi_ln_dict = {(l, n): self.get_xi_ln(l, n, pk_lin) for (l, n) in self.ln_list}
-        return xi_ln_dict
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_zel(self, k, mu, f, pk_data):
+    def get_pkmu_zel(self, k, mu, pk_data, f):
         corrs = self.get_corrs(pk_data)
         
         X = corrs['X_lin']
@@ -105,7 +91,7 @@ class PowerSpectrum1LoopLPT:
         return pk
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_dict(self, k, mu, f, pk_data):
+    def get_pkmu_dict(self, k, mu, pk_data, f):
         corrs = self.get_corrs(pk_data)
 
         X_lin_lt = corrs['X_lin_lt']
@@ -113,6 +99,7 @@ class PowerSpectrum1LoopLPT:
         X_lin_gt = corrs['X_lin_gt']
         Y_lin_gt = corrs['Y_lin_gt']
         
+        # matter one-loop terms
         X22 = corrs['X22']
         Y22 = corrs['Y22']
         X13 = corrs['X13']
@@ -121,8 +108,26 @@ class PowerSpectrum1LoopLPT:
         V3 = corrs['V3']
         T = corrs['T']
 
+        # LIMD bias terms
+        xi_lin = corrs['xi_lin']
+        U_lin = corrs['U_lin']
+        U3 = corrs['U3']
+        U11 = corrs['U11']
+        U20 = corrs['U20']
+        X10 = corrs['X10']
+        Y10 = corrs['Y10']
+
+        # 2nd-order shear bias terms
+        V10 = corrs['V10']
+        V12 = corrs['V12']
+        X_Upsilon = corrs['X_Upsilon']
+        Y_Upsilon = corrs['Y_Upsilon']
+        chi = corrs['chi']
+        zeta = corrs['zeta']
+
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
-        Ksq = (k * Kfac)**2
+        K = k * Kfac
+        Ksq = K**2
         c = (1 + f * mu**2) / Kfac
         s = f * mu * jnp.sqrt(1 - mu**2) / Kfac
         A_mu = (1 + f) * mu / Kfac
@@ -132,36 +137,74 @@ class PowerSpectrum1LoopLPT:
         B = - 0.5 * Ksq * Y_lin_lt
         C = k * self._q * s
 
-        base = 4 * jnp.pi * q_fft**3 * jnp.exp(- 0.5 * Ksq * (X_lin_lt + Y_lin_lt))
+        base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (X_lin_lt + Y_lin_lt))
         Gs = get_Gs(A, B, C, lmax=self.lmax)
 
         pkmu = {name: 0 for name in ['za', 'A>', 'A>A>', 'A22', 'A13', 'W112']}
         integrand = {}
 
         for l in range(self.lmax + 1):
-            # G = {(m,n): self.get_G[(m,n)](A, B, C, [self.G00_coeffs[l-i] for i in range(m+n)]) for (m,n) in self.mn_list}
-            mu2 = Gs[(2,0)][l]
-            mu_nq1 = A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
+
+            mq0 = Gs[(0,0)][l]
+            mq1 = Gs[(1,0)][l]
+            mq2 = Gs[(2,0)][l]
+            mq3 = Gs[(3,0)][l]
+            mq4 = Gs[(4,0)][l]
             nq1 = A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
             nq2 = A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] + B_mu**2 * Gs[(0,2)][l]
-            mu2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
+            mq1_nq1 = A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
+            mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
 
-            integrand['za'] = Gs[(0,0)][l] # za
-            integrand['A>'] = - 0.5 * Ksq * (X_lin_gt * Gs[(0,0)][l] + Y_lin_gt * Gs[(2,0)][l]) # A>
-            integrand['A>A>'] = Ksq**2 / 8 * (X_lin_gt**2 * Gs[(0,0)][l] + 2 * X_lin_gt * Y_lin_gt * Gs[(2,0)][l] + Y_lin_gt**2 * Gs[(4,0)][l]) # A>A>
+            # matter terms
+            integrand['za'] = mq0
+            integrand['A>'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
-            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * Gs[(0,0)][l] * X22 + \
-                                    (Kfac**2 * mu2 + 2 * f * Kfac * mu * mu_nq1 + f**2 * mu**2 * nq2) * Y22) # A22
+            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * mq0 * X22 + \
+                                    (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1 + f**2 * mu**2 * nq2) * Y22)
 
-            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2*f*(1+f)* mu**2) * Gs[(0,0)][l] * X13 + \
-                                    2 * (Kfac**2 * mu2 + 2 * f * Kfac * mu * mu_nq1) * Y13 ) # A13
+            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2*f*(1+f)* mu**2) * mq0 * X13 + \
+                                    2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1) * Y13)
 
-            integrand['W112'] = 0.5 * k**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu**2) * Gs[(1,0)][l] * V1 +  \
-                                    Kfac**2 * (Kfac * Gs[(1,0)][l] + f * mu * nq1) * V3 + \
-                                    Kfac**2 * (Kfac * Gs[(3,0)][l] + f * mu * mu2_nq1) * T) # W112
+            integrand['W112'] = 0.5 * k**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu**2) * mq1 * V1 +  \
+                                    Kfac**2 * (Kfac * mq1 + f * mu * nq1) * V3 + \
+                                    Kfac**2 * (Kfac * mq3 + f * mu * mq2_nq1) * T)
             integrand['W112'] = -2 * integrand['W112']
 
-            for name in ['za', 'A>', 'A>A>', 'A22', 'A13', 'W112']:
+            # LIMD bias terms
+            integrand['U10'] = K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3
+
+            integrand['A> U_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+
+            integrand['xi_lin'] = mq0 * xi_lin
+
+            integrand['A> xi_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
+
+            integrand['U11'] = (K * mq1 + f * k * mu * nq1) * U11
+
+            integrand['U20'] = (K * mq1 + f * k * mu * nq1) * U20
+
+            integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
+                                + f * k * mu * mq1_nq1 * Y10
+
+            integrand['U_lin U_lin'] = Ksq * mq2 * U_lin**2
+
+            integrand['xi_lin xi_lin'] = mq0 * xi_lin**2
+
+            integrand['xi_lin U_lin'] = K * mq1 * xi_lin * U_lin
+
+            # 2nd-order shear bias terms
+            integrand['V10'] = (K * mq1 + f * k * mu * nq1) * V10
+
+            integrand['V12'] = K * mq1 * V12
+
+            integrand['Upsilon'] = Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+
+            integrand['chi'] = mq0 * chi
+
+            integrand['zeta'] = mq0 * zeta
+
+            for name in ['za', 'A>', 'A> A>', 'A22', 'A13', 'W112']:
                 _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrand[name])
                 pkmu[name] = pkmu[name] + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
@@ -192,7 +235,7 @@ class PowerSpectrum1LoopLPT:
         # one-loop terms
         QR_dict = self.get_QR(xi_ln, pk_lin)
         corrs_matter_1loop = self.get_corrs_matter_1loop(QR_dict)
-        corrs_bias_2nd = self.get_corrs_bias_2nd(QR_dict)
+        corrs_bias_2nd = self.get_corrs_bias_2nd(QR_dict, xi_ln)
         corrs.update(corrs_matter_1loop)
         corrs.update(corrs_bias_2nd)
         
@@ -270,7 +313,7 @@ class PowerSpectrum1LoopLPT:
         R1 = QR_dict['R1']
         R2 = QR_dict['R2']
 
-        U3 = self.get_xi_ln(1, -1, -5/21 * R1) # third-order part of U10
+        U3 = self.get_xi_ln(1, -1, -5/21 * R1) # 3rd-order part of U10
         U11 = self.get_xi_ln(1, -1, 3/14 * (R1 + R2)) # U11
         U20 = self.get_xi_ln(1, -1, -3/7 * Q8) # U20
         
@@ -283,25 +326,29 @@ class PowerSpectrum1LoopLPT:
         Y10 = 3 * xi_ln_A10[(2,-2)]
 
         # corrlations from 2nd-order shear
-        V10_G2 = self.get_xi_ln(1, -1, 3/7 * Q1) # V10 based on G2
-        V10_s2 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
-
-        V12_G2 = self.get_xi_ln(1, -1, 2 * Q5) # V12 based on G2
-        V12_s2 = 2 * (4/15 * xi_ln[(1,-1)] - 2/5 * xi_ln(3,-1)) * xi_ln[(2,0)] # V12 based on s^2
-
-        zeta_G2 = 2 * (8/15 * xi_ln[(0,0)]**2 - 16/21 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on G2
-        zeta_s2 = 2 * (4/45 * xi_ln[(0,0)]**2 + 8/63 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on s^2
-
-        chi_G2 = 2 * (-2/3 * xi_ln[(0,0)]**2 + 2/3 * xi_ln[(2,0)]**2) # chi based on G2
-        chi_s2 = 2 * (2/3 * xi_ln[(0,0)]**2 + xi_ln[(2,0)]**2) # chi based on s^2
+        if self.use_galileon:
+            V10 = self.get_xi_ln(1, -1, 3/7 * Q1) # V10 based on G2
+            V12 = self.get_xi_ln(1, -1, 2 * Q5) # V12 based on G2
+            chi = 2 * (-2/3 * xi_ln[(0,0)]**2 + 2/3 * xi_ln[(2,0)]**2) # chi based on G2
+            zeta = 2 * (8/15 * xi_ln[(0,0)]**2 - 16/21 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on G2
+        else:
+            V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
+            V12 = 2 * (4/15 * xi_ln[(1,-1)] - 2/5 * xi_ln(3,-1)) * xi_ln[(2,0)] # V12 based on s^2
+            chi = 2 * (2/3 * xi_ln[(0,0)]**2 + xi_ln[(2,0)]**2) # chi based on s^2
+            zeta = 2 * (4/45 * xi_ln[(0,0)]**2 + 8/63 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on s^2
+        
+        # Upsilon based on s^2
+        J2 = 2/15 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
+        J3 = -0.2 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
+        J4 = xi_ln[(3,-1)]
+        
+        V = 4 * J2 * xi_ln[(2,0)]
+        X_Upsilon = 4 * J3**2
+        Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
 
         # make a dictionary
         corrs = {'U3': U3, 'U11': U11, 'U20': U20, 'X10': X10, 'Y10': Y10, 
-                 'V10_G2': V10_G2, 'V10_s2': V10_s2, 'V12_G2': V12_G2, 'V12_s2': V12_s2,
-                 'zeta_G2': zeta_G2, 'zeta_s2': zeta_s2, 'chi_G2': chi_G2, 'chi_s2': chi_s2
+                 'V10': V10, 'V12': V12, 'chi': chi, 'zeta': zeta, 
+                 'X_Upsilon': X_Upsilon, 'Y_Upsilon': Y_Upsilon
                  }
         return corrs
-
-    @partial(jit, static_argnames=['self'])
-    def get_corrs_bias_3rd(self, QR_dict):
-        raise NotImplementedError
