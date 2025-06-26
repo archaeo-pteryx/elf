@@ -248,12 +248,10 @@ class PowerSpectrum1LoopLPT:
         integrand_Q5 = 2/3 * xi_ln[(0,0)]**2 - 2/3 * xi_ln[(2,0)]**2 \
                     - 2/5 * xi_ln[(1,-1)] * xi_ln[(1,1)] + 2/5 * xi_ln[(3,-1)] * xi_ln[(3,1)]
         integrand_Q8 = 2/3 * xi_ln[(0,0)]**2 - 2/3 * xi_ln[(2,0)]**2
-        integrand_Q_ex = xi_ln[(0,0)]**2 - xi_ln[(1,-1)] * xi_ln[(1,1)]
 
         Q1 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q1)
         Q5 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q5)
         Q8 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q8)
-        Q_ex = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q_ex)
 
         coeffs = {(0,0,2): 8/15, (2,0,2): -16/21, (4,0,2): 8/35}
         R1 = 0.
@@ -268,11 +266,9 @@ class PowerSpectrum1LoopLPT:
             R3 = R3 + coeffs[(l,n,m)] * pk_ln * self._k**m * pk_lin
 
         Q2 = 2 * Q5 - Q1
-        Qs2 = 2 * Q8 - 3 * Q1
         R2 = R3 - R1
 
         QR_dict = {'Q1': Q1, 'Q2': Q2, 'Q5': Q5, 'Q8': Q8, 
-                   'Qs2': Qs2, 'Q_ex': Q_ex,
                    'R1': R1, 'R2': R2}
         
         return QR_dict
