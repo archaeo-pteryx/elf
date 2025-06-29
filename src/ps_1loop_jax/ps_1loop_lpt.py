@@ -22,11 +22,13 @@ class PowerSpectrum1LoopLPT:
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=256,
+                 lmax=10,
                  use_galileon=True,
                  ):
         
         self.cross = cross # flag to enable the calculation of cross power spectra
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
+        self.lmax = lmax
         self.use_galileon = use_galileon
 
         self._kmin = kmin_fft
@@ -40,8 +42,7 @@ class PowerSpectrum1LoopLPT:
             
     def _initialize_loop_coeff(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        l_list = [0,1,2,3,4]
-        
+        l_list = [i for i in range(max(4, self.lmax) + 1)]
         self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
 
         # set the Hankel transforms
@@ -91,8 +92,8 @@ class PowerSpectrum1LoopLPT:
         return pk
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_dict(self, k, mu, pk_data, f):
-        corrs = self.get_corrs(pk_data)
+    def get_pkmu_dict(self, k, mu, pk_data, f, k_IR=0.2):
+        corrs = self.get_corrs(pk_data, k_IR)
 
         X_lin_lt = corrs['X_lin_lt']
         Y_lin_lt = corrs['Y_lin_lt']
@@ -138,10 +139,16 @@ class PowerSpectrum1LoopLPT:
         C = k * self._q * s
 
         base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (X_lin_lt + Y_lin_lt))
-        Gs = get_Gs(A, B, C, lmax=self.lmax)
+        Gs = get_Gs(A, B, C, self.G00_coeffs, self.lmax)
 
-        pkmu = {name: 0 for name in ['za', 'A>', 'A>A>', 'A22', 'A13', 'W112']}
-        integrand = {}
+        term_names = ['ZA', 'A>', 'A> A>', 'A22', 'A13', 'W112',
+                      'U10', 'A> U_lin', 'xi_lin', 'A> xi_lin', 'U11', 'U20', 
+                      'A10', 'U_lin U_lin', 'xi_lin xi_lin', 'xi_lin U_lin',
+                      'V10', 'V12', 'Upsilon', 'chi', 'zeta'
+                      ]
+        
+        pkmu = {name: 0 for name in term_names}
+        integrand = {name: 0 for name in term_names}
 
         for l in range(self.lmax + 1):
 
@@ -156,7 +163,7 @@ class PowerSpectrum1LoopLPT:
             mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
 
             # matter terms
-            integrand['za'] = mq0
+            integrand['ZA'] = mq0
             integrand['A>'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
             integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
@@ -204,7 +211,7 @@ class PowerSpectrum1LoopLPT:
 
             integrand['zeta'] = mq0 * zeta
 
-            for name in ['za', 'A>', 'A> A>', 'A22', 'A13', 'W112']:
+            for name in term_names:
                 _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrand[name])
                 pkmu[name] = pkmu[name] + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
