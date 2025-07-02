@@ -25,22 +25,17 @@ class PowerSpectrum1LoopLPT:
                  nfft=256,
                  lmax=5,
                  ngauss=4,
-                 use_galileon=True,
+                 use_galileon=False,
+                 use_Pzel=True
                  ):
         
         self.cross = cross # flag to enable the calculation of cross power spectra
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
         self.lmax = lmax
         self.use_galileon = use_galileon
+        self.use_Pzel = use_Pzel
 
-        # preparation for FFT
-        self._kmin = kmin_fft
-        self._kmax = kmax_fft
-        self._nfft = nfft
-        self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
-        self._q = 1 / self._k[::-1]
-
-        self.term_names = ['ZA', 'A>', 'A> A>', 'A22', 'A13', 'W112',
+        self.term_names = ['ZA', 'A> A>', 'A22', 'A13', 'W112',
                            'U10', 'A> U_lin', 'xi_lin', 'A> xi_lin', 'U11', 'U20', 
                            'A10', 'U_lin U_lin', 'xi_lin xi_lin', 'xi_lin U_lin',
                            'V10', 'V12', 'Upsilon', 'chi', 'zeta'
@@ -55,6 +50,12 @@ class PowerSpectrum1LoopLPT:
         self._leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
         self._leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
 
+        # preparation for FFT
+        self._kmin = kmin_fft
+        self._kmax = kmax_fft
+        self._nfft = nfft
+        self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
+        self._q = 1 / self._k[::-1]
         self._initialize_loop_coeff()
 
     def _initialize_loop_coeff(self):
@@ -174,8 +175,8 @@ class PowerSpectrum1LoopLPT:
             mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
 
             # matter terms
-            integrand['ZA'] = mq0
-            integrand['A>'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+
             integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
             integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * mq0 * X22 + \
@@ -278,8 +279,8 @@ class PowerSpectrum1LoopLPT:
         base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (X_lin_lt + Y_lin_lt))
         Gs = get_Gs(A, B, C, self.G00_coeffs, self.lmax)
         
-        pkmu_dict = {name: 0 for name in self.bias_combs}
-        integrand = {name: 0 for name in self.term_names + self.bias_combs}
+        pkmu_dict = {name: 0 for name in self.bias_combs + ['ctr']}
+        integrand = {name: 0 for name in self.term_names + self.bias_combs + ['ctr']}
 
         for l in range(self.lmax + 1):
 
@@ -295,8 +296,8 @@ class PowerSpectrum1LoopLPT:
             mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
 
             # matter terms
-            integrand['ZA'] = mq0
-            integrand['A>'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+
             integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
             integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * mq0 * X22 + \
@@ -344,7 +345,7 @@ class PowerSpectrum1LoopLPT:
             integrand['zeta'] = mq0 * zeta
 
             # collect the terms according to the combinations of bias parameters
-            integrand['1'] = integrand['ZA'] + integrand['A>'] + integrand['A> A>'] \
+            integrand['1'] = integrand['ZA'] + integrand['A> A>'] \
                 + integrand['A22'] + integrand['A13'] + integrand['W112']
             
             integrand['b1'] = integrand['U10'] + integrand['A> U_lin'] + integrand['A10']
@@ -365,8 +366,10 @@ class PowerSpectrum1LoopLPT:
 
             integrand['bs bs'] = integrand['zeta']
 
+            integrand['ctr'] = integrand['ZA']
+
             # Hankel transforms
-            for name in self.bias_combs:
+            for name in self.bias_combs + ['ctr']:
                 _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrand[name])
                 pkmu_dict[name] = pkmu_dict[name] + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
@@ -378,11 +381,11 @@ class PowerSpectrum1LoopLPT:
 
         corrs = self.get_corrs(pk_data, k_IR)
 
-        pkmu_dict = {name: jnp.zeros((len(k), len(mu))) for name in self.bias_combs}
+        pkmu_dict = {name: jnp.zeros((len(k), len(mu))) for name in self.bias_combs + ['ctr']}
         for i in range(len(k)):
             for j in range(len(mu)):
                 pkmu_dict2 = self.get_pkmu_bias_dict(k[i], mu[j], corrs, params['f'])
-                for name in self.bias_combs:
+                for name in self.bias_combs + ['ctr']:
                     pkmu_dict[name] = pkmu_dict[name].at[i, j].set(pkmu_dict2[name])
 
         bias = params['bias']
@@ -394,9 +397,28 @@ class PowerSpectrum1LoopLPT:
         pkmu = 0
         for name in self.bias_combs:
             pkmu = pkmu + bias_dict[name] * pkmu_dict[name]
+        
+        # counterterm
+        ctr = params['ctr']
+        ctr_mu = ctr['alpha0'] + ctr['alpha2'] * mu**2 + ctr['alpha4'] * mu**4 + ctr['alpha6'] * mu**6
+        pkmu_ctr = jnp.kron(k**2, ctr_mu).reshape(len(k), len(mu)) * pkmu_dict['ctr']
+        pkmu = pkmu + pkmu_ctr
+
         return pkmu
     
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
+        k = jnp.atleast_1d(k).astype(float)
+
+        pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
+        pkmu = jnp.vstack([jnp.flip(pkmu, axis=0), pkmu])
+
+        pk0 = 0.5 * jnp.sum((self._ws * self._leg0)[:, None] * pkmu, axis=0)
+        pk2 = 2.5 * jnp.sum((self._ws * self._leg2)[:, None] * pkmu, axis=0)
+        pk4 = 4.5 * jnp.sum((self._ws * self._leg4)[:, None] * pkmu, axis=0)
+        
+        return pk0, pk2, pk4
+    
+    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
 
         pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
@@ -527,7 +549,7 @@ class PowerSpectrum1LoopLPT:
             zeta = 2 * (8/15 * xi_ln[(0,0)]**2 - 16/21 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on G2
         else:
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
-            V12 = 2 * (4/15 * xi_ln[(1,-1)] - 2/5 * xi_ln(3,-1)) * xi_ln[(2,0)] # V12 based on s^2
+            V12 = 2 * (4/15 * xi_ln[(1,-1)] - 2/5 * xi_ln[(3,-1)]) * xi_ln[(2,0)] # V12 based on s^2
             chi = 2 * (2/3 * xi_ln[(0,0)]**2 + xi_ln[(2,0)]**2) # chi based on s^2
             zeta = 2 * (4/45 * xi_ln[(0,0)]**2 + 8/63 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on s^2
         
