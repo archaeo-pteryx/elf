@@ -365,8 +365,8 @@ class PowerSpectrum1LoopLPT:
             integrand['b2 bs'] = integrand['chi']
 
             integrand['bs bs'] = integrand['zeta']
-
-            integrand['ctr'] = integrand['ZA']
+            
+            integrand['ctr'] = integrand['ZA'] if self.use_Pzel else integrand['xi_lin']
 
             # Hankel transforms
             for name in self.bias_combs + ['ctr']:
