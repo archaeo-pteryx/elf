@@ -190,17 +190,17 @@ class PowerSpectrum1LoopLPT:
             integrand['W112'] = -2 * integrand['W112']
 
             # LIMD bias terms
-            integrand['U10'] = K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3
+            integrand['U10'] = -2 * (K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3)
 
-            integrand['A> U_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand['A> U_lin'] = Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
 
             integrand['xi_lin'] = mq0 * xi_lin
 
-            integrand['A> xi_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
+            integrand['A> xi_lin'] = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
 
-            integrand['U11'] = (K * mq1 + f * k * mu * nq1) * U11
+            integrand['U11'] = -(K * mq1 + f * k * mu * nq1) * U11
 
-            integrand['U20'] = (K * mq1 + f * k * mu * nq1) * U20
+            integrand['U20'] = -(K * mq1 + f * k * mu * nq1) * U20
 
             integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
                                 + f * k * mu * mq1_nq1 * Y10
@@ -209,14 +209,14 @@ class PowerSpectrum1LoopLPT:
 
             integrand['xi_lin xi_lin'] = mq0 * xi_lin**2
 
-            integrand['xi_lin U_lin'] = K * mq1 * xi_lin * U_lin
+            integrand['xi_lin U_lin'] = -2 * K * mq1 * xi_lin * U_lin
 
             # 2nd-order shear bias terms
-            integrand['V10'] = (K * mq1 + f * k * mu * nq1) * V10
+            integrand['V10'] = -2 * (K * mq1 + f * k * mu * nq1) * V10
 
-            integrand['V12'] = K * mq1 * V12
+            integrand['V12'] = -2 * K * mq1 * V12
 
-            integrand['Upsilon'] = Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+            integrand['Upsilon'] = - Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
 
             integrand['chi'] = mq0 * chi
 
@@ -311,17 +311,17 @@ class PowerSpectrum1LoopLPT:
             integrand['W112'] = -2 * integrand['W112']
 
             # LIMD bias terms
-            integrand['U10'] = K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3
+            integrand['U10'] = -2 * (K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3)
 
-            integrand['A> U_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand['A> U_lin'] = Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
 
             integrand['xi_lin'] = mq0 * xi_lin
 
-            integrand['A> xi_lin'] = - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
+            integrand['A> xi_lin'] = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
 
-            integrand['U11'] = (K * mq1 + f * k * mu * nq1) * U11
+            integrand['U11'] = -(K * mq1 + f * k * mu * nq1) * U11
 
-            integrand['U20'] = (K * mq1 + f * k * mu * nq1) * U20
+            integrand['U20'] = -(K * mq1 + f * k * mu * nq1) * U20
 
             integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
                                 + f * k * mu * mq1_nq1 * Y10
@@ -330,14 +330,14 @@ class PowerSpectrum1LoopLPT:
 
             integrand['xi_lin xi_lin'] = mq0 * xi_lin**2
 
-            integrand['xi_lin U_lin'] = K * mq1 * xi_lin * U_lin
+            integrand['xi_lin U_lin'] = -2 * K * mq1 * xi_lin * U_lin
 
             # 2nd-order shear bias terms
-            integrand['V10'] = (K * mq1 + f * k * mu * nq1) * V10
+            integrand['V10'] = -2 * (K * mq1 + f * k * mu * nq1) * V10
 
-            integrand['V12'] = K * mq1 * V12
+            integrand['V12'] = -2 * K * mq1 * V12
 
-            integrand['Upsilon'] = Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+            integrand['Upsilon'] = - Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
 
             integrand['chi'] = mq0 * chi
 

@@ -44,36 +44,34 @@ def get_dGs_l(A, B, C, coeff):
 
             G00 = G00 + term
 
-            factor = Bs2 - n
+            factor = - n + Bs2
             dGdA = dGdA + factor * term
 
-            factor = -Bs2 + n
+            factor = n - Bs2
             dGdC = dGdC + factor * term
 
-            factor = -n + 2 * c2 * n * (1 + n) + Bs2 - 4 * Bs2 * c2 * (1 + n) + 2 * Bs2*2 * c2
+            factor = -n + 2 * n * (1 + n) * c2 + Bs2 - 4 * (1 + n) * c2 * Bs2 + 2 * c2 * Bs2**2
             dG2dA2 = dG2dA2 + factor * term
 
-            factor = n * (-3 + 2 * c2 * (1 + n)) + Bs2 * (3 - 4 * c2 * (1 + n)) + 2 * Bs2**2 * c2
+            factor = n * (-3 + 2 * (1 + n) * c2) + (3 - 4 * c2 * (1 + n)) * Bs2 + 2 * c2 * Bs2**2
             d2GdC2 = d2GdC2 + factor * term
 
-            factor = n * (-1 + c2 * (1 + n)) + Bs2 * (1 - 2 * c2 * (1 + n)) + Bs2**2 * c2
+            factor = n * (-1 + (1 + n) * c2) + (1 - 2 * (1 + n) * c2) * Bs2 + c2 * Bs2**2
             d2GdAdC = d2GdAdC + factor * term
 
-            factor = n * (1 + n) * (-3 + 2 * c2 * (2 + n)) - 6 * Bs2 * (1 + n) * (-1 + c2 * (2 + n)) \
-                    + 3 * Bs2**2 * (-1 + 2 * c2 * (2 + n)) - 2 * Bs2**3 * c2
+            factor = n * (1 + n) * (-3 + 2 * (2 + n) * c2) - 6 * (1 + n) * (-1 + (2 + n) * c2) * Bs2 \
+                    + 3 * (-1 + 2 * (2 + n) * c2) * Bs2**2 - 2 * c2 * Bs2**3
             dG3dA3 = dG3dA3 + factor * term
 
-            factor = n + c2 * n * (1 + n) * (-5 + 2 * c2 * (2 + n)) \
-                    - Bs2 * (1 + 2 * c2 * (1 + n) * (-5 + 3 * c2 * (2 + n))) \
-                    + Bs2**2 * c2 * (-5 + 6 * c2 * (2 + n)) \
-                    - 2 * Bs2**3 * c2**2
+            factor = n + n * (1 + n) * (-5 + 2 * (2 + n) * c2) * c2 \
+                    - (1 + 2 * (1 + n) * (-5 + 3 * c2 * (2 + n)) * c2) * Bs2 \
+                    + (-5 + 6 * (2 + n) * c2) * c2 * Bs2**2 - 2 * c2**2 * Bs2**3
             d3GdA2dC = d3GdA2dC + factor * term
             
-            factor = n * (1 + n) * (3 + 4 * c2 * (2 + n) * (-3 + c2 * (3 + n))) \
-                    - 2 * Bs2 * (1 + n) * (3 + 2 * c2 * (2 + n) * (-9 + 4 * c2 * (3 + n))) \
-                    + 3 * Bs2**2 * (1 + 4 * c2 * (2 + n) * (-3 + 2 * c2 * (3 + n))) \
-                    - 4 * Bs2**3 * c2 * (-3 + 4 * c2 * (3 + n)) \
-                    + 4 * Bs2**4 * c2**2
+            factor = n * (1 + n) * (3 + 4 * (2 + n) * (-3 + (3 + n) * c2) * c2) \
+                    - 2 * (1 + n) * (3 + 2 * c2 * (2 + n) * (-9 + 4 * c2 * (3 + n))) * Bs2 \
+                    + 3 * (1 + 4 * (2 + n) * (-3 + 2 * (3 + n) * c2) * c2) * Bs2**2 \
+                    - 4 * (-3 + 4 * (3 + n) * c2) * c2 * Bs2**3 + 4 * c2**2 * Bs2**4
             d4GdA4 = d4GdA4 + factor * term
 
     G00 = G00 * jnp.exp(- Bs2)
