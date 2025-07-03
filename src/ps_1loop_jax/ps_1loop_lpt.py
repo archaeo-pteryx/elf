@@ -111,7 +111,7 @@ class PowerSpectrum1LoopLPT:
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_dict(self, k, mu, corrs, f):
-
+        # matter tree-level terms
         X_lin_lt = corrs['X_lin_lt']
         Y_lin_lt = corrs['Y_lin_lt']
         X_lin_gt = corrs['X_lin_gt']
@@ -206,7 +206,7 @@ class PowerSpectrum1LoopLPT:
             integrand['A10'] = - Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k * mu)**2 * mq0 * X10 \
                                 - f * k * mu * mq1_nq1 * Y10
 
-            integrand['U_lin U_lin'] = Ksq * mq2 * U_lin**2
+            integrand['U_lin U_lin'] = - Ksq * mq2 * U_lin**2
 
             integrand['xi_lin xi_lin'] = mq0 * xi_lin**2
 
@@ -232,7 +232,7 @@ class PowerSpectrum1LoopLPT:
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_bias_dict(self, k, mu, corrs, f):
-
+        # matter tree-level terms
         X_lin_lt = corrs['X_lin_lt']
         Y_lin_lt = corrs['Y_lin_lt']
         X_lin_gt = corrs['X_lin_gt']
@@ -327,7 +327,7 @@ class PowerSpectrum1LoopLPT:
             integrand['A10'] = - Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k * mu)**2 * mq0 * X10 \
                                 - f * k * mu * mq1_nq1 * Y10
 
-            integrand['U_lin U_lin'] = Ksq * mq2 * U_lin**2
+            integrand['U_lin U_lin'] = - Ksq * mq2 * U_lin**2
 
             integrand['xi_lin xi_lin'] = mq0 * xi_lin**2
 
