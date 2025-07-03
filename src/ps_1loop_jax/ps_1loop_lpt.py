@@ -191,7 +191,7 @@ class PowerSpectrum1LoopLPT:
             integrand['W112'] = -2 * integrand['W112']
 
             # LIMD bias terms
-            integrand['U10'] = -2 * (K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3)
+            integrand['U10'] = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k * mu * nq1) * U3)
 
             integrand['A> U_lin'] = Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
 
@@ -199,12 +199,12 @@ class PowerSpectrum1LoopLPT:
 
             integrand['A> xi_lin'] = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
 
-            integrand['U11'] = -(K * mq1 + f * k * mu * nq1) * U11
+            integrand['U11'] = - (K * mq1 + f * k * mu * nq1) * U11
 
-            integrand['U20'] = -(K * mq1 + f * k * mu * nq1) * U20
+            integrand['U20'] = - (K * mq1 + f * k * mu * nq1) * U20
 
-            integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
-                                + f * k * mu * mq1_nq1 * Y10
+            integrand['A10'] = - Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k * mu)**2 * mq0 * X10 \
+                                - f * k * mu * mq1_nq1 * Y10
 
             integrand['U_lin U_lin'] = Ksq * mq2 * U_lin**2
 
@@ -320,12 +320,12 @@ class PowerSpectrum1LoopLPT:
 
             integrand['A> xi_lin'] = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
 
-            integrand['U11'] = -(K * mq1 - f * k * mu * nq1) * U11
+            integrand['U11'] = - (K * mq1 + f * k * mu * nq1) * U11
 
-            integrand['U20'] = -(K * mq1 - f * k * mu * nq1) * U20
+            integrand['U20'] = - (K * mq1 + f * k * mu * nq1) * U20
 
-            integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
-                                + f * k * mu * mq1_nq1 * Y10
+            integrand['A10'] = - Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k * mu)**2 * mq0 * X10 \
+                                - f * k * mu * mq1_nq1 * Y10
 
             integrand['U_lin U_lin'] = Ksq * mq2 * U_lin**2
 
@@ -554,8 +554,8 @@ class PowerSpectrum1LoopLPT:
             zeta = 2 * (4/45 * xi_ln[(0,0)]**2 + 8/63 * xi_ln[(2,0)]**2 + 8/35 * xi_ln[(4,0)]**2) # zeta based on s^2
         
         # Upsilon based on s^2
-        J2 = 2/15 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
-        J3 = -0.2 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
+        J2 = 2/15 * xi_ln[(1,-1)] - 1/5 * xi_ln[(3,-1)]
+        J3 = -1/5 * xi_ln[(1,-1)] - 1/5 * xi_ln[(3,-1)]
         J4 = xi_ln[(3,-1)]
         X_Upsilon = 4 * J3**2
         Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
