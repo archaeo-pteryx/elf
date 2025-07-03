@@ -165,14 +165,14 @@ class PowerSpectrum1LoopLPT:
             
             # prepare analytic solution of angular integral for each combination of mu_q & mu_nq
             mq0 = Gs[(0,0)][l]
-            mq1 = Gs[(1,0)][l]
-            mq2 = Gs[(2,0)][l]
+            mq1 = - Gs[(1,0)][l]
+            mq2 = - Gs[(2,0)][l]
             mq3 = Gs[(3,0)][l]
             mq4 = Gs[(4,0)][l]
-            nq1 = A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
-            nq2 = A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] + B_mu**2 * Gs[(0,2)][l]
-            mq1_nq1 = A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
-            mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
+            nq1 = - A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
+            nq2 = - A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] - B_mu**2 * Gs[(0,2)][l]
+            mq1_nq1 = - A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
+            mq2_nq1 = A_mu * Gs[(3,0)][l] - B_mu * Gs[(2,1)][l]
 
             # matter terms
             integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
@@ -286,14 +286,14 @@ class PowerSpectrum1LoopLPT:
 
             # prepare analytic solution of angular integral for each combination of mu_q & mu_nq
             mq0 = Gs[(0,0)][l]
-            mq1 = Gs[(1,0)][l]
-            mq2 = Gs[(2,0)][l]
+            mq1 = - Gs[(1,0)][l]
+            mq2 = - Gs[(2,0)][l]
             mq3 = Gs[(3,0)][l]
             mq4 = Gs[(4,0)][l]
-            nq1 = A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
-            nq2 = A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] + B_mu**2 * Gs[(0,2)][l]
-            mq1_nq1 = A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
-            mq2_nq1 = A_mu * Gs[(3,0)][l] + B_mu * Gs[(2,1)][l]
+            nq1 = - A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
+            nq2 = - A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] - B_mu**2 * Gs[(0,2)][l]
+            mq1_nq1 = - A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
+            mq2_nq1 = A_mu * Gs[(3,0)][l] - B_mu * Gs[(2,1)][l]
 
             # matter terms
             integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
@@ -312,7 +312,7 @@ class PowerSpectrum1LoopLPT:
             integrand['W112'] = -2 * integrand['W112']
 
             # LIMD bias terms
-            integrand['U10'] = -2 * (K * mq1 * U_lin + (K * mq1 + 2 * f * k * mu * nq1) * U3)
+            integrand['U10'] = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k * mu * nq1) * U3)
 
             integrand['A> U_lin'] = Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
 
@@ -320,9 +320,9 @@ class PowerSpectrum1LoopLPT:
 
             integrand['A> xi_lin'] = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
 
-            integrand['U11'] = -(K * mq1 + f * k * mu * nq1) * U11
+            integrand['U11'] = -(K * mq1 - f * k * mu * nq1) * U11
 
-            integrand['U20'] = -(K * mq1 + f * k * mu * nq1) * U20
+            integrand['U20'] = -(K * mq1 - f * k * mu * nq1) * U20
 
             integrand['A10'] = Ksq * (mq0 * X10 + mq2 * Y10) + f * k**2 * mu * mu**2 * (1+f) * mq0 * X10 \
                                 + f * k * mu * mq1_nq1 * Y10
@@ -365,7 +365,7 @@ class PowerSpectrum1LoopLPT:
             integrand['b2 bs'] = integrand['chi']
 
             integrand['bs bs'] = integrand['zeta']
-            
+
             integrand['ctr'] = integrand['ZA'] if self.use_Pzel else integrand['xi_lin']
 
             # Hankel transforms
@@ -557,8 +557,6 @@ class PowerSpectrum1LoopLPT:
         J2 = 2/15 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
         J3 = -0.2 * xi_ln[(1,-1)] - 0.2 * xi_ln[(3,-1)]
         J4 = xi_ln[(3,-1)]
-        
-        V = 4 * J2 * xi_ln[(2,0)]
         X_Upsilon = 4 * J3**2
         Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
 

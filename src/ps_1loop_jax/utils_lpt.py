@@ -41,6 +41,7 @@ def get_dGs_l(A, B, C, coeff):
 
             n = l + i - k
             term = coeff[k, i] * (- B)**(l + i) * s2**(n)
+            term2 = jnp.where(s2 == 0., 0., term / s2)
 
             G00 = G00 + term
 
@@ -48,16 +49,16 @@ def get_dGs_l(A, B, C, coeff):
             dGdA = dGdA + factor * term
 
             factor = n - Bs2
-            dGdC = dGdC + factor * term
+            dGdC = dGdC + factor * term2
 
             factor = -n + 2 * n * (1 + n) * c2 + Bs2 - 4 * (1 + n) * c2 * Bs2 + 2 * c2 * Bs2**2
             dG2dA2 = dG2dA2 + factor * term
 
             factor = n * (-3 + 2 * (1 + n) * c2) + (3 - 4 * c2 * (1 + n)) * Bs2 + 2 * c2 * Bs2**2
-            d2GdC2 = d2GdC2 + factor * term
+            d2GdC2 = d2GdC2 + factor * term2
 
             factor = n * (-1 + (1 + n) * c2) + (1 - 2 * (1 + n) * c2) * Bs2 + c2 * Bs2**2
-            d2GdAdC = d2GdAdC + factor * term
+            d2GdAdC = d2GdAdC + factor * term2
 
             factor = n * (1 + n) * (-3 + 2 * (2 + n) * c2) - 6 * (1 + n) * (-1 + (2 + n) * c2) * Bs2 \
                     + 3 * (-1 + 2 * (2 + n) * c2) * Bs2**2 - 2 * c2 * Bs2**3
@@ -66,7 +67,7 @@ def get_dGs_l(A, B, C, coeff):
             factor = n + n * (1 + n) * (-5 + 2 * (2 + n) * c2) * c2 \
                     - (1 + 2 * (1 + n) * (-5 + 3 * c2 * (2 + n)) * c2) * Bs2 \
                     + (-5 + 6 * (2 + n) * c2) * c2 * Bs2**2 - 2 * c2**2 * Bs2**3
-            d3GdA2dC = d3GdA2dC + factor * term
+            d3GdA2dC = d3GdA2dC + factor * term2
             
             factor = n * (1 + n) * (3 + 4 * (2 + n) * (-3 + (3 + n) * c2) * c2) \
                     - 2 * (1 + n) * (3 + 2 * c2 * (2 + n) * (-9 + 4 * c2 * (3 + n))) * Bs2 \
@@ -77,14 +78,14 @@ def get_dGs_l(A, B, C, coeff):
     G00 = G00 * jnp.exp(- Bs2)
     
     dGdA = dGdA * jnp.exp(- Bs2) * (2 * A / rho2)
-    dGdC = dGdC * jnp.exp(- Bs2) * (2 * c2 / jnp.sqrt(s2 * rho2))
+    dGdC = dGdC * jnp.exp(- Bs2) * (2 * c2 * jnp.sqrt(s2 / rho2))
     
     dG2dA2 = dG2dA2 * jnp.exp(- Bs2) * (2 / rho2)
-    d2GdC2 = d2GdC2 * jnp.exp(- Bs2) * (2 * c2 / (s2 * rho2))
-    d2GdAdC = d2GdAdC * jnp.exp(- Bs2) * (-4 * jnp.sqrt(c2 / s2) / rho2)
+    d2GdC2 = d2GdC2 * jnp.exp(- Bs2) * (2 * c2 / rho2)
+    d2GdAdC = d2GdAdC * jnp.exp(- Bs2) * (-4 * jnp.sqrt(c2 * s2) / rho2)
     
-    dG3dA3 = dG3dA3 * jnp.exp(- Bs2) * (- 4 * jnp.sqrt(c2) / rho2**1.5)
-    d3GdA2dC = d3GdA2dC * jnp.exp(- Bs2) * (4 / jnp.sqrt(s2) / rho2**1.5)
+    dG3dA3 = dG3dA3 * jnp.exp(- Bs2) * (-4 * jnp.sqrt(c2) / rho2**1.5)
+    d3GdA2dC = d3GdA2dC * jnp.exp(- Bs2) * (4 * jnp.sqrt(s2) / rho2**1.5)
 
     d4GdA4 = d4GdA4 * jnp.exp(- Bs2) * (4 / rho2**2)
 
@@ -131,17 +132,17 @@ def get_Gs(A, B, C, G00_coeffs, lmax=10):
     
     Gs[(0,0)] = G00s
 
-    Gs[(1,0)] = -(dGdAs + 0.5 * A * G00s_lm1)
+    Gs[(1,0)] = dGdAs + 0.5 * A * G00s_lm1
     Gs[(0,1)] = dGdCs + 0.5 * C * G00s_lm1
 
-    Gs[(2,0)] = -(d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * A**2 * G00s_lm2)
-    Gs[(0,2)] = -(d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * C**2 * G00s_lm2)
+    Gs[(2,0)] = d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * A**2 * G00s_lm2
+    Gs[(0,2)] = d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * C**2 * G00s_lm2
     Gs[(1,1)] = d2GdAdCs + 0.5 * C * dGdAs_lm1 + 0.5 * A * dGdCs_lm1 + 0.25 * A * C * G00s_lm2
 
     Gs[(3,0)] = d3GdA3s + 1.5 * A * d2GdA2s_lm1 + 1.5 * dGdAs_lm1 \
                 + 0.75 * A**2 * dGdAs_lm2 + 0.75 * A * G00s_lm2 + A**3 / 8 * G00s_lm3
-    Gs[(2,1)] = -(d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1 \
-                  + 0.5 * A * C * dGdAs_lm2 + 0.25 * A**2 * dGdCs_lm2 + 0.25 * C * G00s_lm2 + A**2 * C / 8 * G00s_lm3)
+    Gs[(2,1)] = d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1 \
+                + 0.5 * A * C * dGdAs_lm2 + 0.25 * A**2 * dGdCs_lm2 + 0.25 * C * G00s_lm2 + A**2 * C / 8 * G00s_lm3
 
     Gs[(4,0)] = d4GdA4s + 2 * A * d3GdA3s_lm1 + 3 * d2GdA2s_lm1 \
                 + 1.5 * A**2 * d2GdA2s_lm2 + 3 * A * dGdAs_lm2 + 0.75 * G00s_lm2 \
