@@ -373,6 +373,7 @@ class PowerSpectrum1LoopLPT:
 
         return pkmu_dict
     
+    # naive implementation that cannot be JIT-compiled.
     def get_pkmu_naive(self, k, mu, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
@@ -392,9 +393,9 @@ class PowerSpectrum1LoopLPT:
                      'bs': bias['bs'], 'b1 bs': bias['b1'] * bias['bs'], 'b2 bs': bias['b2'] * bias['bs'],
                      'bs bs': bias['bs']**2
                      }
-        pkmu = 0
-        for name in self.bias_combs:
-            pkmu = pkmu + bias_dict[name] * pkmu_dict[name]
+        
+        # collect all bias terms
+        pkmu = jnp.sum(jnp.array([bias_dict[key] * pkmu_dict[key] for key in self.bias_combs]), axis=0)
         
         # counterterm
         ctr = params['ctr']
@@ -413,7 +414,7 @@ class PowerSpectrum1LoopLPT:
 
         vmap_mu = jax.vmap(self.get_pkmu_bias_dict, in_axes=(None, 0, None, None))
         vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
-        pkmu_dict = vmap_k_mu(k, mu, corrs, params['f']) # dict[str, (nk, nmu)]
+        pkmu_dict = vmap_k_mu(k, mu, corrs, params['f'])
 
         bias = params['bias']
         bias_dict = {'1': 1, 'b1': bias['b1'], 'b1 b1': bias['b1']**2, 
@@ -421,9 +422,9 @@ class PowerSpectrum1LoopLPT:
                      'bs': bias['bs'], 'b1 bs': bias['b1'] * bias['bs'], 'b2 bs': bias['b2'] * bias['bs'],
                      'bs bs': bias['bs']**2
                      }
-        pkmu = 0
-        for name in self.bias_combs:
-            pkmu = pkmu + bias_dict[name] * pkmu_dict[name]
+        
+        # collect all bias terms
+        pkmu = jnp.sum(jnp.array([bias_dict[key] * pkmu_dict[key] for key in self.bias_combs]), axis=0)
         
         # counterterm
         ctr = params['ctr']
@@ -435,18 +436,6 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
-        k = jnp.atleast_1d(k).astype(float)
-
-        pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
-        pkmu = jnp.vstack([jnp.flip(pkmu, axis=0), pkmu])
-
-        pk0 = 0.5 * jnp.sum((self._ws * self._leg0)[:, None] * pkmu, axis=0)
-        pk2 = 2.5 * jnp.sum((self._ws * self._leg2)[:, None] * pkmu, axis=0)
-        pk4 = 4.5 * jnp.sum((self._ws * self._leg4)[:, None] * pkmu, axis=0)
-        
-        return pk0, pk2, pk4
-    
-    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
 
         pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
