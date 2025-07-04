@@ -19,7 +19,6 @@ class PowerSpectrum1LoopLPT:
 
     def __init__(self, 
                  cross=False,
-                 subtract_k0_limit=True,
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=256,
@@ -30,7 +29,6 @@ class PowerSpectrum1LoopLPT:
                  ):
         
         self.cross = cross # flag to enable the calculation of cross power spectra
-        self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
         self.lmax = lmax
         self.use_galileon = use_galileon
         self.use_Pzel = use_Pzel
@@ -375,7 +373,7 @@ class PowerSpectrum1LoopLPT:
 
         return pkmu_dict
     
-    def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
+    def get_pkmu_naive(self, k, mu, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
@@ -405,7 +403,37 @@ class PowerSpectrum1LoopLPT:
         pkmu = pkmu + pkmu_ctr
 
         return pkmu
+
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
+
+        corrs = self.get_corrs(pk_data, k_IR)
+
+        vmap_mu = jax.vmap(self.get_pkmu_bias_dict, in_axes=(None, 0, None, None))
+        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
+        pkmu_dict = vmap_k_mu(k, mu, corrs, params['f']) # dict[str, (nk, nmu)]
+
+        bias = params['bias']
+        bias_dict = {'1': 1, 'b1': bias['b1'], 'b1 b1': bias['b1']**2, 
+                     'b2': bias['b2'], 'b1 b2': bias['b1'] * bias['b2'], 'b2 b2': bias['b2']**2, 
+                     'bs': bias['bs'], 'b1 bs': bias['b1'] * bias['bs'], 'b2 bs': bias['b2'] * bias['bs'],
+                     'bs bs': bias['bs']**2
+                     }
+        pkmu = 0
+        for name in self.bias_combs:
+            pkmu = pkmu + bias_dict[name] * pkmu_dict[name]
+        
+        # counterterm
+        ctr = params['ctr']
+        ctr_mu = ctr['alpha0'] + ctr['alpha2'] * mu**2 + ctr['alpha4'] * mu**4 + ctr['alpha6'] * mu**6
+        pkmu_ctr = jnp.kron(k**2, ctr_mu).reshape(len(k), len(mu)) * pkmu_dict['ctr']
+        pkmu = pkmu + pkmu_ctr
+
+        return pkmu
     
+    @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
 
