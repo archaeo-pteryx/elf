@@ -82,12 +82,11 @@ class PowerSpectrum1LoopLPT:
         return pk_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_zel(self, k, mu, pk_data, f):
-        corrs = self.get_corrs(pk_data)
-        
+    def get_pkmu_zel_k_mu(self, k, mu, corrs, f):
+
         X = corrs['X_lin']
         Y = corrs['Y_lin']
-        
+
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
         Ksq = (k * Kfac)**2
         c = (1 + f * mu**2) / Kfac
@@ -99,16 +98,29 @@ class PowerSpectrum1LoopLPT:
 
         base = 4 * jnp.pi * self._q**3 * jnp.exp(- 0.5 * Ksq * (X + Y))
         
-        pk = 0.
+        pkmu = 0.
         for l in range(self.lmax + 1):
             integrand = base * (-2 / (k * self._q))**(l) * get_G00(A, B, C, self.G00_coeffs[l])
             _, pk_fft = self.hankel_xi2pk[l](integrand)
-            pk = pk + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
+            pkmu = pkmu + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
-        return pk
+        return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_zel(self, k, mu, pk_data, f):
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
+
+        corrs = self.get_corrs(pk_data)
+
+        vmap_mu = jax.vmap(self.get_pkmu_zel_k_mu, in_axes=(None, 0, None, None))
+        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
+        pkmu = vmap_k_mu(k, mu, corrs, f)
+
+        return pkmu
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_dict(self, k, mu, corrs, f):
+    def get_pkmu_dict_k_mu(self, k, mu, corrs, f):
         # matter tree-level terms
         X_lin_lt = corrs['X_lin_lt']
         Y_lin_lt = corrs['Y_lin_lt']
@@ -227,9 +239,22 @@ class PowerSpectrum1LoopLPT:
                 pkmu[name] = pkmu[name] + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
         return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_dict(self, k, mu, pk_data, f):
+        k = jnp.atleast_1d(k).astype(float)
+        mu = jnp.atleast_1d(mu).astype(float)
+
+        corrs = self.get_corrs(pk_data)
+
+        vmap_mu = jax.vmap(self.get_pkmu_dict_k_mu, in_axes=(None, 0, None, None))
+        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
+        pkmu_dict = vmap_k_mu(k, mu, corrs, f)
+
+        return pkmu_dict
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_bias_dict(self, k, mu, corrs, f):
+    def get_pkmu_bias_dict_k_mu(self, k, mu, corrs, f):
         # matter tree-level terms
         X_lin_lt = corrs['X_lin_lt']
         Y_lin_lt = corrs['Y_lin_lt']
@@ -383,7 +408,7 @@ class PowerSpectrum1LoopLPT:
         pkmu_dict = {name: jnp.zeros((len(k), len(mu))) for name in self.bias_combs + ['ctr']}
         for i in range(len(k)):
             for j in range(len(mu)):
-                pkmu_dict2 = self.get_pkmu_bias_dict(k[i], mu[j], corrs, params['f'])
+                pkmu_dict2 = self.get_pkmu_bias_dict_k_mu(k[i], mu[j], corrs, params['f'])
                 for name in self.bias_combs + ['ctr']:
                     pkmu_dict[name] = pkmu_dict[name].at[i, j].set(pkmu_dict2[name])
 
@@ -412,7 +437,7 @@ class PowerSpectrum1LoopLPT:
 
         corrs = self.get_corrs(pk_data, k_IR)
 
-        vmap_mu = jax.vmap(self.get_pkmu_bias_dict, in_axes=(None, 0, None, None))
+        vmap_mu = jax.vmap(self.get_pkmu_bias_dict_k_mu, in_axes=(None, 0, None, None))
         vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
         pkmu_dict = vmap_k_mu(k, mu, corrs, params['f'])
 
@@ -452,22 +477,12 @@ class PowerSpectrum1LoopLPT:
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_lin_lt = pk_lin * jnp.exp(-0.5 * (self._k / k_IR)**2)
 
+        # generalized correlation functions
         xi_ln = {(l, n): self.get_xi_ln(l, n, pk_lin) for (l, n) in self.ln_list}
         xi_ln_lt = {(l, n): self.get_xi_ln(l, n, pk_lin_lt) for (l, n) in self.ln_list}
 
-        corrs = {}
-
-        corrs['X_lin'] = 2/3 * (xi_ln[(0,-2)][0] - xi_ln[(0,-2)] - xi_ln[(2,-2)])
-        corrs['Y_lin'] = 2 * xi_ln[(2,-2)]
-
-        corrs['X_lin_lt'] = 2/3 * (xi_ln_lt[(0,-2)][0] - xi_ln_lt[(0,-2)] - xi_ln_lt[(2,-2)])
-        corrs['Y_lin_lt'] = 2 * xi_ln_lt[(2,-2)]
-
-        corrs['X_lin_gt'] = corrs['X_lin'] - corrs['X_lin_lt']
-        corrs['Y_lin_gt'] = corrs['Y_lin'] - corrs['Y_lin_lt']
-        
-        corrs['U_lin'] = - xi_ln[(1,-1)]
-        corrs['xi_lin'] = xi_ln[(0,0)]
+        # tree-level terms
+        corrs = self.get_corrs_tree(xi_ln, xi_ln_lt)
 
         # one-loop terms
         QR_dict = self.get_QR(xi_ln, pk_lin)
@@ -476,6 +491,28 @@ class PowerSpectrum1LoopLPT:
         corrs.update(corrs_matter_1loop)
         corrs.update(corrs_bias_2nd)
         
+        return corrs
+    
+    @partial(jit, static_argnames=['self'])
+    def get_corrs_tree(self, xi_ln, xi_ln_lt):
+        X_lin = 2/3 * (xi_ln[(0,-2)][0] - xi_ln[(0,-2)] - xi_ln[(2,-2)])
+        Y_lin = 2 * xi_ln[(2,-2)]
+
+        X_lin_lt = 2/3 * (xi_ln_lt[(0,-2)][0] - xi_ln_lt[(0,-2)] - xi_ln_lt[(2,-2)])
+        Y_lin_lt = 2 * xi_ln_lt[(2,-2)]
+
+        X_lin_gt = X_lin - X_lin_lt
+        Y_lin_gt = Y_lin - Y_lin_lt
+        
+        xi_lin = xi_ln[(0,0)]
+        U_lin = - xi_ln[(1,-1)]
+        
+        # make a dictionary
+        corrs = {'X_lin': X_lin, 'Y_lin': Y_lin, 
+                 'X_lin_lt': X_lin_lt, 'Y_lin_lt': Y_lin_lt,
+                 'X_lin_gt': X_lin_gt, 'Y_lin_gt': Y_lin_gt, 
+                 'xi_lin': xi_lin, 'U_lin': U_lin
+                 }
         return corrs
     
     @partial(jit, static_argnames=['self'])
@@ -509,7 +546,7 @@ class PowerSpectrum1LoopLPT:
                    'R1': R1, 'R2': R2}
         
         return QR_dict
-
+    
     @partial(jit, static_argnames=['self'])
     def get_corrs_matter_1loop(self, QR_dict):
         Q1 = QR_dict['Q1']
@@ -535,7 +572,8 @@ class PowerSpectrum1LoopLPT:
         V3 = V3 - 1/5 * T
 
         # make a dictionary
-        corrs = {'X22': X22, 'Y22': Y22, 'X13': X13, 'Y13': Y13, 'V1': V1, 'V3': V3, 'T': T}
+        corrs = {'X22': X22, 'Y22': Y22, 'X13': X13, 'Y13': Y13, 
+                 'V1': V1, 'V3': V3, 'T': T}
         return corrs
     
     @partial(jit, static_argnames=['self'])
