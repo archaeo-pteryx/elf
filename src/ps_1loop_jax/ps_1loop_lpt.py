@@ -54,17 +54,17 @@ class PowerSpectrum1LoopLPT:
         self._nfft = nfft
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._q = 1 / self._k[::-1]
-        self._initialize_loop_coeff()
+        self._initialize_lpt()
 
-    def _initialize_loop_coeff(self):
-        # store the names of 1-loop terms calculated with the FFTLog-based method
-        l_list = [i for i in range(max(4, self.lmax) + 1)]
+    def _initialize_lpt(self):
+        # (l, n) for which xi_ln's are computed
         self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
 
         # set the Hankel transforms
         self.hankel_pk2xi = {}
         self.hankel_xi2pk = {}
         nu = 1.1
+        l_list = [i for i in range(max(4, self.lmax) + 1)]
         for l in l_list:
             self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.2)
             self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.2)
@@ -373,7 +373,8 @@ class PowerSpectrum1LoopLPT:
             
             integrand['b1'] = integrand['U10'] + integrand['A> U_lin'] + integrand['A10']
 
-            integrand['b1 b1'] = integrand['xi_lin'] + integrand['A> xi_lin'] + integrand['U_lin U_lin']
+            integrand['b1 b1'] = integrand['xi_lin'] + integrand['A> xi_lin'] \
+                + integrand['U_lin U_lin'] + integrand['U11']
 
             integrand['b2'] = integrand['U_lin U_lin'] + integrand['U20']
 
