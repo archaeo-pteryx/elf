@@ -380,7 +380,7 @@ class PowerSpectrum1LoopLPT:
 
             integrand['b1 b2'] = integrand['xi_lin U_lin']
 
-            integrand['b2 b2'] = integrand['xi_lin xi_lin']
+            integrand['b2 b2'] = 0.5 * integrand['xi_lin xi_lin']
 
             integrand['bs'] = integrand['Upsilon'] + integrand['V10']
 
@@ -565,7 +565,7 @@ class PowerSpectrum1LoopLPT:
         X13 = 2/3 * (xi_ln_13[(0,-2)][0] - xi_ln_13[(0,-2)] - xi_ln_13[(2,-2)])
         Y13 = 2 * xi_ln_13[(2,-2)]
 
-        # V1, V3, T for W_[ijk}
+        # V1, V3, T for W_{ijk}
         T = self.get_xi_ln(3, -1, 3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
         V1 = self.get_xi_ln(1, -1, -3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2))
         V3 = self.get_xi_ln(1, -1, 3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2))
