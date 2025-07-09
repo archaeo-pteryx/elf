@@ -23,7 +23,7 @@ from .utils_math import legendre
 from . import ir_resum
 
 
-class PowerSpectrum1Loop:
+class PowerSpectrum1LoopEPT:
 
     def __init__(self, 
                  do_irres=True,
