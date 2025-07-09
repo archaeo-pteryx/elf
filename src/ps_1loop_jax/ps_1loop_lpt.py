@@ -189,10 +189,10 @@ class PowerSpectrum1LoopLPT:
 
             integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
-            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * mq0 * X22 + \
+            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2 * f * (1 + f) * mu**2 + f**2 * mu**2) * mq0 * X22 + \
                                     (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1 + f**2 * mu**2 * nq2) * Y22)
 
-            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2*f*(1+f)* mu**2) * mq0 * X13 + \
+            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu**2) * mq0 * X13 + \
                                     2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1) * Y13)
 
             integrand['W112'] = 0.5 * k**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu**2) * mq1 * V1 +  \
@@ -323,10 +323,10 @@ class PowerSpectrum1LoopLPT:
 
             integrand['A> A>'] = Ksq**2 / 8 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
     
-            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2*f*(1+f)*mu**2 + f**2*mu**2) * mq0 * X22 + \
+            integrand['A22'] = -0.5 * k**2 * ((Kfac**2 + 2 * f * (1 + f) * mu**2 + f**2 * mu**2) * mq0 * X22 + \
                                     (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1 + f**2 * mu**2 * nq2) * Y22)
 
-            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2*f*(1+f)* mu**2) * mq0 * X13 + \
+            integrand['A13'] = -0.5 * k**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu**2) * mq0 * X13 + \
                                     2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu * mq1_nq1) * Y13)
 
             integrand['W112'] = 0.5 * k**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu**2) * mq1 * V1 +  \
