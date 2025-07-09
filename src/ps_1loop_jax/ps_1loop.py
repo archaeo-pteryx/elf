@@ -34,6 +34,7 @@ class PowerSpectrum1Loop:
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=256,
+                 use_hankel=False,
                  ):
 
         self.do_irres = do_irres # flag to perform the IR resummation
@@ -50,6 +51,8 @@ class PowerSpectrum1Loop:
 
         self._initialize_loop_matrix()
         self._initialize_loop_coeff()
+
+        self.use_hankel = use_hankel
 
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -145,15 +148,16 @@ class PowerSpectrum1Loop:
             l_list.append(int(str_list[1]))
 
         l_list = np.sort(np.unique(l_list))
+        self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (1,-3), (1,3), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
 
         # set the Hankel transforms
         self.hankel_pk2xi = {}
         self.hankel_xi2pk = {}
-        r = 1 / self._k[::-1]
+        self._q = 1 / self._k[::-1]
         nu = 1.1
         for l in l_list:
-            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/10.), c_window_width=0.2)
-            self.hankel_xi2pk[l] = Hankel(l, nu, r, npad=(self._nfft//2), x_high=None, c_window_width=0.2)
+            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/100.), c_window_width=0.25)
+            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=None, c_window_width=0.25)
     
     @partial(jit, static_argnames=['self'])
     def get_pk_dict(self, pk_data):
@@ -379,7 +383,7 @@ class PowerSpectrum1Loop:
         return matrix_mu
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_data(self, pk_data, params):
+    def get_pkmu_1loop_pld(self, pk_data, params):
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         p_q, p_k, p_k0 = self.decomp[-0.7].get_decomp_data(pk_lin)
         
@@ -468,23 +472,35 @@ class PowerSpectrum1Loop:
         pkmu_13 = jnp.kron(k**2 * pk * pk_int, Z1Z3_UV).reshape(len(k), len(mu))
 
         return pkmu_13
+
+    @partial(jit, static_argnames=['self'])
+    def get_xi_ln(self, pk_data):
+        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+
+        xi_ln = {}
+        for (l, n) in self.ln_list:
+            _, xi = self.hankel_pk2xi[l](pk * self._k**(n + 3) / (2 * jnp.pi**2))
+            xi_ln[(l, n)] = xi
+
+        return xi_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_22_1dfft(self, pk_data, params):
+    def get_pkmu_1loop_hankel(self, pk_data, params):
+        xi_ln = self.get_xi_ln(pk_data)
+        pkmu_22 = self.get_pkmu_22_hankel(xi_ln, pk_data, params)
+        pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk_data, params)
+        return pkmu_22 + pkmu_13
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_22_hankel(self, xi_ln, pk_data, params):
         f = params['f']
         bias = params['bias']
-
-        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
 
         pkmu = jnp.zeros((len(self._k) * len(self._mu)))
         for (l, n1, n2) in self.coeff_info['22'].keys():
 
-            r, xi_l_n1 = self.hankel_pk2xi[l](pk * self._k**(n1 + 3))
-            r, xi_l_n2 = self.hankel_pk2xi[l](pk * self._k**(n2 + 3))
-            xi_l_n1 = xi_l_n1 / (2 * jnp.pi**2)
-            xi_l_n2 = xi_l_n2 / (2 * jnp.pi**2)
-            _, pk_l_n1_n2 = self.hankel_xi2pk[0](xi_l_n1 * xi_l_n2 * r**3)
-            pk_l_n1_n2 = (-1)**l * (4 * jnp.pi) * pk_l_n1_n2
+            _, pk_ln1n2 = self.hankel_xi2pk[0](4 * jnp.pi * self._q**3 * xi_ln[(l, n1)] * xi_ln[(l, n2)])
+            pk_ln1n2 = (-1)**l * pk_ln1n2
 
             coeff_all = 0.
             for coeff_info in self.coeff_info['22'][(l, n1, n2)]:
@@ -493,7 +509,7 @@ class PowerSpectrum1Loop:
                     coeff = coeff * bias[pname]**coeff_info[pname]
                 coeff_all = coeff_all + coeff
 
-            pkmu = pkmu + jnp.kron(pk_l_n1_n2, coeff_all)
+            pkmu = pkmu + jnp.kron(pk_ln1n2, coeff_all)
 
         pkmu = pkmu.reshape(len(self._k), len(self._mu))
 
@@ -504,18 +520,16 @@ class PowerSpectrum1Loop:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_13_1dfft(self, pk_data, params):
+    def get_pkmu_13_hankel(self, xi_ln, pk_data, params):
         f = params['f']
         bias = params['bias']
 
-        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         
         pkmu = jnp.zeros((len(self._k) * len(self._mu)))
         for (l, n, m) in self.coeff_info['13'].keys():
-            
-            r, xi_l_n = self.hankel_pk2xi[l](pk * self._k**(n + 3))
-            xi_l_n = xi_l_n / (2 * jnp.pi**2)
-            _, pk_l_n = self.hankel_xi2pk[l](xi_l_n * r**2)
+
+            _, pk_ln = self.hankel_xi2pk[l](self._q**2 * xi_ln[(l, n)])
 
             coeff_all = 0.
             for coeff_info in self.coeff_info['13'][(l, n, m)]:
@@ -524,7 +538,7 @@ class PowerSpectrum1Loop:
                     coeff = coeff * bias[pname]**coeff_info[pname]
                 coeff_all = coeff_all + coeff
 
-            pkmu = pkmu + jnp.kron(self._k**m * pk_l_n, coeff_all)
+            pkmu = pkmu + jnp.kron(self._k**m * pk_lin * pk_ln, coeff_all)
 
         pkmu = pkmu.reshape(len(self._k), len(self._mu))
 
@@ -535,7 +549,10 @@ class PowerSpectrum1Loop:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        pkmu_data = self.get_pkmu_data(pk_data, params)
+        if self.use_hankel:
+            pkmu_data = self.get_pkmu_1loop_hankel(pk_data, params)
+        else:
+            pkmu_data = self.get_pkmu_1loop_pld(pk_data, params)
 
         # 2D spline interpolation
         k_tile = jnp.tile(k, (len(mu), 1)).T
@@ -547,7 +564,6 @@ class PowerSpectrum1Loop:
     
     @partial(jax.jit, static_argnames=['self'])
     def get_pkmu_irres_LO_NLO(self, k, mu, pk_data, pk_nw_data, params):
-        h = params['h']
         f = params['f']
         bias1 = params['bias']
         bias2 = params['bias2'] if self.cross else params['bias']
@@ -577,7 +593,6 @@ class PowerSpectrum1Loop:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        h = params['h']
         f = params['f']
         ctr1 = params['ctr']
         ctr2 = params['ctr2'] if self.cross else params['ctr']
@@ -600,7 +615,6 @@ class PowerSpectrum1Loop:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        h = params['h']
         f = params['f']
         bias1 = params['bias']
         bias2 = params['bias2'] if self.cross else params['bias']
