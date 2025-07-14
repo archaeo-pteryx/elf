@@ -128,25 +128,26 @@ def get_Gs(A, B, C, G00_coeffs, lmax=10):
 
     d3GdA3s_lm1 = jnp.vstack([zeros, d3GdA3s[:-1]])
 
-    Gs = {}
+    Gs = jnp.zeros((5, 3, lmax+1, nq))
     
-    Gs[(0,0)] = G00s
+    Gs = Gs.at[0,0].set(G00s)
 
-    Gs[(1,0)] = dGdAs + 0.5 * A * G00s_lm1
-    Gs[(0,1)] = dGdCs + 0.5 * C * G00s_lm1
+    Gs = Gs.at[1,0].set(dGdAs + 0.5 * A * G00s_lm1)
+    Gs = Gs.at[0,1].set(dGdCs + 0.5 * C * G00s_lm1)
 
-    Gs[(2,0)] = d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * A**2 * G00s_lm2
-    Gs[(0,2)] = d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * C**2 * G00s_lm2
-    Gs[(1,1)] = d2GdAdCs + 0.5 * C * dGdAs_lm1 + 0.5 * A * dGdCs_lm1 + 0.25 * A * C * G00s_lm2
+    Gs = Gs.at[2,0].set(d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * A**2 * G00s_lm2)
+    Gs = Gs.at[0,2].set(d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * C**2 * G00s_lm2)
+    Gs = Gs.at[1,1].set(d2GdAdCs + 0.5 * C * dGdAs_lm1 + 0.5 * A * dGdCs_lm1 + 0.25 * A * C * G00s_lm2)
 
-    Gs[(3,0)] = d3GdA3s + 1.5 * A * d2GdA2s_lm1 + 1.5 * dGdAs_lm1 \
-                + 0.75 * A**2 * dGdAs_lm2 + 0.75 * A * G00s_lm2 + A**3 / 8 * G00s_lm3
-    Gs[(2,1)] = d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1 \
-                + 0.5 * A * C * dGdAs_lm2 + 0.25 * A**2 * dGdCs_lm2 + 0.25 * C * G00s_lm2 + A**2 * C / 8 * G00s_lm3
+    Gs = Gs.at[3,0].set(d3GdA3s + 1.5 * A * d2GdA2s_lm1 + 1.5 * dGdAs_lm1 \
+                        + 0.75 * A**2 * dGdAs_lm2 + 0.75 * A * G00s_lm2 + A**3 / 8 * G00s_lm3)
+    Gs = Gs.at[2,1].set(d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1 \
+                        + 0.5 * A * C * dGdAs_lm2 + 0.25 * A**2 * dGdCs_lm2 + 0.25 * C * G00s_lm2 \
+                        + A**2 * C / 8 * G00s_lm3)
 
-    Gs[(4,0)] = d4GdA4s + 2 * A * d3GdA3s_lm1 + 3 * d2GdA2s_lm1 \
-                + 1.5 * A**2 * d2GdA2s_lm2 + 3 * A * dGdAs_lm2 + 0.75 * G00s_lm2 \
-                + 0.5 * A**3 * dGdAs_lm3 + 0.75 * A**2 * G00s_lm3 \
-                + A**4 / 16 * G00s_lm4
+    Gs = Gs.at[4,0].set(d4GdA4s + 2 * A * d3GdA3s_lm1 + 3 * d2GdA2s_lm1 \
+                        + 1.5 * A**2 * d2GdA2s_lm2 + 3 * A * dGdAs_lm2 + 0.75 * G00s_lm2 \
+                        + 0.5 * A**3 * dGdAs_lm3 + 0.75 * A**2 * G00s_lm3 \
+                        + A**4 / 16 * G00s_lm4)
     
     return Gs

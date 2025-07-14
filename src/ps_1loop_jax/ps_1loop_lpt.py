@@ -174,15 +174,15 @@ class PowerSpectrum1LoopLPT:
         for l in range(self.lmax + 1):
             
             # prepare analytic solution of angular integral for each combination of mu_q & mu_nq
-            mq0 = Gs[(0,0)][l]
-            mq1 = - Gs[(1,0)][l]
-            mq2 = - Gs[(2,0)][l]
-            mq3 = Gs[(3,0)][l]
-            mq4 = Gs[(4,0)][l]
-            nq1 = - A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
-            nq2 = - A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] - B_mu**2 * Gs[(0,2)][l]
-            mq1_nq1 = - A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
-            mq2_nq1 = A_mu * Gs[(3,0)][l] - B_mu * Gs[(2,1)][l]
+            mq0 = Gs[0,0][l]
+            mq1 = - Gs[1,0][l]
+            mq2 = - Gs[2,0][l]
+            mq3 = Gs[3,0][l]
+            mq4 = Gs[4,0][l]
+            nq1 = - A_mu * Gs[1,0][l] + B_mu * Gs[0,1][l]
+            nq2 = - A_mu**2 * Gs[2,0][l] + 2 * A_mu * B_mu * Gs[1,1][l] - B_mu**2 * Gs[0,2][l]
+            mq1_nq1 = - A_mu * Gs[2,0][l] + B_mu * Gs[1,1][l]
+            mq2_nq1 = A_mu * Gs[3,0][l] - B_mu * Gs[2,1][l]
 
             # matter terms
             integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
@@ -308,15 +308,15 @@ class PowerSpectrum1LoopLPT:
         for l in range(self.lmax + 1):
 
             # prepare analytic solution of angular integral for each combination of mu_q & mu_nq
-            mq0 = Gs[(0,0)][l]
-            mq1 = - Gs[(1,0)][l]
-            mq2 = - Gs[(2,0)][l]
-            mq3 = Gs[(3,0)][l]
-            mq4 = Gs[(4,0)][l]
-            nq1 = - A_mu * Gs[(1,0)][l] + B_mu * Gs[(0,1)][l]
-            nq2 = - A_mu**2 * Gs[(2,0)][l] + 2 * A_mu * B_mu * Gs[(1,1)][l] - B_mu**2 * Gs[(0,2)][l]
-            mq1_nq1 = - A_mu * Gs[(2,0)][l] + B_mu * Gs[(1,1)][l]
-            mq2_nq1 = A_mu * Gs[(3,0)][l] - B_mu * Gs[(2,1)][l]
+            mq0 = Gs[0,0][l]
+            mq1 = - Gs[1,0][l]
+            mq2 = - Gs[2,0][l]
+            mq3 = Gs[3,0][l]
+            mq4 = Gs[4,0][l]
+            nq1 = - A_mu * Gs[1,0][l] + B_mu * Gs[0,1][l]
+            nq2 = - A_mu**2 * Gs[2,0][l] + 2 * A_mu * B_mu * Gs[1,1][l] - B_mu**2 * Gs[0,2][l]
+            mq1_nq1 = - A_mu * Gs[2,0][l] + B_mu * Gs[1,1][l]
+            mq2_nq1 = A_mu * Gs[3,0][l] - B_mu * Gs[2,1][l]
 
             # matter terms
             integrand['ZA'] = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
