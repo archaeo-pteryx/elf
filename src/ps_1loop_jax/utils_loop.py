@@ -48,7 +48,7 @@ kernel_to_decomp_dict = {
     '13_lpng3': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
 }
 
-def get_degree_info(name):
+def get_degree_dict(name):
     degree_name = re.split('=', name)[-1]
     str_list = re.split('_', degree_name)
     degree_dict = {}
@@ -56,18 +56,12 @@ def get_degree_info(name):
         string = re.split('-', s)
         key = string[0]
         val = int(string[1])
-        if (not key in ['f','mu']) and (val == 0):
-            continue
         degree_dict[key] = val
-    nf = degree_dict['f']
-    nmu = degree_dict['mu']
-    _ = degree_dict.pop('f')
-    _ = degree_dict.pop('mu')
-    return nf, nmu, degree_dict
+    return degree_dict
 
 @jit
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
-    k_extrap, pk_extrap = get_log_extrap(pk_data['k'], pk_data['pk'], kmin, kmax)
+    k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
     pk = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic'))
     return pk
 

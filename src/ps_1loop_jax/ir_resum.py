@@ -29,9 +29,9 @@ def get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=1e-7, kmax_inte
     pk_low = jnp.exp(pk_spl(jnp.log(k_low)))
     pk_high = jnp.exp(pk_spl(jnp.log(k_high)))
     pk_nw_extrap = jnp.hstack((pk_low, pk_nw * h**3, pk_high)) # in unit of (Mpc/h)^3
-
-    pk_data = {'k': k_extrap, 'pk': pk_nw_extrap}
-    return pk_data
+    
+    pk_nw_data = jnp.vstack((k_extrap, pk_nw_extrap))
+    return pk_nw_data
     
 @partial(jit, static_argnames=['n_min', 'n_max'])
 def remove_wiggle(kh, pk, n_min=140, n_max=210):
@@ -66,7 +66,7 @@ def remove_wiggle(kh, pk, n_min=140, n_max=210):
 
 @jit
 def get_pk_nw(k, pk_data):
-    pk_nw = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(pk_data['k']), jnp.log(pk_data['pk']), method='cubic'))
+    pk_nw = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(pk_data.k), jnp.log(pk_data.pk), method='cubic'))
     return pk_nw
     
 @partial(jit, static_argnames=['num'])

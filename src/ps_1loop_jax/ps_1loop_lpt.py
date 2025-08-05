@@ -66,8 +66,8 @@ class PowerSpectrum1LoopLPT:
         nu = 1.1
         l_list = [i for i in range(max(4, self.lmax) + 1)]
         for l in l_list:
-            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.2)
-            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.2)
+            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.25)
+            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.25)
         
         # load the coefficients of G00
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
@@ -83,9 +83,10 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel_k_mu(self, k, mu, corrs, f):
+        corrs_tree = corrs[0]
 
-        X = corrs['X_lin']
-        Y = corrs['Y_lin']
+        X = corrs_tree[0]
+        Y = corrs_tree[1]
 
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
         Ksq = (k * Kfac)**2
@@ -468,11 +469,6 @@ class PowerSpectrum1LoopLPT:
         xi_lin = xi_ln[0,0]
         U_lin = - xi_ln[1,-1]
 
-        # corrs = {'X_lin': X_lin, 'Y_lin': Y_lin, 
-        #          'X_lin_lt': X_lin_lt, 'Y_lin_lt': Y_lin_lt,
-        #          'X_lin_gt': X_lin_gt, 'Y_lin_gt': Y_lin_gt, 
-        #          'xi_lin': xi_lin, 'U_lin': U_lin
-        #          }
         corrs = jnp.stack([X_lin, Y_lin, X_lin_lt, Y_lin_lt,
                            X_lin_gt, Y_lin_gt, xi_lin, U_lin])
         return corrs
@@ -528,8 +524,6 @@ class PowerSpectrum1LoopLPT:
         V1 = V1 - 1/5 * T
         V3 = V3 - 1/5 * T
 
-        # corrs = {'X22': X22, 'Y22': Y22, 'X13': X13, 'Y13': Y13, 
-        #          'V1': V1, 'V3': V3, 'T': T}
         corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T])
         return corrs
     
@@ -559,24 +553,25 @@ class PowerSpectrum1LoopLPT:
             V12 = self.get_xi_ln(1, -1, 2 * Q5) # V12 based on G2
             chi = 2 * (-2/3 * xi_ln[0,0]**2 + 2/3 * xi_ln[2,0]**2) # chi based on G2
             zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
+
+            # Upsilon based on G2
+            X_Upsilon = None
+            Y_Upsilon = None
         else:
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
             V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
             chi = 2 * (2/3 * xi_ln[0,0]**2 + xi_ln[2,0]**2) # chi based on s^2
             zeta = 2 * (4/45 * xi_ln[0,0]**2 + 8/63 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on s^2
-        
-        # Upsilon based on s^2
-        J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        J4 = xi_ln[3,-1]
-        X_Upsilon = 4 * J3**2
-        Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
+
+            # Upsilon based on s^2
+            J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
+            J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
+            J4 = xi_ln[3,-1]
+            X_Upsilon = 4 * J3**2
+            Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
 
         # 3rd-order bias
 
-        # corrs = {'U3': U3, 'U11': U11, 'U20': U20, 'X10': X10, 'Y10': Y10, 
-        #          'V10': V10, 'V12': V12, 'chi': chi, 'zeta': zeta, 
-        #          'X_Upsilon': X_Upsilon, 'Y_Upsilon': Y_Upsilon
-        #          }
+
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta])
         return corrs
