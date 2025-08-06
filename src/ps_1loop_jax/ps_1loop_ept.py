@@ -102,6 +102,9 @@ class PowerSpectrum1LoopEPT:
         self.matrix = {}
         self._set_matrix(self.pk_term_names + self.pkmu_term_names_22 + self.pkmu_term_names_13)
 
+        self.matrices_22_real = jnp.array([self.matrix[name] for name in ['22_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2']])
+        self.matrices_13_real = jnp.array([self.matrix[name] for name in ['13_dd', 'F_G2']])
+
         ## create arrays of matrices and degrees for 22 and 13, according to the degrees of mu
 
         self.name_to_index_22 = {name: i for i, name in enumerate(self.pkmu_term_names_22)}
@@ -182,61 +185,59 @@ class PowerSpectrum1LoopEPT:
         l_list = np.arange(5)
         self.hankel_pk2xi = [Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(self._kmax/100.), c_window_width=0.25) for l in l_list]
         self.hankel_xi2pk = [Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=None, c_window_width=0.25) for l in l_list]
-    
+
     @partial(jit, static_argnames=['self'])
     def get_pk_terms(self, pk_data):
+        k3 = self._k**3
+        k2 = self._k**2
+
         # tree
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_terms = [pk_lin]
 
         # 1-loop matter
-        p_q, p_k, p_k0 = get_decomp_data(-0.3, self._k, pk_lin)
+        p_q1, p_k1, p_k0_1 = get_decomp_data(-0.3, self._k, pk_lin)
 
-        pk_22 = self._k**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix['22_dd'], p_q)).real)
-        if self.subtract_k0_limit:
-            pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix['22_dd'], p_k0)).real
-            pk_22 = pk_22 - pk_k0
+        def compute_pk_22(matrix):
+            pk = k3 * jnp.real(jnp.diag(p_q1.T @ matrix @ p_q1))
+            if self.subtract_k0_limit:
+                pk -= self._kmin**3 * jnp.real(p_k0_1 @ matrix @ p_k0_1)
+            return pk
 
-        pk_13 = self._k**3 * p_k * jnp.dot(self.matrix['13_dd'], p_q).real
+        def compute_pk_13(matrix):
+            return k3 * p_k1 * jnp.real(matrix @ p_q1)
+
+        pk_22 = compute_pk_22(self.matrices_22_real[0])
+        pk_13 = compute_pk_13(self.matrices_13_real[0])
         pk_lin_int = get_pk_int(pk_data)
-        pk_13 = pk_13 - (61. / 315.) * self._k**2 * p_k * pk_lin_int
+        pk_13 -= (61. / 315.) * k2 * p_k1 * pk_lin_int
 
         pk_terms += [pk_22, pk_13]
 
         # 1-loop bias
-        p_q, p_k, p_k0 = get_decomp_data(-1.6, self._k, pk_lin)
+        p_q2, p_k2, p_k0_2 = get_decomp_data(-1.6, self._k, pk_lin)
 
-        def pk_I(name):
-            pk = self._k**3 * jnp.diag(jnp.dot(p_q.T, jnp.dot(self.matrix[name], p_q)).real)
+        def compute_pk_bias(matrix):
+            pk = k3 * jnp.real(jnp.diag(p_q2.T @ matrix @ p_q2))
             if self.subtract_k0_limit:
-                pk_k0 = self._kmin**3 * jnp.dot(p_k0, jnp.dot(self.matrix[name], p_k0)).real
-                pk = pk - pk_k0
+                pk -= self._kmin**3 * jnp.real(p_k0_2 @ matrix @ p_k0_2)
             return pk
 
-        def pk_F(name):
-            return self._k**3 * p_k * jnp.dot(self.matrix[name], p_q).real
+        pk_bias_terms = jax.vmap(compute_pk_bias)(self.matrices_22_real[1:])
 
-        pk_terms += [
-            pk_I('I_d2'),
-            pk_I('I_G2'),
-            pk_I('I_d2_d2'),
-            pk_I('I_G2_G2'),
-            pk_I('I_d2_G2'),
-            pk_F('F_G2'),
-        ]
+        pk_F_bias = k3 * p_k2 * jnp.real(self.matrices_13_real[1] @ p_q2)
 
-        pk_array = jnp.stack(pk_terms, axis=0) # shape = (n_terms, nk)
-
-        return pk_array
+        pk_terms += [*pk_bias_terms, pk_F_bias]
+        return jnp.stack(pk_terms, axis=0)  # shape = (n_terms, nk)
 
     @partial(jit, static_argnames=["self"])
-    def get_pk_real(self, k: jnp.ndarray, pk_data, params):
+    def get_pk_real(self, k, pk_data, params):
         k = jnp.atleast_1d(k)
 
         bias = params.bias
         ctr = params.ctr
         stoch = params.stoch
-        
+
         coeffs = jnp.array([
             bias.b1**2,                    # tree
             bias.b1**2,                    # 22_dd
@@ -356,7 +357,6 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_22_matrix_mu(self, f, bias):
-        b1, b2, bG2 = bias[0], bias[1], bias[2]
         nmu, max_terms = self.term_indices_22.shape
 
         def compute_matrix(i, result):
@@ -367,7 +367,7 @@ class PowerSpectrum1LoopEPT:
             safe_indices = jnp.where(valid_mask, indices, 0)
 
             degrees = self.degrees_22[safe_indices]  # shape: (max_terms, 4)
-            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (b1 ** deg[1]) * (b2 ** deg[2]) * (bG2 ** deg[3]))(degrees)
+            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (bias.b1 ** deg[1]) * (bias.b2 ** deg[2]) * (bias.bG2 ** deg[3]))(degrees)
             coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # 無効要素に0をかける
 
             matrices = self.matrices_22[safe_indices]  # shape: (max_terms, nfft, nfft)
@@ -384,7 +384,6 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_13_matrix_mu(self, f, bias):
-        b1, bG2, bGamma3 = bias[0], bias[2], bias[3]
         nmu, max_terms = self.term_indices_13.shape
 
         def compute_matrix(i, result):
@@ -395,7 +394,7 @@ class PowerSpectrum1LoopEPT:
             safe_indices = jnp.where(valid_mask, indices, 0)
 
             degrees = self.degrees_13[safe_indices]  # shape: (max_terms, 4)
-            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (b1 ** deg[1]) * (bG2 ** deg[2]) * (bGamma3 ** deg[3]))(degrees)
+            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (bias.b1 ** deg[1]) * (bias.bG2 ** deg[2]) * (bias.bGamma3 ** deg[3]))(degrees)
             coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # 無効要素に0をかける
 
             matrices = self.matrices_13[safe_indices]  # shape: (max_terms, nfft)
@@ -423,12 +422,9 @@ class PowerSpectrum1LoopEPT:
         matrix_mu = self.get_pkmu_22_matrix_mu(f, bias)
 
         def pk_22_single(matrix, nmu_pow):
-            Mpq = matrix @ p_q
-            pk = self._k**3 * jnp.sum(p_q * Mpq, axis=0)  # shape: (nk,)
+            pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))  # shape: (nk,)
             if self.subtract_k0_limit:
-                Mp0 = matrix @ p_k0
-                pk_k0 = self._kmin**3 * jnp.sum(p_k0 * Mp0)
-                pk = pk - pk_k0
+                pk -= self._kmin**3 * jnp.real(p_k0 @ matrix @ p_k0)
             return jnp.outer(pk, self._mu**nmu_pow)  # shape: (nk, nmu)
         
         # vmap over mu index
@@ -441,8 +437,8 @@ class PowerSpectrum1LoopEPT:
         ### ---- 13 term ---- ###
         matrix_mu_13 = self.get_pkmu_13_matrix_mu(f, bias)  # shape: (nmu, nfft)
 
-        def pk_13_single(mat, nmu_pow):
-            pk = self._k**3 * p_k * (mat @ p_q)
+        def pk_13_single(matrix, nmu_pow):
+            pk = self._k**3 * p_k * jnp.real(matrix @ p_q)
             return jnp.outer(pk, self._mu**nmu_pow)
 
         pkmu_13 = jnp.sum(jnp.stack([
@@ -573,8 +569,7 @@ class PowerSpectrum1LoopEPT:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        c0, c2, c4 = ctr[0], ctr[1], ctr[2]
-        ctr_k2_mu = c0 + c2 * f * mu**2 + c4 * f**2 * mu**4
+        ctr_k2_mu = ctr.c0 + ctr.c2 * f * mu**2 + ctr.c4 * f**2 * mu**4
         ctr_k2_fac = - 2 * jnp.outer(k**2, ctr_k2_mu)
 
         if self.do_irres:
@@ -591,8 +586,7 @@ class PowerSpectrum1LoopEPT:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        b1, cfog = bias[0], ctr[-1]
-        ctr_k4_mu = cfog * f**4 * mu**4 * (b1 + f * mu**2)**2
+        ctr_k4_mu = ctr.cfog * f**4 * mu**4 * (bias.b1 + f * mu**2)**2
         ctr_k4_fac = - jnp.outer(k**4, ctr_k4_mu)
 
         if self.do_irres:
@@ -628,16 +622,16 @@ class PowerSpectrum1LoopEPT:
 
     # NOTE: can be removed
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_stoch(self, k, mu, stoch):
+    def get_pkmu_stoch(self, k, mu, params):
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        k_nl = stoch.k_nl
-        ndens = stoch.ndens
+        k_nl = params.k_nl
+        ndens = params.ndens
 
-        pkmu = stoch.P_shot \
-            + stoch.a0 * jnp.outer((k / k_nl)**2, mu**0) \
-            + stoch.a2 * jnp.outer((k / k_nl)**2, mu**2)
+        pkmu = params.stoch.P_shot \
+            + params.stoch.a0 * jnp.outer((k / k_nl)**2, mu**0) \
+            + params.stoch.a2 * jnp.outer((k / k_nl)**2, mu**2)
         pkmu = (1. / ndens) * pkmu
 
         return pkmu
