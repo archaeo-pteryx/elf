@@ -156,26 +156,40 @@ class PowerSpectrum1LoopEPT:
         self.pkmu_coeff_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         ln1n2_list = []
-        coeff_info_22 = []
+        coeff_info = []
         for name in self.pkmu_coeff_names_22:
             str_list = re.split('_', name)
             l, n1, n2 = int(str_list[1]), int(str_list[2]), int(str_list[3])
             ln1n2_list.append([l, n1, n2])
             coeff_file = glob.glob(os.path.dirname(__file__)+'/pt_coeff/%s.txt' % (name))[0]
-            coeff_info_22.append(jnp.array(pt_coeff.get_coeff_info(coeff_file)))
+            coeff_info.append(pt_coeff.get_coeff_info(coeff_file))
+
+        max_len = max(len(lst) for lst in coeff_info)
+        padded_coeff_info = []
+        for lst in coeff_info:
+            padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
+            padded_coeff_info.append(padded)
+        
         self.ln1n2_list = jnp.array(ln1n2_list)
-        self.coeff_info_22 = coeff_info_22
+        self.coeff_info_22 = jnp.array(padded_coeff_info)
 
         lnm_list = []
-        coeff_info_13 = []
+        coeff_info = []
         for name in self.pkmu_coeff_names_13:
             str_list = re.split('_', name)
             l, n, m = int(str_list[1]), int(str_list[2]), int(str_list[3])
             lnm_list.append([l, n, m])
             coeff_file = glob.glob(os.path.dirname(__file__)+'/pt_coeff/%s.txt' % (name))[0]
-            coeff_info_13.append(jnp.array(pt_coeff.get_coeff_info(coeff_file)))
+            coeff_info.append(pt_coeff.get_coeff_info(coeff_file))
+
+        max_len = max(len(lst) for lst in coeff_info)
+        padded_coeff_info = []
+        for lst in coeff_info:
+            padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
+            padded_coeff_info.append(padded)
+        
         self.lnm_list = jnp.array(lnm_list)
-        self.coeff_info_13 = coeff_info_13
+        self.coeff_info_13 = jnp.array(padded_coeff_info)
 
         # set the Hankel transforms
         self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [1,-3], [1,3], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
@@ -564,42 +578,124 @@ class PowerSpectrum1LoopEPT:
         pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk_data, f, bias)
 
         return pkmu_22 + pkmu_13
-    
+
     @partial(jit, static_argnames=['self'])
     def get_pkmu_22_hankel(self, xi_ln, pk_data, f, bias):
+        # --- compute pk_ln1n2: shape = (nterms, nk)
+        def compute_pk_ln1n2(term):
+            l, n1, n2 = term
+            xi1 = xi_ln[l, n1]  # shape: (nq,)
+            xi2 = xi_ln[l, n2]  # shape: (nq,)
+            xi_prod = (-1)**l * 4 * jnp.pi * xi1 * xi2
+            return self.get_pk_ln(0, 0, xi_prod)  # shape: (nk,)
 
-        pkmu = jnp.zeros((len(self._k), len(self._mu)))
+        pk_ln1n2 = jax.vmap(compute_pk_ln1n2)(self.ln1n2_list)  # shape: (nterms, nk)
 
-        for i in range(len(self.ln1n2_list)):
-            l, n1, n2 = self.ln1n2_list[i, 0], self.ln1n2_list[i, 1], self.ln1n2_list[i, 2]
+        # --- compute coeffs: shape = (nterms, nmu)
+        def compute_coeffs(entry):
+            mu_pow     = entry[:, 0]
+            f_pow      = entry[:, 1]
+            b1_pow     = entry[:, 2]
+            b2_pow     = entry[:, 3]
+            bG2_pow    = entry[:, 4]
+            coeff      = entry[:, 6]
 
-            pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * xi_ln[l, n1] * xi_ln[l, n2])
-            coeff = jnp.sum(jnp.array([res[-1] * bias.b1**res[2] * bias.b2**res[3] * bias.bG2**res[4] * f**res[1] * self._mu**res[0] for res in self.coeff_info_22[i]]), axis=0)
-            
-            pkmu = pkmu + jnp.outer(pk_ln1n2, coeff)
+            coeffs = (
+                coeff
+                * f ** f_pow
+                * bias.b1 ** b1_pow
+                * bias.b2 ** b2_pow
+                * bias.bG2 ** bG2_pow
+            )  # shape: (max_len,)
+
+            mu_terms = self._mu[None, :] ** mu_pow[:, None]  # shape: (max_len, nmu)
+            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)  # shape: (nmu,)
+
+        coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)  # shape: (nterms, nmu)
+
+        pkmu = jnp.sum(pk_ln1n2[:, :, None] * coeff_matrix[:, None, :], axis=0)  # shape: (nk, nmu)
 
         if self.subtract_k0_limit:
             pkmu_k0 = bias.b2**2 / 2. * get_pk_int2(pk_data)
             pkmu = pkmu - pkmu_k0
 
-        return pkmu
-    
+        return pkmu  # shape: (nk, nmu)
+
     @partial(jit, static_argnames=['self'])
     def get_pkmu_13_hankel(self, xi_ln, pk_data, f, bias):
-
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        
-        pkmu = jnp.zeros((len(self._k), len(self._mu)))
 
-        for i in range(len(self.lnm_list)):
-            l, n, m = self.lnm_list[i, 0], self.lnm_list[i, 1], self.lnm_list[i, 2]
+        # --- compute pk_ln: shape = (nterms, nk)
+        def get_pk_ln_term(term):
+            l, n, m = term
+            pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])  # shape: (nk,)
+            return (self._k ** m) * pk_lin * pk_ln
 
-            pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])
-            coeff = jnp.sum(jnp.array([res[-1] * bias.b1**res[2] * bias.b2**res[3] * bias.bG2**res[4] * bias.bGamma3**res[5] * f**res[1] * self._mu**res[0] for res in self.coeff_info_13[i]]), axis=0)
+        pk_lnm = jax.vmap(get_pk_ln_term)(self.lnm_list)  # shape: (nterms, nk)
 
-            pkmu = pkmu + jnp.outer(self._k**m * pk_lin * pk_ln, coeff)
+        # --- compute coeffs: shape = (nterms, nmu)
+        def compute_coeffs(entry):
+            mu_pow = entry[:, 0]
+            f_pow = entry[:, 1]
+            b1_pow = entry[:, 2]
+            b2_pow = entry[:, 3]
+            bG2_pow = entry[:, 4]
+            bGamma3_pow = entry[:, 5]
+            coeff = entry[:, 6]
+
+            coeffs = (
+                coeff
+                * (f ** f_pow)
+                * (bias.b1 ** b1_pow)
+                * (bias.b2 ** b2_pow)
+                * (bias.bG2 ** bG2_pow)
+                * (bias.bGamma3 ** bGamma3_pow)
+            )  # shape: (max_len,)
+
+            mu_terms = self._mu[None, :] ** mu_pow[:, None]  # shape: (max_len, nmu)
+            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)  # shape: (nmu,)
+
+        coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_13)  # shape: (nterms, nmu)
+
+        pkmu = jnp.sum(pk_lnm[:, :, None] * coeff_matrix[:, None, :], axis=0)  # shape: (nk, nmu)
 
         return pkmu
+    
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu_22_hankel(self, xi_ln, pk_data, f, bias):
+
+    #     pkmu = jnp.zeros((len(self._k), len(self._mu)))
+
+    #     for i in range(len(self.ln1n2_list)):
+    #         l, n1, n2 = self.ln1n2_list[i, 0], self.ln1n2_list[i, 1], self.ln1n2_list[i, 2]
+
+    #         pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * xi_ln[l, n1] * xi_ln[l, n2])
+    #         coeff = jnp.sum(jnp.array([res[-1] * bias.b1**res[2] * bias.b2**res[3] * bias.bG2**res[4] * f**res[1] * self._mu**res[0] for res in self.coeff_info_22[i]]), axis=0)
+            
+    #         pkmu = pkmu + jnp.outer(pk_ln1n2, coeff)
+
+    #     if self.subtract_k0_limit:
+    #         pkmu_k0 = bias.b2**2 / 2. * get_pk_int2(pk_data)
+    #         pkmu = pkmu - pkmu_k0
+
+    #     return pkmu
+    
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu_13_hankel(self, xi_ln, pk_data, f, bias):
+
+    #     pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        
+    #     pkmu = jnp.zeros((len(self._k), len(self._mu)))
+
+    #     for i in range(len(self.lnm_list)):
+    #         l, n, m = self.lnm_list[i, 0], self.lnm_list[i, 1], self.lnm_list[i, 2]
+
+    #         pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])
+    #         coeff = jnp.sum(jnp.array([res[-1] * bias.b1**res[2] * bias.b2**res[3] * bias.bG2**res[4] * bias.bGamma3**res[5] * f**res[1] * self._mu**res[0] for res in self.coeff_info_13[i]]), axis=0)
+
+    #         pkmu = pkmu + jnp.outer(self._k**m * pk_lin * pk_ln, coeff)
+
+    #     return pkmu
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop(self, k, mu, pk_data, f, bias):
