@@ -177,16 +177,16 @@ class PowerSpectrum1LoopEPT:
         self.lnm_list = jnp.array(lnm_list)
         self.coeff_info_13 = coeff_info_13
 
-        self._set_hankel()
-
-    def _set_hankel(self):
-        
-        self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [1,-3], [1,3], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
-
         # set the Hankel transforms
+        self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [1,-3], [1,3], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
+        lmax = jnp.max(self.ln_list[:, 0])
+        self._set_hankel(lmax)
+
+    def _set_hankel(self, lmax):
+        l_list = np.arange(lmax + 1)
+
         self._q = 1 / self._k[::-1]
         self._nu_hankel = 1.1
-        l_list = np.arange(5)
 
         self._npad = self._nfft // 2
         self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
@@ -539,7 +539,7 @@ class PowerSpectrum1LoopEPT:
     @partial(jit, static_argnames=['self'])
     def get_pk_ln(self, l, n, array):
         fx = array * self._q**(n + 3)
-        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
         return pk_ln
     
     @partial(jit, static_argnames=['self'])
@@ -556,7 +556,7 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_hankel(self, pk_data, f, bias):
-        
+
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         xi_ln = self.get_xi_ln_array(pk_lin)
         
