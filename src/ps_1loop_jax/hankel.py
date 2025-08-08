@@ -7,55 +7,28 @@ from scipy.special import gamma
 from functools import partial
 
 
-class Hankel:
+@partial(jit, static_argnames=['npad'])
+def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
+    # zero padding
+    fx = jnp.hstack((jnp.zeros(npad), fx, jnp.zeros(npad)))
 
-    def __init__(self, l, nu, x, npad=0, x_high=None, c_window_width=0.):
-        self.npad = npad
-        self.x_high = x_high
-        
-        # extrapolate x for zero padding
-        x = get_log_extrap(x, npad, npad)
+    # damp high-x end
+    fx = fx * jnp.exp(-(x / x_high)**2)
 
-        nfft = len(x)
-        dlnx = jnp.log(x[1] / x[0])
-        eta_m = 2 * jnp.pi / (nfft * dlnx) * jnp.arange(nfft//2+1)
-        g_l = get_g_l(l, nu + 1j * eta_m)
-        # y = (l + 1.) / x[::-1]
-        y = 1 / x[::-1]
-        
-        self.u_m = (x[0] * y[0])**(-1j * eta_m) * g_l
-        self.l = l
-        self.nu = nu
-        self.x = x
-        self.y = y
+    # FFT on biased data
+    c_m = jnp.fft.rfft(fx * x**(-nu))
 
-        # smoothing window in Fourier space
-        self.w_m = c_window(jnp.arange(nfft//2+1), int(c_window_width * (nfft//2+1)))
+    # apply the smoothing window on Fourier components
+    c_m = c_m * w_m
 
-    @partial(jit, static_argnames=['self'])
-    def __call__(self, fx):
-        # zero padding
-        fx = jnp.hstack((jnp.zeros(self.npad), fx, jnp.zeros(self.npad)))
+    # Inverse FFT to get the Hankel transform
+    res = jnp.fft.irfft(jnp.conj(c_m * u_m))
+    res = res * y**(-nu) * jnp.sqrt(jnp.pi) / 4.
 
-        # damp high-x end
-        if self.x_high != None:
-            fx = fx * jnp.exp(-(self.x / self.x_high)**2)
-
-        # FFT on biased data
-        c_m = jnp.fft.rfft(fx * self.x**(-self.nu))
-
-        # apply the smoothing window on Fourier components
-        c_m = c_m * self.w_m
-
-        # Inverse FFT to get the Hankel transform
-        res = jnp.fft.irfft(jnp.conj(c_m * self.u_m))
-        res = res * self.y**(-self.nu) * jnp.sqrt(jnp.pi) / 4.
-
-        # unpad
-        y = self.y[self.npad:len(fx)-self.npad]
-        res = res[self.npad:len(fx)-self.npad]
-        
-        return y, res
+    # unpad
+    res = res[npad:len(fx)-npad]
+    
+    return res
 
 def get_g_l(l, z):
     return 2.**z * get_g_base(l+0.5, z-1.5)
