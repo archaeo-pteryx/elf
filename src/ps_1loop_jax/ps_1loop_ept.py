@@ -439,7 +439,7 @@ class PowerSpectrum1LoopEPT:
         pkmu = jnp.zeros((nk, nmu))
 
         ### ---- 22 term ---- ###
-        matrix_mu = self.get_pkmu_22_matrix_mu(f, bias)
+        matrix_mu = self.get_pkmu_22_matrix_mu(f, bias)  # shape: (nmu, nfft, nfft)
 
         def pk_22_single(matrix, nmu_pow):
             pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))  # shape: (nk,)
@@ -448,9 +448,7 @@ class PowerSpectrum1LoopEPT:
             return jnp.outer(pk, self._mu**nmu_pow)  # shape: (nk, nmu)
         
         # vmap over mu index
-        pkmu_22 = jnp.sum(jnp.stack([
-            pk_22_single(matrix_mu[i], i) for i in range(nmu)
-        ]), axis=0)
+        pkmu_22 = jnp.sum(jnp.stack([pk_22_single(matrix_mu[i], 2 * i) for i in range(nmu)]), axis=0)
 
         pkmu = pkmu + pkmu_22
         
@@ -461,9 +459,7 @@ class PowerSpectrum1LoopEPT:
             pk = self._k**3 * p_k * jnp.real(matrix @ p_q)
             return jnp.outer(pk, self._mu**nmu_pow)
 
-        pkmu_13 = jnp.sum(jnp.stack([
-            pk_13_single(matrix_mu_13[i], i) for i in range(nmu)
-        ]), axis=0)
+        pkmu_13 = jnp.sum(jnp.stack([pk_13_single(matrix_mu_13[i], 2 * i) for i in range(nmu)]), axis=0)
 
         pkmu = pkmu + pkmu_13
 
