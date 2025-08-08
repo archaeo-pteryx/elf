@@ -430,6 +430,50 @@ class PowerSpectrum1LoopEPT:
         return result
     
     @partial(jit, static_argnames=['self'])
+    def get_pkmu_22_data(self, pk_data, f, bias):
+
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        p_q, p_k, p_k0 = get_decomp_data(-0.7, self._k, pk_lin)
+        
+        nk, nmu = len(self._k), len(self._mu)
+
+        ### ---- 22 term ---- ###
+        matrix_mu = self.get_pkmu_22_matrix_mu(f, bias)  # shape: (nmu, nfft, nfft)
+
+        def pk_22_single(matrix, nmu_pow):
+            pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))  # shape: (nk,)
+            if self.subtract_k0_limit:
+                pk -= self._kmin**3 * jnp.real(p_k0 @ matrix @ p_k0)
+            return jnp.outer(pk, self._mu**nmu_pow)  # shape: (nk, nmu)
+        
+        # vmap over mu index
+        pkmu_22 = jnp.sum(jnp.stack([pk_22_single(matrix_mu[i], 2 * i) for i in range(nmu)]), axis=0)
+
+        return pkmu_22
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_13_data(self, pk_data, f, bias):
+
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        p_q, p_k, p_k0 = get_decomp_data(-0.7, self._k, pk_lin)
+        
+        nk, nmu = len(self._k), len(self._mu)
+
+        ### ---- 13 term ---- ###
+        matrix_mu_13 = self.get_pkmu_13_matrix_mu(f, bias)  # shape: (nmu, nfft)
+
+        def pk_13_single(matrix, nmu_pow):
+            pk = self._k**3 * p_k * jnp.real(matrix @ p_q)
+            return jnp.outer(pk, self._mu**nmu_pow)
+
+        pkmu_13 = jnp.sum(jnp.stack([pk_13_single(matrix_mu_13[i], 2 * i) for i in range(nmu)]), axis=0)
+
+        ### ---- 13 UV limit ---- ###
+        pkmu_13 = pkmu_13 + self.get_pkmu_13_UV(self._k, self._mu, pk_data, f, bias)
+
+        return pkmu_13
+    
+    @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_pld(self, pk_data, f, bias):
 
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
