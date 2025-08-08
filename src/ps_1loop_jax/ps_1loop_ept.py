@@ -355,6 +355,30 @@ class PowerSpectrum1LoopEPT:
 
         return pkmu
     
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu_22_matrix_mu(self, f, bias):
+    #     nmu, max_terms = self.term_indices_22.shape
+
+    #     result = jnp.zeros((nmu, self._nfft, self._nfft), dtype=jnp.complex128)
+
+    #     for i in range(len(self.term_indices_22)):
+
+    #         indices = self.term_indices_22[i]  # shape: (max_terms,)
+    #         valid_mask = indices >= 0  # shape: (max_terms,), bool
+    #         safe_indices = jnp.where(valid_mask, indices, 0)
+
+    #         degrees = self.degrees_22[safe_indices]  # shape: (max_terms, 4)
+
+    #         coeffs = jnp.array([(f ** deg[1]) * (bias.b1 ** deg[2]) * (bias.b2 ** deg[3]) * (bias.bG2 ** deg[4]) for deg in degrees])
+    #         coeffs = coeffs * valid_mask.astype(coeffs.dtype)
+
+    #         matrices = self.matrices_22[safe_indices]  # shape: (max_terms, nfft, nfft)
+    #         matrix = jnp.tensordot(coeffs, matrices, axes=1)  # shape: (nfft, nfft)
+
+    #         result = result.at[i].set(matrix)
+
+    #     return result
+    
     @partial(jit, static_argnames=['self'])
     def get_pkmu_22_matrix_mu(self, f, bias):
         nmu, max_terms = self.term_indices_22.shape
@@ -362,13 +386,11 @@ class PowerSpectrum1LoopEPT:
         def compute_matrix(i, result):
             indices = self.term_indices_22[i]  # shape: (max_terms,)
             valid_mask = indices >= 0  # shape: (max_terms,), bool
-
-            # 無効な -1 を 0 に置き換えておく（あとで mask で消すので OK）
             safe_indices = jnp.where(valid_mask, indices, 0)
 
             degrees = self.degrees_22[safe_indices]  # shape: (max_terms, 4)
-            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (bias.b1 ** deg[1]) * (bias.b2 ** deg[2]) * (bias.bG2 ** deg[3]))(degrees)
-            coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # 無効要素に0をかける
+            coeffs = jax.vmap(lambda deg: (f ** deg[1]) * (bias.b1 ** deg[2]) * (bias.b2 ** deg[3]) * (bias.bG2 ** deg[4]))(degrees)
+            coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # multiply zero on invalid elements
 
             matrices = self.matrices_22[safe_indices]  # shape: (max_terms, nfft, nfft)
             matrix = jnp.tensordot(coeffs, matrices, axes=1)  # shape: (nfft, nfft)
@@ -389,13 +411,11 @@ class PowerSpectrum1LoopEPT:
         def compute_matrix(i, result):
             indices = self.term_indices_13[i]  # shape: (max_terms,)
             valid_mask = indices >= 0  # shape: (max_terms,), bool
-
-            # 無効な -1 を 0 に置き換えておく（あとで mask で消すので OK）
             safe_indices = jnp.where(valid_mask, indices, 0)
 
             degrees = self.degrees_13[safe_indices]  # shape: (max_terms, 4)
-            coeffs = jax.vmap(lambda deg: (f ** deg[0]) * (bias.b1 ** deg[1]) * (bias.bG2 ** deg[2]) * (bias.bGamma3 ** deg[3]))(degrees)
-            coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # 無効要素に0をかける
+            coeffs = jax.vmap(lambda deg: (f ** deg[1]) * (bias.b1 ** deg[2]) * (bias.bG2 ** deg[3]) * (bias.bGamma3 ** deg[4]))(degrees)
+            coeffs = coeffs * valid_mask.astype(coeffs.dtype)  # multiply zero on invalid elements
 
             matrices = self.matrices_13[safe_indices]  # shape: (max_terms, nfft)
             matrix = jnp.tensordot(coeffs, matrices, axes=1)  # shape: (nfft)
