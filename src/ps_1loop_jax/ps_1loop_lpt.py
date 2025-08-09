@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import interpax
 
-from .hankel import Hankel
+from . import hankel
 
 from .utils_loop import get_pk, get_pk_int
 from .utils_lpt import get_G00, get_Gs
@@ -57,29 +57,80 @@ class PowerSpectrum1LoopLPT:
         self._initialize_lpt()
 
     def _initialize_lpt(self):
-        # (l, n) for which xi_ln's are computed
-        self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
-
-        # set the Hankel transforms
-        self.hankel_pk2xi = {}
-        self.hankel_xi2pk = {}
-        nu = 1.1
-        l_list = [i for i in range(max(4, self.lmax) + 1)]
-        for l in l_list:
-            self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.25)
-            self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.25)
-        
         # load the coefficients of G00
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
         self.G00_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
 
+        # (l, n) for which xi_ln's are computed
+        self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
+        lmax = max(jnp.max(self.ln_list[:, 0]), self.lmax)
+        self._set_hankel(lmax)
+
+        # # set the Hankel transforms
+        # self.hankel_pk2xi = {}
+        # self.hankel_xi2pk = {}
+        # nu = 1.1
+        # l_list = [i for i in range(max(4, self.lmax) + 1)]
+        # for l in l_list:
+        #     self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.25)
+        #     self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.25)
+
+    def _set_hankel(self, lmax):
+        l_list = np.arange(lmax + 1)
+
+        self._q = 1 / self._k[::-1]
+        self._nu_hankel = 1.1
+
+        self._npad = self._nfft // 2
+        self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
+        self._y_k = 1 / self._k_padded[::-1]
+        self._q_padded = hankel.get_log_extrap(self._q, self._npad, self._npad)
+        self._y_q = 1 / self._q_padded[::-1]
+
+        nfft_k = len(self._k_padded)
+        dlnx = jnp.log(self._k_padded[1] / self._k_padded[0])
+        eta_m_k = 2 * jnp.pi / (nfft_k * dlnx) * jnp.arange(nfft_k//2+1)
+        
+        nfft_q = len(self._q_padded)
+        dlnx = jnp.log(self._q_padded[1] / self._q_padded[0])
+        eta_m_q = 2 * jnp.pi / (nfft_q * dlnx) * jnp.arange(nfft_q//2+1)
+        
+        g_l_k = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_k) for l in l_list])
+        self._u_m_k = jnp.array([(self._k_padded[0] * self._y_k[0])**(-1j * eta_m_k) * g_l_k[l] for l in l_list])
+
+        g_l_q = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_q) for l in l_list])
+        self._u_m_q = jnp.array([(self._q_padded[0] * self._y_q[0])**(-1j * eta_m_q) * g_l_q[l] for l in l_list])
+
+        self._k_high = self._kmax / 100
+        self._q_high = 1e10
+        
+        c_window_width = 0.25
+        self._w_m_k = hankel.c_window(jnp.arange(nfft_k//2+1), int(c_window_width * (nfft_k//2+1)))
+        self._w_m_q = hankel.c_window(jnp.arange(nfft_q//2+1), int(c_window_width * (nfft_q//2+1)))
+    
+    @partial(jit, static_argnames=['self'])
     def get_xi_ln(self, l, n, array):
-        _, xi_ln = self.hankel_pk2xi[l](array * self._k**(n+3) / (2 * jnp.pi**2))
+        fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
+        xi_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._y_k, self._u_m_k[l], self._npad, self._k_high, self._w_m_k)
         return xi_ln
     
+    @partial(jit, static_argnames=['self'])
     def get_pk_ln(self, l, n, array):
-        _, pk_ln = self.hankel_xi2pk[l](array * self._q**(n+3))
+        fx = array * self._q**(n + 3)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
         return pk_ln
+    
+    @partial(jit, static_argnames=['self'])
+    def get_xi_ln_array(self, array):
+        def compute_ln(ln):
+            l, n = ln
+            return self.get_xi_ln(l, n, array)
+        xis = jax.vmap(compute_ln)(self.ln_list)
+        xi_ln = jnp.zeros((5, 5, len(self._q)))
+        ls = self.ln_list[:, 0]
+        ns = self.ln_list[:, 1]
+        xi_ln = xi_ln.at[ls, ns].set(xis)
+        return xi_ln
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel_k_mu(self, k, mu, corrs, f):
@@ -102,7 +153,7 @@ class PowerSpectrum1LoopLPT:
         pkmu = 0.
         for l in range(self.lmax + 1):
             integrand = base * (-2 / (k * self._q))**(l) * get_G00(A, B, C, self.G00_coeffs[l])
-            _, pk_fft = self.hankel_xi2pk[l](integrand)
+            pk_fft = self.get_pk_ln(l, -3, integrand)
             pkmu = pkmu + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
         return pkmu
@@ -240,7 +291,7 @@ class PowerSpectrum1LoopLPT:
 
             # Hankel transforms
             for name in self.term_names:
-                _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrand[name])
+                pk_fft = self.get_pk_ln(l, -3, base * (-2 / (k * self._q))**(l) * integrand[name])
                 pkmu[name] = pkmu[name] + interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft)
 
         return pkmu
@@ -388,7 +439,8 @@ class PowerSpectrum1LoopLPT:
 
             # Hankel transforms
             for i in range(ncomp):
-                _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrands[i])
+                # _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrands[i])
+                pk_fft = self.get_pk_ln(l, -3, base * (-2 / (k * self._q))**(l) * integrand[i])
                 pkmu_terms = pkmu_terms.at[i].add(interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft))
 
         return pkmu_terms
@@ -439,11 +491,8 @@ class PowerSpectrum1LoopLPT:
         pk_lin_lt = pk_lin * jnp.exp(-0.5 * (self._k / k_IR)**2)
 
         # generalized correlation functions
-        xi_ln = jnp.zeros((5, 5, len(self._k)))
-        xi_ln_lt = jnp.zeros((5, 5, len(self._k)))
-        for (l, n) in self.ln_list:
-            xi_ln = xi_ln.at[l, n].set(self.get_xi_ln(l, n, pk_lin))
-            xi_ln_lt = xi_ln_lt.at[l, n].set(self.get_xi_ln(l, n, pk_lin_lt))
+        xi_ln = self.get_xi_ln_array(pk_lin)
+        xi_ln_lt = self.get_xi_ln_array(pk_lin_lt)
         
         # tree-level terms
         corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt)
