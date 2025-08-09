@@ -11,7 +11,7 @@ from .utils_math import spherical_jn
 
 @jit
 def get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=1e-7, kmax_interp=1e7):
-    k_extrap, pk_extrap = get_log_extrap(pk_data['k'], pk_data['pk'], kmin_interp, kmax_interp)
+    k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin_interp, kmax_interp)
     pk_spl = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(pk_extrap))
 
     kh = jnp.linspace(khmin, khmax, 2**16) # in unit of 1/Mpc
@@ -24,13 +24,13 @@ def get_pk_nw_data(pk_data, h, khmin=7e-5, khmax=7., kmin_interp=1e-7, kmax_inte
     # extrapolation
     k_low = jnp.geomspace(kmin_interp, kh[0] / h, 100)[:-1]
     k_high = jnp.geomspace(kh[-1] / h, kmax_interp, 100)[1:]
-    k_extrap = jnp.hstack((k_low, kh / h, k_high)) # in unit of h/Mpc
+    k_extrap = jnp.concatenate([k_low, kh / h, k_high], axis=0) # in unit of h/Mpc
 
     pk_low = jnp.exp(pk_spl(jnp.log(k_low)))
     pk_high = jnp.exp(pk_spl(jnp.log(k_high)))
-    pk_nw_extrap = jnp.hstack((pk_low, pk_nw * h**3, pk_high)) # in unit of (Mpc/h)^3
+    pk_nw_extrap = jnp.concatenate([pk_low, pk_nw * h**3, pk_high], axis=0) # in unit of (Mpc/h)^3
     
-    pk_nw_data = jnp.vstack((k_extrap, pk_nw_extrap))
+    pk_nw_data = jnp.stack([k_extrap, pk_nw_extrap], axis=0)
     return pk_nw_data
     
 @partial(jit, static_argnames=['n_min', 'n_max'])
@@ -40,9 +40,9 @@ def remove_wiggle(kh, pk, n_min=140, n_max=210):
     signs = (-1)**jnp.arange(0, len(pk))
     harms = jax.scipy.fft.dct(jnp.log(kh * pk) * signs)[::-1]
 
-    n = jnp.arange(1,len(harms)+1)
-    i_odd = jnp.arange(0,len(harms)-1,2)
-    i_even = jnp.arange(1,len(harms),2)
+    n = jnp.arange(1, len(harms)+1)
+    i_odd = jnp.arange(0, len(harms)-1, 2)
+    i_even = jnp.arange(1, len(harms), 2)
 
     n_odd = n[i_odd]
     n_even = n[i_even]
@@ -50,15 +50,16 @@ def remove_wiggle(kh, pk, n_min=140, n_max=210):
     harms_even = harms[i_even]
 
     n = n[:int(len(harms)/2)]
-    n_sd = jnp.hstack((n[:n_min], n[n_max:]))
-    harms_odd_sd = jnp.hstack((harms_odd[:n_min], harms_odd[n_max:]))
-    harms_even_sd = jnp.hstack((harms_even[:n_min], harms_even[n_max:]))
+    n_sd = jnp.concatenate([n[:n_min], n[n_max:]], axis=0)
+    harms_odd_sd = jnp.concatenate([harms_odd[:n_min], harms_odd[n_max:]], axis=0)
+    harms_even_sd = jnp.concatenate([harms_even[:n_min], harms_even[n_max:]], axis=0)
 
+    # spline interpolation
     harms_odd_s = interpax.interp1d(n, n_sd, harms_odd_sd, method='cubic')
     harms_even_s = interpax.interp1d(n, n_sd, harms_even_sd, method='cubic')
 
-    i_rec = jnp.argsort(jnp.hstack((n_odd, n_even)))
-    harms_s = jnp.hstack((harms_odd_s, harms_even_s))[i_rec]
+    i_rec = jnp.argsort(jnp.concatenate([n_odd, n_even], axis=0))
+    harms_s = jnp.concatenate([harms_odd_s, harms_even_s], axis=0)[i_rec]
 
     pk_nw = jnp.exp(jax.scipy.fft.idct(harms_s[::-1]) * signs) / kh # in unit of Mpc^3
 
@@ -66,8 +67,8 @@ def remove_wiggle(kh, pk, n_min=140, n_max=210):
 
 @jit
 def get_pk_nw(k, pk_data):
-    pk_nw = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(pk_data.k), jnp.log(pk_data.pk), method='cubic'))
-    return pk_nw
+    return jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(pk_data[0]), jnp.log(pk_data[1]), method='cubic'))
+    # return jnp.exp(jnp.interp(jnp.log(k), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     
 @partial(jit, static_argnames=['num'])
 def get_Sigma2(pk_data, rbao, ks, kmin=1e-4, num=1000):

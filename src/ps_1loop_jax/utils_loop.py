@@ -63,6 +63,7 @@ def get_degree_dict(name):
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
     k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
     pk = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic'))
+    # pk = jnp.exp(jnp.interp(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap)))
     return pk
 
 @partial(jit, static_argnames=['num'])
