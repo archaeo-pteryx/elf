@@ -1,85 +1,75 @@
 from dataclasses import dataclass
-from typing import Any
-from jax import numpy as jnp
-from jax import tree_util
+import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-def to_jax_array(x: Any):
-    return x if isinstance(x, jnp.ndarray) else jnp.asarray(x)
+# ── indexing
+F, H                 = range(2)
+K_NL, NDENS          = range(2)
 
 @register_pytree_node_class
 @dataclass(frozen=True)
-class BiasParams:
-    b1: Any
-    b2: Any
-    bG2: Any
-    bGamma3: Any
+class EPTParams:
+    scalars: jnp.ndarray  # shape (2,)   [f, h]
+    bias:    jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
+    ctr:     jnp.ndarray  # shape (4,)   [c0, c2, c4, cfog]
+    stoch:   jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
+    nl:      jnp.ndarray  # shape (2,)   [k_nl, ndens]
 
     def tree_flatten(self):
-        children = tuple(to_jax_array(getattr(self, field)) for field in self.__dataclass_fields__)
-        aux_data = tuple(self.__dataclass_fields__)
-        return children, aux_data
+        return (self.scalars, self.bias, self.ctr, self.stoch, self.nl), None
 
     @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(**{field: val for field, val in zip(aux_data, children)})
+    def tree_unflatten(cls, aux, children):
+        scalars, bias, ctr, stoch, nl = children
+        return cls(scalars, bias, ctr, stoch, nl)
+    
+    @property
+    def f(self):     return self.scalars[F]
+    @property
+    def h(self):     return self.scalars[H]
+    @property
+    def k_nl(self):  return self.nl[K_NL]
+    @property
+    def ndens(self): return self.nl[NDENS]
+
+def make_ept_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=jnp.float32):
+    scalars = jnp.array([f, h], dtype)
+    bias    = jnp.asarray(bias,  dtype)
+    ctr     = jnp.asarray(ctr,   dtype)
+    stoch   = jnp.asarray(stoch, dtype)
+    nl      = jnp.asarray([k_nl, ndens], dtype)
+    assert scalars.shape == (2,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
+    return EPTParams(scalars, bias, ctr, stoch, nl)
 
 @register_pytree_node_class
 @dataclass(frozen=True)
-class CtrParams:
-    c0: Any
-    c2: Any
-    c4: Any
-    cfog: Any
+class LPTParams:
+    scalars: jnp.ndarray  # shape (2,)   [f, h]
+    bias:    jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
+    ctr:     jnp.ndarray  # shape (4,)   [a0, a2, a4, a6]
+    stoch:   jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
+    nl:      jnp.ndarray  # shape (2,)   [k_nl, ndens]
 
     def tree_flatten(self):
-        children = tuple(to_jax_array(getattr(self, field)) for field in self.__dataclass_fields__)
-        aux_data = tuple(self.__dataclass_fields__)
-        return children, aux_data
+        return (self.scalars, self.bias, self.ctr, self.stoch, self.nl), None
 
     @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(**{field: val for field, val in zip(aux_data, children)})
+    def tree_unflatten(cls, aux, children):
+        scalars, bias, ctr, stoch, nl = children
+        return cls(scalars, bias, ctr, stoch, nl)
+    
+    @property
+    def f(self):     return self.scalars[F]
+    @property
+    def k_nl(self):  return self.nl[K_NL]
+    @property
+    def ndens(self): return self.nl[NDENS]
 
-@register_pytree_node_class
-@dataclass(frozen=True)
-class StochParams:
-    P_shot: Any
-    a0: Any
-    a2: Any
-
-    def tree_flatten(self):
-        children = tuple(to_jax_array(getattr(self, field)) for field in self.__dataclass_fields__)
-        aux_data = tuple(self.__dataclass_fields__)
-        return children, aux_data
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(**{field: val for field, val in zip(aux_data, children)})
-
-@register_pytree_node_class
-@dataclass(frozen=True)
-class Params:
-    f: Any
-    h: Any
-    bias: BiasParams
-    ctr: CtrParams
-    stoch: StochParams
-    k_nl: Any
-    ndens: Any
-
-    def tree_flatten(self):
-        children = (
-            to_jax_array(self.f),
-            to_jax_array(self.h),
-            self.bias,
-            self.ctr,
-            self.stoch,
-            to_jax_array(self.k_nl),
-            to_jax_array(self.ndens)
-        )
-        return children, None
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        return cls(*children)
+def make_lpt_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=jnp.float32):
+    scalars = jnp.array([f, h], dtype)
+    bias    = jnp.asarray(bias,  dtype)
+    ctr     = jnp.asarray(ctr,   dtype)
+    stoch   = jnp.asarray(stoch, dtype)
+    nl      = jnp.asarray([k_nl, ndens], dtype)
+    assert scalars.shape == (1,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
+    return LPTParams(scalars, bias, ctr, stoch, nl)
