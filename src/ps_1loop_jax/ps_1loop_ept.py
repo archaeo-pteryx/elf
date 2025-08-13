@@ -387,62 +387,77 @@ class PowerSpectrum1LoopEPT:
 
         return pkmu
     
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_terms(self, pk_data):
-
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        p_q, p_k, p_k0 = get_decomp_data(-0.7, self._k, pk_lin)
-
-        pkmu_terms = []
-        for matrix in self.matrices_22:
-            pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))
-            if self.subtract_k0_limit:
-                pk = pk - self._kmin**3 * jnp.real(p_k0 @ matrix @ p_k0)
-            pkmu_terms.append(pk)
-
-        for matrix in self.matrices_13:
-            pk = self._k**3 * p_k * jnp.real(matrix @ p_q)
-            pkmu_terms.append(pk)
-
-        pkmu_terms = jnp.array(pkmu_terms)
-        return pkmu_terms
-    
     # @partial(jit, static_argnames=['self'])
     # def get_pkmu_terms(self, pk_data):
 
     #     pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
     #     p_q, p_k, p_k0 = get_decomp_data(-0.7, self._k, pk_lin)
 
-    #     def compute_pk_22(matrix):
+    #     pkmu_terms = []
+    #     for matrix in self.matrices_22:
     #         pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))
     #         if self.subtract_k0_limit:
     #             pk = pk - self._kmin**3 * jnp.real(p_k0 @ matrix @ p_k0)
-    #         return pk
+    #         pkmu_terms.append(pk)
 
-    #     def compute_pk_13(matrix):
-    #         return self._k**3 * p_k * jnp.real(matrix @ p_q)
+    #     for matrix in self.matrices_13:
+    #         pk = self._k**3 * p_k * jnp.real(matrix @ p_q)
+    #         pkmu_terms.append(pk)
 
-    #     pk_22 = jax.vmap(compute_pk_22)(self.matrices_22)
-    #     pk_13 = jax.vmap(compute_pk_13)(self.matrices_13)
-
-    #     pkmu_terms = jnp.concatenate([pk_22, pk_13], axis=0)
+    #     pkmu_terms = jnp.array(pkmu_terms)
     #     return pkmu_terms
     
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_terms(self, pk_data):
+
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        p_q, p_k, p_k0 = get_decomp_data(-0.7, self._k, pk_lin)
+
+        def compute_pk_22(matrix):
+            pk = self._k**3 * jnp.real(jnp.diag(p_q.T @ matrix @ p_q))
+            if self.subtract_k0_limit:
+                pk = pk - self._kmin**3 * jnp.real(p_k0 @ matrix @ p_k0)
+            return pk
+
+        def compute_pk_13(matrix):
+            return self._k**3 * p_k * jnp.real(matrix @ p_q)
+
+        pk_22 = jax.vmap(compute_pk_22)(self.matrices_22)
+        pk_13 = jax.vmap(compute_pk_13)(self.matrices_13)
+
+        pkmu_terms = jnp.concatenate([pk_22, pk_13], axis=0)
+        return pkmu_terms
+    
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu_1loop_pld(self, pk_data, f, bias):
+    #     b1, b2, bG2, bGamma3 = bias
+
+    #     pkmu_terms = self.get_pkmu_terms(pk_data)
+
+    #     pkmu = jnp.zeros((len(self._k), len(self._mu)))
+    #     for i, deg in enumerate(self.degrees):
+    #         coeff = (f ** deg[1]) * (b1 ** deg[2]) * (b2 ** deg[3]) * (bG2 ** deg[4]) * (bGamma3 ** deg[5])
+    #         term = coeff * jnp.outer(pkmu_terms[i], self._mu**deg[0])
+    #         pkmu = pkmu + term
+
+    #     pkmu = pkmu + self.get_pkmu_13_UV(pk_data, f, bias)
+
+    #     return pkmu
+
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_pld(self, pk_data, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
-        pkmu_terms = self.get_pkmu_terms(pk_data)
+        pkmu_terms = self.get_pkmu_terms(pk_data)  # shape: (n_terms, nk)
 
-        pkmu = jnp.zeros((len(self._k), len(self._mu)))
-        for i, deg in enumerate(self.degrees):
-            coeff = (f ** deg[1]) * (b1 ** deg[2]) * (b2 ** deg[3]) * (bG2 ** deg[4]) * (bGamma3 ** deg[5])
-            term = coeff * jnp.outer(pkmu_terms[i], self._mu**deg[0])
-            pkmu = pkmu + term
+        powers = jnp.array([1.0, f, b1, b2, bG2, bGamma3])  # shape: (6,)
+        coeffs = jnp.prod(powers[None, :] ** self.degrees, axis=1)
+        mu_powers = self._mu[None, :] ** self.degrees[:, 0:1]  # broadcasting
 
+        pkmu = jnp.sum(coeffs[:, None, None] * pkmu_terms[:, :, None] * mu_powers[:, None, :], axis=0)
         pkmu = pkmu + self.get_pkmu_13_UV(pk_data, f, bias)
 
-        return pkmu
+        return pkmu  # shape: (nk, nmu)
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_13_UV(self, pk_data, f, bias):
