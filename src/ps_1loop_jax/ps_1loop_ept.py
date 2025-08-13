@@ -55,16 +55,18 @@ class PowerSpectrum1LoopEPT:
         self.use_hankel = use_hankel
 
     def _set_matrix(self, names=[]):
+        mat = {}
         for name in names:
             mat_file = glob.glob(os.path.dirname(__file__)+'/pt_matrix/*/*/%s.txt' % (name))[0]
             if '22' in name or 'I' in name or '12' in name:
-                self.mat[name] = pt_matrix.PTMatrix22(mat_file)
+                mat[name] = pt_matrix.PTMatrix22(mat_file)
             elif '13' in name or 'F' in name:
-                self.mat[name] = pt_matrix.PTMatrix13(mat_file)
+                mat[name] = pt_matrix.PTMatrix13(mat_file)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
         
         # precompute the PT matrices for appropriate FFT settings.
+        matrix = {}
         for name in names:
             if name in utils_loop.kernel_to_decomp_dict.keys():
                 decomp_info = utils_loop.kernel_to_decomp_dict[name]
@@ -81,12 +83,14 @@ class PowerSpectrum1LoopEPT:
                 nu_m1 = -0.5 * (nu1 + eta_m * 1j)
                 nu_m2 = -0.5 * (nu2 + eta_m * 1j)
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m1, nu_m2)
-                self.matrix[name] = self.mat[name](nu_m1, nu_m2).T
+                matrix[name] = mat[name](nu_m1, nu_m2).T
 
             elif '13' in name or 'F' in name:
                 nu1 = decomp_info[0][1]
                 nu_m1 = -0.5 * (nu1 + eta_m * 1j)
-                self.matrix[name] = self.mat[name](nu_m1)
+                matrix[name] = mat[name](nu_m1)
+        
+        return matrix
 
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -98,16 +102,14 @@ class PowerSpectrum1LoopEPT:
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         # precompute the PT matrices
-        self.mat = {}
-        self.matrix = {}
-        self._set_matrix(self.pk_term_names + self.pkmu_term_names_22 + self.pkmu_term_names_13)
+        matrix = self._set_matrix(self.pk_term_names + self.pkmu_term_names_22 + self.pkmu_term_names_13)
 
-        self.matrices_22_real = jnp.array([self.matrix[name] for name in ['22_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2']])
-        self.matrices_13_real = jnp.array([self.matrix[name] for name in ['13_dd', 'F_G2']])
+        self.matrices_22_real = jnp.array([matrix[name] for name in ['22_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2']])
+        self.matrices_13_real = jnp.array([matrix[name] for name in ['13_dd', 'F_G2']])
 
         ## create arrays of matrices and degrees for 22 and 13, according to the degrees of mu
-        self.matrices_22 = jnp.array([self.matrix[name] for name in self.pkmu_term_names_22])
-        self.matrices_13 = jnp.array([self.matrix[name] for name in self.pkmu_term_names_13])
+        self.matrices_22 = jnp.array([matrix[name] for name in self.pkmu_term_names_22])
+        self.matrices_13 = jnp.array([matrix[name] for name in self.pkmu_term_names_13])
 
         def get_degree_vector(name):
             d = utils_loop.get_degree_dict(name)
