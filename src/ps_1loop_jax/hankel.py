@@ -1,3 +1,7 @@
+####
+## This code is based on FFTLog-and-Beyond developed by Xiao Fang
+####
+
 import jax
 jax.config.update('jax_enable_x64', True)
 from jax import jit
@@ -10,7 +14,7 @@ from functools import partial
 @partial(jit, static_argnames=['npad'])
 def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
     # zero padding
-    fx = jnp.hstack((jnp.zeros(npad), fx, jnp.zeros(npad)))
+    fx = jnp.concatenate([jnp.zeros(npad), fx, jnp.zeros(npad)], axis=0)
 
     # damp high-x end
     fx = fx * jnp.exp(-(x / x_high)**2)
@@ -65,4 +69,4 @@ def get_log_extrap(x, num_low, num_high):
     dlnx = jnp.log(x[1] / x[0])
     x_low = x[0] * jnp.exp(dlnx * jnp.arange(-num_low, 0))
     x_high = x[-1] * jnp.exp(dlnx * jnp.arange(1, num_high+1))
-    return jnp.hstack((x_low, x, x_high))
+    return jnp.concatenate([x_low, x, x_high], axis=0)

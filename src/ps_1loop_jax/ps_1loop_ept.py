@@ -1,5 +1,6 @@
 import os
 import glob, re
+from time import time
 
 import jax
 jax.config.update('jax_enable_x64', True)
@@ -17,7 +18,7 @@ from . import hankel
 from . import pt_coeff
 from . import pt_matrix
 from . import utils_loop
-from .utils_loop import get_pk, get_pk_int, get_pk_int2
+from .utils_loop import get_pk, get_pk_int, get_pk_int2, interp2d_separable_linear
 from .utils_math import legendre
 
 from . import ir_resum
@@ -326,13 +327,8 @@ class PowerSpectrum1LoopEPT:
         mu = jnp.atleast_1d(mu).astype(float)
 
         pkmu_data = self.get_pkmu_grid(pk_data, params)
-
-        # spline interpolation
-        logk_tile = jnp.ravel(jnp.tile(jnp.log(k), (len(mu), 1)).T)
-        mu_tile = jnp.ravel(jnp.tile(mu, (len(k), 1)))
-        pkmu = interpax.interp2d(logk_tile, mu_tile, jnp.log(self._k), self._mu, pkmu_data, method='cubic2', extrap=True)
-        pkmu = pkmu.reshape((len(k), len(mu)))
-
+        # 2D interpolation
+        pkmu = interp2d_separable_linear(jnp.log(k), mu, jnp.log(self._k), self._mu, pkmu_data)
         return pkmu
 
     @partial(jit, static_argnames=['self', 'num'])
@@ -357,10 +353,14 @@ class PowerSpectrum1LoopEPT:
         mu_true = mu * (alpha_perp / alpha_para) / fac
         k_true = jnp.outer(k, fac) / alpha_perp
 
-        # spline interpolation
+        # 2D interpolation
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
         mu_tile = jnp.tile(mu_true, (len(k), 1))
-        pkmu = interpax.interp2d(jnp.ravel(k_true), jnp.ravel(mu_tile), self._k, self._mu, pkmu_grid, method='cubic2', extrap=True)
+        pkmu = interpax.interp2d(
+            jnp.ravel(jnp.log(k_true)), jnp.ravel(mu_tile), 
+            jnp.log(self._k), self._mu, pkmu_grid, 
+            method='linear', extrap=True
+        )
         pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
 
         return pkmu
