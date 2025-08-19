@@ -61,6 +61,8 @@ class LPTParams:
     @property
     def f(self):     return self.scalars[F]
     @property
+    def h(self):     return self.scalars[H]
+    @property
     def k_nl(self):  return self.nl[K_NL]
     @property
     def ndens(self): return self.nl[NDENS]
@@ -71,5 +73,5 @@ def make_lpt_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=jnp.float32):
     ctr     = jnp.asarray(ctr,   dtype)
     stoch   = jnp.asarray(stoch, dtype)
     nl      = jnp.asarray([k_nl, ndens], dtype)
-    assert scalars.shape == (1,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
+    assert scalars.shape == (2,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
     return LPTParams(scalars, bias, ctr, stoch, nl)
