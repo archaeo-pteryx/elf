@@ -108,7 +108,7 @@ class PowerSpectrum1LoopLPT:
     @partial(jit, static_argnames=['self'])
     def get_pk_ln(self, l, n, array):
         fx = array * self._q**(n + 3)
-        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
         return pk_ln
     
     @partial(jit, static_argnames=['self'])
@@ -147,22 +147,20 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel(self, k, mu, pk_data, f):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-
-        # generalized correlation functions
+        
         xi_0m2 = self.get_xi_ln(0, -2, pk_lin)
         xi_2m2 = self.get_xi_ln(2, -2, pk_lin)
-
-        # X & Y
         X_lin = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)
         Y_lin = 2 * xi_2m2
 
-        vmap_mu = jax.vmap(self.get_pkmu_zel_k_mu, in_axes=(None, 0, None, None, None))
-        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None, None))
-        pkmu = vmap_k_mu(k, mu, X_lin, Y_lin, f)
+        def per_mu(mu_j):
+            return jax.vmap(lambda k_i: self.get_pkmu_zel_k_mu(k_i, mu_j, X_lin, Y_lin, f))(k)  # (nk,)
+        pkmu = jax.vmap(per_mu)(mu)      # (nmu, nk)
+        pkmu = jnp.transpose(pkmu, (1, 0))   # (nk, nmu)
 
         return pkmu
 
