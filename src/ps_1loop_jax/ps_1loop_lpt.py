@@ -92,8 +92,8 @@ class PowerSpectrum1LoopLPT:
         g_l_q = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_q) for l in l_list])
         self._u_m_q = jnp.array([(self._q_padded[0] * self._y_q[0])**(-1j * eta_m_q) * g_l_q[l] for l in l_list])
 
-        self._k_high = self._kmax / 100
-        self._q_high = 1e10
+        self._k_high = self._kmax / 10
+        self._q_high = jnp.max(self._q) / 10
         
         c_window_width = 0.25
         self._w_m_k = hankel.c_window(jnp.arange(nfft_k//2+1), int(c_window_width * (nfft_k//2+1)))
