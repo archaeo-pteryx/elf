@@ -517,7 +517,7 @@ class PowerSpectrum1LoopLPT:
         k = jnp.atleast_1d(k).astype(float)
 
         pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
-        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=1)
+        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
 
         pk0 = 0.5 * jnp.sum((self._ws * self._leg0)[:, None] * pkmu, axis=0)
         pk2 = 2.5 * jnp.sum((self._ws * self._leg2)[:, None] * pkmu, axis=0)
