@@ -1,7 +1,7 @@
 import os
 
 import jax
-jax.config.update('jax_enable_x64', True)
+# jax.config.update('jax_enable_x64', True)
 from jax import jit
 from functools import partial
 
@@ -59,21 +59,12 @@ class PowerSpectrum1LoopLPT:
     def _initialize_lpt(self):
         # load the coefficients of G00
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
-        self.G00_coeffs = {int(k): jnp.array(loaded[k]) for k in loaded.files}
+        self.G00_coeffs = [jnp.array(loaded[k], dtype=jnp.float32) for k in loaded.files]
 
         # (l, n) for which xi_ln's are computed
-        self.ln_list = [(0,0), (0,-2), (0,2), (1,-1), (1,1), (2,0), (2,-2), (2,2), (3,-1), (3,1), (4,0)]
+        self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
         lmax = max(jnp.max(self.ln_list[:, 0]), self.lmax)
         self._set_hankel(lmax)
-
-        # # set the Hankel transforms
-        # self.hankel_pk2xi = {}
-        # self.hankel_xi2pk = {}
-        # nu = 1.1
-        # l_list = [i for i in range(max(4, self.lmax) + 1)]
-        # for l in l_list:
-        #     self.hankel_pk2xi[l] = Hankel(l, nu, self._k, npad=(self._nfft//2), x_high=(jnp.max(self._k)/10), c_window_width=0.25)
-        #     self.hankel_xi2pk[l] = Hankel(l, nu, self._q, npad=(self._nfft//2), x_high=(jnp.max(self._q)/10), c_window_width=0.25)
 
     def _set_hankel(self, lmax):
         l_list = np.arange(lmax + 1)
@@ -133,11 +124,7 @@ class PowerSpectrum1LoopLPT:
         return xi_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_zel_k_mu(self, k, mu, corrs, f):
-        corrs_tree = corrs[0]
-
-        X = corrs_tree[0]
-        Y = corrs_tree[1]
+    def get_pkmu_zel_k_mu(self, k, mu, X, Y, f):
 
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
         Ksq = (k * Kfac)**2
@@ -163,11 +150,19 @@ class PowerSpectrum1LoopLPT:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        corrs = self.get_corrs(pk_data)
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
 
-        vmap_mu = jax.vmap(self.get_pkmu_zel_k_mu, in_axes=(None, 0, None, None))
-        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
-        pkmu = vmap_k_mu(k, mu, corrs, f)
+        # generalized correlation functions
+        xi_0m2 = self.get_xi_ln(0, -2, pk_lin)
+        xi_2m2 = self.get_xi_ln(2, -2, pk_lin)
+
+        # X & Y
+        X_lin = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)
+        Y_lin = 2 * xi_2m2
+
+        vmap_mu = jax.vmap(self.get_pkmu_zel_k_mu, in_axes=(None, 0, None, None, None))
+        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None, None))
+        pkmu = vmap_k_mu(k, mu, X_lin, Y_lin, f)
 
         return pkmu
 
@@ -310,7 +305,7 @@ class PowerSpectrum1LoopLPT:
         return pkmu_dict
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_bias_dict_k_mu(self, k, mu, corrs, f):
+    def get_pkmu_terms_k_mu(self, k, mu, corrs, f):
         corrs_tree = corrs[0]
         corrs_matter_1loop = corrs[1]
         corrs_bias = corrs[2]
@@ -348,8 +343,8 @@ class PowerSpectrum1LoopLPT:
         zeta = corrs_bias[10]
 
         # 3rd-order bias terms
-        Ub3 = corrs_bias[11]
-        theta = corrs_bias[12]
+        Ub3 = jnp.zeros(len(self._q))
+        theta = jnp.zeros(len(self._q))
 
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
         K = k * Kfac
@@ -435,49 +430,96 @@ class PowerSpectrum1LoopLPT:
                                     integrand_b2, integrand_b1_b2, integrand_b2_b2,
                                     integrand_bs, integrand_b1_bs, integrand_b2_bs, integrand_bs_bs, 
                                     integrand_b3, integrand_b1_b3, integrand_ctr
-                                    ])
+                                    ], axis=0)
 
             # Hankel transforms
             for i in range(ncomp):
                 # _, pk_fft = self.hankel_xi2pk[l](base * (-2 / (k * self._q))**(l) * integrands[i])
-                pk_fft = self.get_pk_ln(l, -3, base * (-2 / (k * self._q))**(l) * integrand[i])
+                pk_fft = self.get_pk_ln(l, -3, base * (-2 / (k * self._q))**(l) * integrands[i])
                 pkmu_terms = pkmu_terms.at[i].add(interpax.interp1d(jnp.log(k), jnp.log(self._k), pk_fft))
 
         return pkmu_terms
 
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
+    #     k = jnp.atleast_1d(k).astype(float)
+    #     mu = jnp.atleast_1d(mu).astype(float)
+        
+    #     f = params.f
+    #     bias = params.bias
+    #     ctr = params.ctr
+
+    #     corrs = self.get_corrs(pk_data, k_IR)
+
+    #     ncomp = 13
+    #     pkmu_terms = jnp.zeros((len(k), len(mu), ncomp))
+    #     for i in range(len(k)):
+    #         for j in range(len(mu)):
+    #             pkmu = self.get_pkmu_terms_k_mu(k[i], mu[j], corrs, f)
+    #             pkmu_terms = pkmu_terms.at[i, j].set(pkmu)
+    #     pkmu_terms = jnp.transpose(pkmu_terms, (2, 0, 1))
+
+    #     b1, b2, bs, b3 = bias
+    #     bias_facs = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3])
+        
+    #     # collect all bias terms
+    #     pkmu = jnp.sum(jnp.array([bias_facs[i] * pkmu_terms[i] for i in range(ncomp)]), axis=0)
+        
+    #     # counterterm
+    #     alpha0, alpha2, alpha4, alpha6 = ctr
+    #     ctr_mu = alpha0 + alpha2 * mu**2 + alpha4 * mu**4 + alpha6 * mu**6
+    #     pkmu_ctr = jnp.kron(k**2, ctr_mu).reshape(len(k), len(mu)) * pkmu_terms[-1]
+    #     pkmu = pkmu + pkmu_ctr
+
+    #     return pkmu
+
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
+
+        f = params.f
+        b1, b2, bs, b3 = params.bias      # (4,)
+        alpha0, alpha2, alpha4, alpha6 = params.ctr  # (4,)
 
         corrs = self.get_corrs(pk_data, k_IR)
 
-        vmap_mu = jax.vmap(self.get_pkmu_bias_dict_k_mu, in_axes=(None, 0, None, None))
-        vmap_k_mu = jax.vmap(vmap_mu, in_axes=(0, None, None, None))
-        pkmu_terms = vmap_k_mu(k, mu, corrs, params['f'])
+        def per_k(k_i):
+            return jax.vmap(lambda mu_j: self.get_pkmu_terms_k_mu(k_i, mu_j, corrs, f))(mu)  # (nmu, ncomp)
 
-        b1 = params['bias']['b1']
-        b2 = params['bias']['b2']
-        bs = params['bias']['bs']
-        bias_facs = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2])
-        
-        # collect all bias terms
-        pkmu = jnp.sum(jnp.array([bias_facs[i] * pkmu_terms[i] for i in self.bias_combs]), axis=0)
-        
+        pkmu_terms_kmu = jax.vmap(per_k)(k)                 # (nk, nmu, ncomp)
+        pkmu_terms = jnp.transpose(pkmu_terms_kmu, (2, 0, 1))  # (ncomp, nk, nmu)
+
+        bias_facs = jnp.array([
+            1.,            # 1
+            b1,            # b1
+            b1**2,         # b1^2
+            b2,            # b2
+            b1*b2,         # b1*b2
+            b2**2,         # b2^2
+            bs,            # bs
+            b1*bs,         # b1*bs
+            b2*bs,         # b2*bs
+            bs**2,         # bs^2
+            b3,            # b3
+            b1*b3          # b1*b3
+        ])  # (12,)
+
+        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
+
         # counterterm
-        ctr = params['ctr']
-        ctr_mu = ctr['alpha0'] + ctr['alpha2'] * mu**2 + ctr['alpha4'] * mu**4 + ctr['alpha6'] * mu**6
-        pkmu_ctr = jnp.kron(k**2, ctr_mu).reshape(len(k), len(mu)) * pkmu_terms[-1]
+        ctr_mu = alpha0 + alpha2 * mu**2 + alpha4 * mu**4 + alpha6 * mu**6   # (nmu,)
+        pkmu_ctr = jnp.outer(k**2, ctr_mu) * pkmu_terms[-1]   # (nk, nmu)
         pkmu = pkmu + pkmu_ctr
 
-        return pkmu
+        return pkmu  # (nk, nmu)
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k).astype(float)
 
         pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
-        pkmu = jnp.vstack([jnp.flip(pkmu, axis=0), pkmu])
+        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=1)
 
         pk0 = 0.5 * jnp.sum((self._ws * self._leg0)[:, None] * pkmu, axis=0)
         pk2 = 2.5 * jnp.sum((self._ws * self._leg2)[:, None] * pkmu, axis=0)
@@ -519,7 +561,7 @@ class PowerSpectrum1LoopLPT:
         U_lin = - xi_ln[1,-1]
 
         corrs = jnp.stack([X_lin, Y_lin, X_lin_lt, Y_lin_lt,
-                           X_lin_gt, Y_lin_gt, xi_lin, U_lin])
+                           X_lin_gt, Y_lin_gt, xi_lin, U_lin], axis=0)
         return corrs
     
     @partial(jit, static_argnames=['self'])
@@ -546,7 +588,7 @@ class PowerSpectrum1LoopLPT:
         Q2 = 2 * Q5 - Q1
         R2 = R3 - R1
 
-        QRs = jnp.stack([Q1, Q2, Q5, Q8, R1, R2])
+        QRs = jnp.stack([Q1, Q2, Q5, Q8, R1, R2], axis=0)
         return QRs
     
     @partial(jit, static_argnames=['self'])
@@ -557,14 +599,16 @@ class PowerSpectrum1LoopLPT:
         R2 = QRs[5]
 
         # X, Y for 1-loop A_{ij}
-        xi_ln_22 = jnp.stack([self.get_xi_ln(l, n, 9/98 * Q1) for (l, n) in [(0,-2), (2,-2)]])
-        xi_ln_13 = jnp.stack([self.get_xi_ln(l, n, 5/21 * Q2) for (l, n) in [(0,-2), (2,-2)]])
+        xi_ln_22_0m2 = self.get_xi_ln(0, -2, 9/98 * Q1)
+        xi_ln_22_2m2 = self.get_xi_ln(2, -2, 9/98 * Q1)
+        xi_ln_13_0m2 = self.get_xi_ln(0, -2, 5/21 * Q2)
+        xi_ln_13_2m2 = self.get_xi_ln(2, -2, 5/21 * Q2)
 
-        X22 = 2/3 * (xi_ln_22[0,0] - xi_ln_22[0] - xi_ln_22[1])
-        Y22 = 2 * xi_ln_22[1]
+        X22 = 2/3 * (xi_ln_22_0m2[0] - xi_ln_22_0m2 - xi_ln_22_2m2)
+        Y22 = 2 * xi_ln_22_2m2
 
-        X13 = 2/3 * (xi_ln_13[0,0] - xi_ln_13[0] - xi_ln_13[1])
-        Y13 = 2 * xi_ln_13[1]
+        X13 = 2/3 * (xi_ln_13_0m2[0] - xi_ln_13_0m2 - xi_ln_13_2m2)
+        Y13 = 2 * xi_ln_13_2m2
 
         # V1, V3, T for W_{ijk}
         T = self.get_xi_ln(3, -1, 3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
@@ -573,7 +617,7 @@ class PowerSpectrum1LoopLPT:
         V1 = V1 - 1/5 * T
         V3 = V3 - 1/5 * T
 
-        corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T])
+        corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
         return corrs
     
     @partial(jit, static_argnames=['self'])
@@ -590,7 +634,8 @@ class PowerSpectrum1LoopLPT:
         U20 = self.get_xi_ln(1, -1, -3/7 * Q8) # U20
         
         # A10
-        xi_ln_A10_q0 = get_pk_int({'k': self._k, 'pk': 2/7 * R1}) # R2 integral is zero
+        pk_data = jnp.stack([self._k, 2/7 * R1], axis=0)
+        xi_ln_A10_q0 = get_pk_int(pk_data) # R2 integral is zero
         xi_ln_A10_0m2 = self.get_xi_ln(0, -2, 2/7 * (Q5 + 2 * R2))
         xi_ln_A10_2m2 = self.get_xi_ln(2, -2, 1/7 * (2 * Q5 + 3 * R1 + 4 * R2))
         X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
@@ -621,6 +666,5 @@ class PowerSpectrum1LoopLPT:
 
         # 3rd-order bias
 
-
-        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta])
+        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta], axis=0)
         return corrs
