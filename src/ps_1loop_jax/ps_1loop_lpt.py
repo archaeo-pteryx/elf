@@ -719,9 +719,10 @@ class PowerSpectrum1LoopLPT:
         corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt)
 
         # one-loop terms
-        QRs = self.get_QR(xi_ln, pk_lin)
-        corrs_matter_1loop = self.get_corrs_matter_1loop(QRs)
-        corrs_bias = self.get_corrs_bias(QRs, xi_ln)
+        Qs = self.get_Qs(xi_ln)
+        Rs = self.get_Rs(xi_ln, pk_lin)
+        corrs_matter_1loop = self.get_corrs_matter_1loop(Qs, Rs)
+        corrs_bias = self.get_corrs_bias(Qs, Rs, xi_ln)
 
         return [corrs_tree, corrs_matter_1loop, corrs_bias]
     
@@ -744,38 +745,53 @@ class PowerSpectrum1LoopLPT:
         return corrs
     
     @partial(jit, static_argnames=['self'])
-    def get_QR(self, xi_ln, pk_lin):
+    def get_Qs(self, xi_ln):
 
         integrand_Q1 = 8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2
         integrand_Q5 = 2/3 * xi_ln[0,0]**2 - 2/3 * xi_ln[2,0]**2 \
                     - 2/5 * xi_ln[1,-1] * xi_ln[1,1] + 2/5 * xi_ln[3,-1] * xi_ln[3,1]
         integrand_Q8 = 2/3 * xi_ln[0,0]**2 - 2/3 * xi_ln[2,0]**2
+        integrand_Q_Up_G2 = 2/5 * xi_ln[1,-1]**2 - 2/5 * xi_ln[3,-1]**2
 
         Q1 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q1)
         Q5 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q5)
         Q8 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q8)
-
-        pk_00 = self.get_pk_ln(0, -1, xi_ln[0,0])
-        pk_20 = self.get_pk_ln(2, -1, xi_ln[2,0])
-        pk_40 = self.get_pk_ln(4, -1, xi_ln[4,0])
-        pk_11 = self.get_pk_ln(1, -1, xi_ln[1,1])
-        pk_31 = self.get_pk_ln(3, -1, xi_ln[3,1])
-
-        R1 = self._k**2 * pk_lin * (8/15 * pk_00 - 16/21 * pk_20 + 8/35 * pk_40)
-        R3 = 2/3 * self._k**2 * pk_lin * (pk_00 - pk_20) - 2/5 * self._k * pk_lin * (pk_11 - pk_31)
+        Q_Up_G2 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q_Up_G2)
 
         Q2 = 2 * Q5 - Q1
+
+        Qs = jnp.stack([Q1, Q2, Q5, Q8, Q_Up_G2], axis=0)
+        return Qs
+
+    @partial(jit, static_argnames=['self'])
+    def get_Rs(self, xi_ln, pk_lin):
+        pk_00 = self.get_pk_ln(0, -1, xi_ln[0,0]) * pk_lin
+        pk_20 = self.get_pk_ln(2, -1, xi_ln[2,0]) * pk_lin
+        pk_40 = self.get_pk_ln(4, -1, xi_ln[4,0]) * pk_lin
+        pk_11 = self.get_pk_ln(1, -1, xi_ln[1,1]) * pk_lin
+        pk_31 = self.get_pk_ln(3, -1, xi_ln[3,1]) * pk_lin
+        pk_22 = self.get_pk_ln(2, -1, xi_ln[2,2]) * pk_lin
+        pk_1m1 = self.get_pk_ln(1, -1, xi_ln[1,-1]) * pk_lin
+        pk_3m1 = self.get_pk_ln(3, -1, xi_ln[3,-1]) * pk_lin
+
+        R1 = self._k**2 * (8/15 * pk_00 - 16/21 * pk_20 + 8/35 * pk_40)
+        R3 = 2/3 * self._k**2 * (pk_00 - pk_20) - 2/5 * self._k * (pk_11 - pk_31)
         R2 = R3 - R1
 
-        QRs = jnp.stack([Q1, Q2, Q5, Q8, R1, R2], axis=0)
-        return QRs
+        F_G2 = self._k**2 * (- 72/35 * pk_00 + 88/49 * pk_20 + 64/245 * pk_40) \
+            + self._k * 4/5 * (pk_11 - pk_31) + self._k**3 * 4/5 * (pk_1m1 - pk_3m1)
+        Rb3 = self._k**2 * (64/105 * pk_00 - 160/441 * pk_20 + 64/245 * pk_40) \
+            - self._k * (128/315 * pk_11 + 64/105 * pk_31) + 32/63 * pk_22
+
+        Rs = jnp.stack([R1, R2, F_G2, Rb3], axis=0)
+        return Rs
     
     @partial(jit, static_argnames=['self'])
-    def get_corrs_matter_1loop(self, QRs):
-        Q1 = QRs[0]
-        Q2 = QRs[1]
-        R1 = QRs[4]
-        R2 = QRs[5]
+    def get_corrs_matter_1loop(self, Qs, Rs):
+        Q1 = Qs[0]
+        Q2 = Qs[1]
+        R1 = Rs[0]
+        R2 = Rs[1]
 
         # X, Y for 1-loop A_{ij}
         xi_ln_22_0m2 = self.get_xi_ln(0, -2, 9/98 * Q1)
@@ -800,12 +816,16 @@ class PowerSpectrum1LoopLPT:
         return corrs
     
     @partial(jit, static_argnames=['self'])
-    def get_corrs_bias(self, QRs, xi_ln):
-        Q1 = QRs[0]
-        Q5 = QRs[2]
-        Q8 = QRs[3]
-        R1 = QRs[4]
-        R2 = QRs[5]
+    def get_corrs_bias(self, Qs, Rs, xi_ln):
+        Q1 = Qs[0]
+        Q2 = Qs[1]
+        Q5 = Qs[2]
+        Q8 = Qs[3]
+        Q_Up_G2 = Qs[4]
+        R1 = Rs[0]
+        R2 = Rs[1]
+        F_G2 = Rs[2]
+        Rb3 = Rs[3]
         
         # U10, U11, U20
         U3 = self.get_xi_ln(1, -1, -5/21 * R1) # 3rd-order part of U10
@@ -820,7 +840,6 @@ class PowerSpectrum1LoopLPT:
         X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
         Y10 = 3 * xi_ln_A10_2m2
 
-        # corrlations from 2nd-order shear
         if self.use_galileon:
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1) # V10 based on G2
             V12 = self.get_xi_ln(1, -1, 2 * Q5) # V12 based on G2
@@ -828,8 +847,14 @@ class PowerSpectrum1LoopLPT:
             zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
 
             # Upsilon based on G2
-            X_Upsilon = None
-            Y_Upsilon = None
+            Up1 = self.get_xi_ln(0, 0, Q_Up_G2)
+            Up2 = self.get_xi_ln(0, -2, Q1 - Q2) + self.get_xi_ln(2, -2, Q1 + 2 * Q2)
+            X_Upsilon = 1/3 * Up1 - Up2
+            Y_Upsilon = Up2 - Up1
+
+            # 3rd-order bias
+            Ub3 = self.get_xi_ln(1, -1, -6/5 * F_G2) # Ub3 based on Gamma3
+            theta = self.get_xi_ln(0, 0, 6/5 * F_G2) # theta based on Gamma3
         else:
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
             V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
@@ -842,8 +867,10 @@ class PowerSpectrum1LoopLPT:
             J4 = xi_ln[3,-1]
             X_Upsilon = 4 * J3**2
             Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
+            
+            # 3rd-order bias
+            Ub3 = self.get_xi_ln(1, -1, - Rb3)
+            theta = self.get_xi_ln(0, 0, Rb3)
 
-        # 3rd-order bias
-
-        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta], axis=0)
+        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
