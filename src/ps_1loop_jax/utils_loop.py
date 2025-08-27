@@ -1,5 +1,5 @@
 import jax
-jax.config.update('jax_enable_x64', True)
+# jax.config.update('jax_enable_x64', True)
 from jax import jit
 from functools import partial
 
@@ -62,42 +62,71 @@ def get_degree_dict(name):
 @jit
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
     k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
-    pk = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic'))
-    # pk = jnp.exp(jnp.interp(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap)))
+    # pk = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic')
+    pk = jnp.interp(jnp.log(k), jnp.log(k_extrap), pk_extrap)
     return pk
 
 @partial(jit, static_argnames=['num'])
 def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
-    res = quadax.simpson(q * get_pk(q, pk_data, kmin, kmax), x=jnp.log(q)) / (2 * jnp.pi**2)
+    res = quadax.simpson(q * get_pk(q, pk_data, kmin * 0.1, kmax * 10.), x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
 @partial(jit, static_argnames=['num'])
 def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
-    res = quadax.simpson(q**3 * get_pk(q, pk_data, kmin, kmax)**2, x=jnp.log(q)) / (2 * jnp.pi**2)
+    res = quadax.simpson(q**3 * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)**2, x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
+
+# @partial(jit, static_argnames=['num_extrap'])
+# def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
+
+#     dlnx_low = jnp.log(x[1] / x[0])
+#     dlny_low = jnp.log(y[1] / y[0])
+#     num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int) + 1
+
+#     x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
+#     y_low = y[0] * jnp.exp(dlny_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
+
+#     dlnx_high = jnp.log(x[-1] / x[-2])
+#     dlny_high = jnp.log(y[-1] / y[-2])
+#     num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int) + 1
+
+#     x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
+#     y_high = y[-1] * jnp.exp(dlny_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
+
+#     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
+#     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
+    
+#     return x_extrap, y_extrap
 
 @partial(jit, static_argnames=['num_extrap'])
 def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
 
     dlnx_low = jnp.log(x[1] / x[0])
-    dlny_low = jnp.log(y[1] / y[0])
-    num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int) + 1
-
-    x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
-    y_low = y[0] * jnp.exp(dlny_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
-
     dlnx_high = jnp.log(x[-1] / x[-2])
-    dlny_high = jnp.log(y[-1] / y[-2])
-    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int) + 1
 
-    x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
-    y_high = y[-1] * jnp.exp(dlny_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
+    num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int) + 1
+    x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
+
+    y_low = jnp.where(
+        y[0] > 0,
+        y[0] * jnp.exp(jnp.log(y[1] / y[0]) * num_low / num_extrap * jnp.arange(-num_extrap, 0)),
+        jnp.zeros(num_extrap)
+    )
+
+    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int) + 1
+    x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap + 1))
+
+    y_high = jnp.where(
+        y[-1] > 0,
+        y[-1] * jnp.exp(jnp.log(y[-1] / y[-2]) * num_high / num_extrap * jnp.arange(1, num_extrap + 1)),
+        jnp.zeros(num_extrap)
+    )
 
     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
-    
+
     return x_extrap, y_extrap
 
 @jit
