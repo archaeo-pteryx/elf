@@ -1,39 +1,22 @@
 import jax
-jax.config.update('jax_enable_x64', True)
+# jax.config.update('jax_enable_x64', True)
 from jax import jit
 import jax.numpy as jnp
 from functools import partial
-
-# @jit
-# def get_G00(A, B, C, coeff):
-#     x = - B
-#     y = C**2 / (A**2 + C**2)
-    
-#     res = 0
-#     l = coeff.shape[0] - 1
-#     for i in range(l+1):
-#         for k in range(l+1):
-#             res = res + coeff[k, i] * x**(l + i) * y**(l + i - k)
-#     res = res * jnp.exp(x * y)
-    
-#     return res
 
 @jit
 def get_G00(A, B, C, coeff):
     x = -B
     y = C**2 / (A**2 + C**2)
 
-    # l を静的に取りたいなら coeff.shape[0]-1 を使う
     l = coeff.shape[0] - 1
     i = jnp.arange(l + 1)
     k = jnp.arange(l + 1)
 
-    # v[k] = y^(l-k)   （非負の指数だけ：y=0 でも安全）
     v = jnp.power(y[..., None], l - k)
 
     M = jnp.tensordot(v, coeff, axes=((-1,), (0,)))
 
-    # x^{l+i} と y^{i} をまとめて作る
     xpow = jnp.power(x[..., None], l + i)
     ypow = jnp.power(y[..., None], i)
 
@@ -41,89 +24,15 @@ def get_G00(A, B, C, coeff):
 
     return res
 
-# @jit
-# def get_dGs_l(A, B, C, coeff):
-#     rho2 = A**2 + C**2
-#     c2 = A**2 / rho2
-#     s2 = C**2 / rho2
-#     Bs2 = B * s2
-
-#     G00 = 0
-#     dGdA = 0
-#     dGdC = 0
-#     dG2dA2 = 0
-#     d2GdC2 = 0
-#     d2GdAdC = 0
-#     dG3dA3 = 0
-#     d3GdA2dC = 0
-#     d4GdA4 = 0
-    
-#     l = coeff.shape[0] - 1
-#     for i in range(l+1):
-#         for k in range(l+1):
-
-#             n = l + i - k
-#             term = coeff[k, i] * (- B)**(l + i) * s2**(n)
-#             term2 = jnp.where(s2 == 0., 0., term / s2)
-
-#             G00 = G00 + term
-
-#             factor = - n + Bs2
-#             dGdA = dGdA + factor * term
-
-#             factor = n - Bs2
-#             dGdC = dGdC + factor * term2
-
-#             factor = -n + 2 * n * (1 + n) * c2 + Bs2 - 4 * (1 + n) * c2 * Bs2 + 2 * c2 * Bs2**2
-#             dG2dA2 = dG2dA2 + factor * term
-
-#             factor = n * (-3 + 2 * (1 + n) * c2) + (3 - 4 * c2 * (1 + n)) * Bs2 + 2 * c2 * Bs2**2
-#             d2GdC2 = d2GdC2 + factor * term2
-
-#             factor = n * (-1 + (1 + n) * c2) + (1 - 2 * (1 + n) * c2) * Bs2 + c2 * Bs2**2
-#             d2GdAdC = d2GdAdC + factor * term2
-
-#             factor = n * (1 + n) * (-3 + 2 * (2 + n) * c2) - 6 * (1 + n) * (-1 + (2 + n) * c2) * Bs2 \
-#                     + 3 * (-1 + 2 * (2 + n) * c2) * Bs2**2 - 2 * c2 * Bs2**3
-#             dG3dA3 = dG3dA3 + factor * term
-
-#             factor = n + n * (1 + n) * (-5 + 2 * (2 + n) * c2) * c2 \
-#                     - (1 + 2 * (1 + n) * (-5 + 3 * c2 * (2 + n)) * c2) * Bs2 \
-#                     + (-5 + 6 * (2 + n) * c2) * c2 * Bs2**2 - 2 * c2**2 * Bs2**3
-#             d3GdA2dC = d3GdA2dC + factor * term2
-            
-#             factor = n * (1 + n) * (3 + 4 * (2 + n) * (-3 + (3 + n) * c2) * c2) \
-#                     - 2 * (1 + n) * (3 + 2 * c2 * (2 + n) * (-9 + 4 * c2 * (3 + n))) * Bs2 \
-#                     + 3 * (1 + 4 * (2 + n) * (-3 + 2 * (3 + n) * c2) * c2) * Bs2**2 \
-#                     - 4 * (-3 + 4 * (3 + n) * c2) * c2 * Bs2**3 + 4 * c2**2 * Bs2**4
-#             d4GdA4 = d4GdA4 + factor * term
-
-#     G00 = G00 * jnp.exp(- Bs2)
-    
-#     dGdA = dGdA * jnp.exp(- Bs2) * (2 * A / rho2)
-#     dGdC = dGdC * jnp.exp(- Bs2) * (2 * c2 * jnp.sqrt(s2 / rho2))
-    
-#     dG2dA2 = dG2dA2 * jnp.exp(- Bs2) * (2 / rho2)
-#     d2GdC2 = d2GdC2 * jnp.exp(- Bs2) * (2 * c2 / rho2)
-#     d2GdAdC = d2GdAdC * jnp.exp(- Bs2) * (-4 * jnp.sqrt(c2 * s2) / rho2)
-    
-#     dG3dA3 = dG3dA3 * jnp.exp(- Bs2) * (-4 * jnp.sqrt(c2) / rho2**1.5)
-#     d3GdA2dC = d3GdA2dC * jnp.exp(- Bs2) * (4 * jnp.sqrt(s2) / rho2**1.5)
-
-#     d4GdA4 = d4GdA4 * jnp.exp(- Bs2) * (4 / rho2**2)
-
-#     dGs_l = jnp.vstack([G00, dGdA, dGdC, dG2dA2, d2GdC2, d2GdAdC, dG3dA3, d3GdA2dC, d4GdA4])
-#     return dGs_l
-
 @jit
 def get_dGs_l(A, B, C, coeff):
 
     l = coeff.shape[0] - 1
 
     rho2 = A**2 + C**2
-    c2   = A**2 / rho2            # (...,)
-    s2   = C**2 / rho2            # (...,)
-    Bs2  = B * s2                 # (...,)
+    c2   = A**2 / rho2
+    s2   = C**2 / rho2
+    Bs2  = B * s2
 
     # ---- 事前計算（k, i の指数依存を分離）----
     K = jnp.arange(l+1)           # (K,)
@@ -219,66 +128,6 @@ def get_dGs_l(A, B, C, coeff):
 
     return dGs_l
 
-# @partial(jit, static_argnames=['lmax'])
-# def get_Gs(A, B, C, G00_coeffs, lmax=10):
-#     dGs = jnp.array([get_dGs_l(A, B, C, G00_coeffs[l]) for l in range(lmax + 1)])
-#     nq = dGs.shape[2]
-    
-#     G00s = dGs[:,0]
-#     dGdAs = dGs[:,1]
-#     dGdCs = dGs[:,2]
-#     d2GdA2s = dGs[:,3]
-#     d2GdC2s = dGs[:,4]
-#     d2GdAdCs = dGs[:,5]
-#     d3GdA3s = dGs[:,6]
-#     d3GdA2dCs = dGs[:,7]
-#     d4GdA4s = dGs[:,8]
-
-#     zeros = jnp.zeros((1, nq))
-    
-#     G00s_lm1 = jnp.vstack([zeros, G00s[:-1]])
-#     G00s_lm2 = jnp.vstack([zeros, G00s_lm1[:-1]])
-#     G00s_lm3 = jnp.vstack([zeros, G00s_lm2[:-1]])
-#     G00s_lm4 = jnp.vstack([zeros, G00s_lm3[:-1]])
-    
-#     dGdAs_lm1 = jnp.vstack([zeros, dGdAs[:-1]])
-#     dGdAs_lm2 = jnp.vstack([zeros, dGdAs_lm1[:-1]])
-#     dGdAs_lm3 = jnp.vstack([zeros, dGdAs_lm2[:-1]])
-
-#     dGdCs_lm1 = jnp.vstack([zeros, dGdCs[:-1]])
-#     dGdCs_lm2 = jnp.vstack([zeros, dGdCs_lm1[:-1]])
-
-#     d2GdAdCs_lm1 = jnp.vstack([zeros, d2GdAdCs[:-1]])
-
-#     d2GdA2s_lm1 = jnp.vstack([zeros, d2GdA2s[:-1]])
-#     d2GdA2s_lm2 = jnp.vstack([zeros, d2GdA2s_lm1[:-1]])
-
-#     d3GdA3s_lm1 = jnp.vstack([zeros, d3GdA3s[:-1]])
-
-#     Gs = jnp.zeros((5, 3, lmax+1, nq))
-    
-#     Gs = Gs.at[0,0].set(G00s)
-
-#     Gs = Gs.at[1,0].set(dGdAs + 0.5 * A * G00s_lm1)
-#     Gs = Gs.at[0,1].set(dGdCs + 0.5 * C * G00s_lm1)
-
-#     Gs = Gs.at[2,0].set(d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * A**2 * G00s_lm2)
-#     Gs = Gs.at[0,2].set(d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * C**2 * G00s_lm2)
-#     Gs = Gs.at[1,1].set(d2GdAdCs + 0.5 * C * dGdAs_lm1 + 0.5 * A * dGdCs_lm1 + 0.25 * A * C * G00s_lm2)
-
-#     Gs = Gs.at[3,0].set(d3GdA3s + 1.5 * A * d2GdA2s_lm1 + 1.5 * dGdAs_lm1 \
-#                         + 0.75 * A**2 * dGdAs_lm2 + 0.75 * A * G00s_lm2 + A**3 / 8 * G00s_lm3)
-#     Gs = Gs.at[2,1].set(d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1 \
-#                         + 0.5 * A * C * dGdAs_lm2 + 0.25 * A**2 * dGdCs_lm2 + 0.25 * C * G00s_lm2 \
-#                         + A**2 * C / 8 * G00s_lm3)
-
-#     Gs = Gs.at[4,0].set(d4GdA4s + 2 * A * d3GdA3s_lm1 + 3 * d2GdA2s_lm1 \
-#                         + 1.5 * A**2 * d2GdA2s_lm2 + 3 * A * dGdAs_lm2 + 0.75 * G00s_lm2 \
-#                         + 0.5 * A**3 * dGdAs_lm3 + 0.75 * A**2 * G00s_lm3 \
-#                         + A**4 / 16 * G00s_lm4)
-    
-#     return Gs
-
 @partial(jit, static_argnames=("lmax",))
 def get_Gs(A, B, C, G00_coeffs, lmax=10):
     L = lmax + 1
@@ -329,8 +178,7 @@ def get_Gs(A, B, C, G00_coeffs, lmax=10):
     d2GdAdCs_lm1                            = shift_down(d2GdAdCs, 1)
     d2GdA2s_lm1, d2GdA2s_lm2               = (shift_down(d2GdA2s, s) for s in (1, 2))
     d3GdA3s_lm1                             = shift_down(d3GdA3s, 1)
-
-    # ---- 最終合成（.at[...] を最小限に）----
+    
     nq = G00s.shape[1]
     Gs = jnp.zeros((5, 3, L, nq), dtype=G00s.dtype)
 
@@ -358,4 +206,3 @@ def get_Gs(A, B, C, G00_coeffs, lmax=10):
                          + (A**4) / 16 * G00s_lm4)
 
     return Gs
-
