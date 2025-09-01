@@ -52,7 +52,12 @@ class PowerSpectrum1LoopLPT:
     def _initialize_lpt(self):
         # load the coefficients of G00
         loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
-        self.G00_coeffs = [jnp.array(loaded[k], dtype=jnp.float32) for k in loaded.files]
+        G00_coeffs = [jnp.array(loaded[k], dtype=jnp.float32) for k in loaded.files]
+        L = self.lmax + 1
+        coeffs_pad = jnp.zeros((L, L, L))  # axes: [l, k, i]
+        for l in range(L):
+            coeffs_pad = coeffs_pad.at[l, :l+1, :l+1].set(G00_coeffs[l])
+        self.G00_coeffs = coeffs_pad
 
         # (l, n) for which xi_ln's are computed
         self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
