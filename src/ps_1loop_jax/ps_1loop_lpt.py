@@ -732,8 +732,8 @@ class PowerSpectrum1LoopLPT:
 
         F_G2 = self._k**2 * (- 72/35 * pk_00 + 88/49 * pk_20 + 64/245 * pk_40) \
             + self._k * 4/5 * (pk_11 - pk_31) + self._k**3 * 4/5 * (pk_1m1 - pk_3m1)
-        Rb3 = self._k**2 * (64/105 * pk_00 - 160/441 * pk_20 + 64/245 * pk_40) \
-            - self._k * (128/315 * pk_11 + 64/105 * pk_31) + 32/63 * pk_22
+        Rb3 = self._k**2 * (32/105 * pk_00 - 80/441 * pk_20 + 32/245 * pk_40) \
+            - self._k * (64/315 * pk_11 + 32/105 * pk_31) + 16/63 * pk_22
 
         Rs = jnp.stack([R1, R2, F_G2, Rb3], axis=0)
         return Rs
