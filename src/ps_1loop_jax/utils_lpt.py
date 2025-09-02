@@ -24,185 +24,158 @@ def get_G00(A, B, C, coeff):
 
     return res
 
-@jit
-def get_dGs_l(A, B, C, coeff):
-
-    l = coeff.shape[0] - 1
+def get_dGs(A, B, C, coeffs, lmax):
+    L  = lmax + 1
 
     rho2 = A**2 + C**2
     c2   = A**2 / rho2
     s2   = C**2 / rho2
     Bs2  = B * s2
 
-    # ---- 事前計算（k, i の指数依存を分離）----
-    K = jnp.arange(l+1)           # (K,)
-    I = jnp.arange(l+1)           # (I,)
+    l_idx = jnp.arange(L)  # (L,)
+    k_idx = jnp.arange(L)  # (L,)
+    i_idx = jnp.arange(L)  # (L,)
 
-    # v_k = s2^(l-k)   （非負の指数のみ）
-    v = jnp.power(s2[..., None], l - K)                             # (..., K)
+    # ---- 三角マスク（k<=l, i<=l）で “無効セル” を完全に殺す ----
+    mask_lk = (k_idx[None, :] <= l_idx[:, None])         # (L,K)
+    mask_li = (i_idx[None, :] <= l_idx[:, None])         # (L,I)
+    mask = (mask_lk[:, :, None] & mask_li[:, None, :])   # (L,K,I)
+    coeffs = jnp.where(mask, coeffs, 0.0)                # (L,K,I)
 
-    # w_i = (-B)^(l+i) * s2^i
-    w = jnp.power(-B[..., None], l + I) * jnp.power(s2[..., None], I)  # (..., I)
+    # --- v_{l,k} = s2^(l-k) を負の冪なしで安全計算 ---
+    exp_lk = (l_idx[:, None] - k_idx[None, :])           # (L,K)
+    # 負の指数は使わない（mask_lkでゼロ化されるので安全に 0 を入れる）
+    v = jnp.where(
+        mask_lk[:, :, None],                             # (L,K,1)
+        jnp.power(s2[None, None, :], exp_lk[:, :, None]),# (L,K,1,nq)
+        0.0
+    )
 
-    # term_{k,i} = coeff[k,i] * v_k * w_i
-    # 形合わせ: v[..., :, None] * coeff[None,...,:,:] * w[..., None, :]
-    term  = v[..., :, None] * coeff[None, ...] * w[..., None, :]    # (..., K, I)
+    # --- w_{l,i} = (-B)^(l+i) * s2^i （こちらは非負の冪のみ）---
+    powB_l    = jnp.power((-B)[None, :], l_idx[:, None])                 # (L,nq)
+    powB_i    = jnp.power((-B)[None, :], i_idx[:, None])                 # (I,nq)
+    s2_i      = jnp.power(s2[None, :],      i_idx[:, None])              # (I,nq)
+    w = powB_l[:, None, None, :] * (powB_i * s2_i)[None, None, :, :]     # (L,1,I,nq)
 
-    # s2=0 対策の term2 = term / s2 だけ where で安全化
-    inv_s2 = jnp.where(s2 == 0., 0., 1.0 / s2)                      # (...,)
-    term2  = term * inv_s2[..., None, None]                         # (..., K, I)
+    # --- term と term2（s2=0 は 0 扱い）---
+    term  = v * w * coeffs[..., None]                                    # (L,K,I,nq)
+    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                         # (nq,)
+    term2 = term * inv_s2[None, None, None, :]                            # (L,K,I,nq)
 
-    # n = l + i - k を (K,I) 行列で持つ（バッチには自動ブロードキャスト）
-    N = (l + I[None, :] - K[:, None])                               # (K, I)
+    # --- n = l + i - k を (L,K,I,1) に ---
+    N = (l_idx[:, None, None] + i_idx[None, None, :] - k_idx[None, :, None])[..., None]  # (L,K,I,1)
 
-    # ブロードキャスト用
-    N_b   = N[None, ...]                     # (1, K, I)
-    Bs2_b = Bs2[..., None, None]             # (..., 1, 1)
-    c2_b  = c2[..., None, None]              # (..., 1, 1)
+    Bs2b = Bs2[None, None, None, :]
+    c2b  = c2 [None, None, None, :]
 
-    # ---- 各和を一発で計算（axis=(-2,-1) が k,i の和）----
-    G00_sum   = jnp.sum(term, axis=(-2, -1))
+    # ---- Σ_{k,i} ----
+    G00_sum  = jnp.sum(term, axis=(1, 2))
 
-    dGdA_sum  = jnp.sum((-N_b + Bs2_b) * term,  axis=(-2, -1))
-    dGdC_sum  = jnp.sum(( N_b - Bs2_b) * term2, axis=(-2, -1))
+    dGdA_sum = jnp.sum((-N + Bs2b) * term,  axis=(1, 2))
+    dGdC_sum = jnp.sum(( N - Bs2b) * term2, axis=(1, 2))
 
     d2A_sum = jnp.sum(
-        (-N_b + 2*N_b*(1+N_b)*c2_b + Bs2_b - 4*(1+N_b)*c2_b*Bs2_b + 2*c2_b*Bs2_b**2) * term,
-        axis=(-2, -1)
+        (-N + 2*N*(1+N)*c2b + Bs2b - 4*(1+N)*c2b*Bs2b + 2*c2b*Bs2b**2) * term,
+        axis=(1, 2)
     )
 
     d2C_sum = jnp.sum(
-        (N_b*(-3 + 2*(1+N_b)*c2_b) + (3 - 4*c2_b*(1+N_b))*Bs2_b + 2*c2_b*Bs2_b**2) * term2,
-        axis=(-2, -1)
+        (N*(-3 + 2*(1+N)*c2b) + (3 - 4*c2b*(1+N))*Bs2b + 2*c2b*Bs2b**2) * term2,
+        axis=(1, 2)
     )
 
     dAdC_sum = jnp.sum(
-        (N_b*(-1 + (1+N_b)*c2_b) + (1 - 2*(1+N_b)*c2_b)*Bs2_b + c2_b*Bs2_b**2) * term2,
-        axis=(-2, -1)
+        (N*(-1 + (1+N)*c2b) + (1 - 2*(1+N)*c2b)*Bs2b + c2b*Bs2b**2) * term2,
+        axis=(1, 2)
     )
 
     d3A_sum = jnp.sum(
-        ( N_b*(1+N_b)*(-3 + 2*(2+N_b)*c2_b)
-        - 6*(1+N_b)*(-1 + (2+N_b)*c2_b)*Bs2_b
-        + 3*(-1 + 2*(2+N_b)*c2_b)*Bs2_b**2
-        - 2*c2_b*Bs2_b**3) * term,
-        axis=(-2, -1)
+        ( N*(1+N)*(-3 + 2*(2+N)*c2b)
+        - 6*(1+N)*(-1 + (2+N)*c2b)*Bs2b
+        + 3*(-1 + 2*(2+N)*c2b)*Bs2b**2
+        - 2*c2b*Bs2b**3) * term,
+        axis=(1, 2)
     )
 
     d3A2C_sum = jnp.sum(
-        ( N_b + N_b*(1+N_b)*(-5 + 2*(2+N_b)*c2_b)*c2_b
-        - (1 + 2*(1+N_b)*(-5 + 3*c2_b*(2+N_b))*c2_b)*Bs2_b
-        + (-5 + 6*(2+N_b)*c2_b)*c2_b*Bs2_b**2
-        - 2*c2_b**2 * Bs2_b**3) * term2,
-        axis=(-2, -1)
+        ( N + N*(1+N)*(-5 + 2*(2+N)*c2b)*c2b
+        - (1 + 2*(1+N)*(-5 + 3*c2b*(2+N))*c2b)*Bs2b
+        + (-5 + 6*(2+N)*c2b)*c2b*Bs2b**2
+        - 2*c2b**2 * Bs2b**3) * term2,
+        axis=(1, 2)
     )
 
     d4A_sum = jnp.sum(
-        ( N_b*(1+N_b)*(3 + 4*(2+N_b)*(-3 + (3+N_b)*c2_b)*c2_b)
-        - 2*(1+N_b)*(3 + 2*c2_b*(2+N_b)*(-9 + 4*c2_b*(3+N_b)))*Bs2_b
-        + 3*(1 + 4*(2+N_b)*(-3 + 2*(3+N_b)*c2_b)*c2_b)*Bs2_b**2
-        - 4*(-3 + 4*(3+N_b)*c2_b)*c2_b*Bs2_b**3
-        + 4*c2_b**2 * Bs2_b**4) * term,
-        axis=(-2, -1)
+        ( N*(1+N)*(3 + 4*(2+N)*(-3 + (3+N)*c2b)*c2b)
+        - 2*(1+N)*(3 + 2*c2b*(2+N)*(-9 + 4*c2b*(3+N)))*Bs2b
+        + 3*(1 + 4*(2+N)*(-3 + 2*(3+N)*c2b)*c2b)*Bs2b**2
+        - 4*(-3 + 4*(3+N)*c2b)*c2b*Bs2b**3
+        + 4*c2b**2 * Bs2b**4) * term,
+        axis=(1, 2)
     )
 
-    # ---- 共通の指数因子とチェーンルールの外側係数 ----
-    e = jnp.exp(-Bs2)                           # (...,)
+    e2 = jnp.exp(-Bs2)
+    G00   = G00_sum * e2
 
-    G00   = G00_sum * e
+    dGdA  = dGdA_sum  * e2 * (2 * A / rho2)
+    dGdC  = dGdC_sum  * e2 * (2 * c2 * jnp.sqrt(s2 / rho2))
 
-    dGdA  = dGdA_sum  * e * (2 * A / rho2)
-    dGdC  = dGdC_sum  * e * (2 * c2 * jnp.sqrt(s2 / rho2))
+    d2A   = d2A_sum   * e2 * (2 / rho2)
+    d2C   = d2C_sum   * e2 * (2 * c2 / rho2)
+    dAdC  = dAdC_sum  * e2 * (-4 * jnp.sqrt(c2 * s2) / rho2)
 
-    d2A   = d2A_sum   * e * (2 / rho2)
-    d2C   = d2C_sum   * e * (2 * c2 / rho2)
-    dAdC  = dAdC_sum  * e * (-4 * jnp.sqrt(c2 * s2) / rho2)
+    d3A   = d3A_sum   * e2 * (-4 * jnp.sqrt(c2) / (rho2**1.5))
+    d3A2C = d3A2C_sum * e2 * ( 4 * jnp.sqrt(s2) / (rho2**1.5))
 
-    d3A   = d3A_sum   * e * (-4 * jnp.sqrt(c2) / (rho2**1.5))
-    d3A2C = d3A2C_sum * e * ( 4 * jnp.sqrt(s2) / (rho2**1.5))
+    d4A   = d4A_sum   * e2 * (4 / (rho2**2))
 
-    d4A   = d4A_sum   * e * (4 / (rho2**2))
+    return jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=1)  # (L,9,nq)
 
-    # 先頭軸=コンポーネントにまとめる（元の vstack と同じ順）
-    dGs_l = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=0)  # (9, ...)
+def _shift_down(x, s, L):
+    # x: (L, nq) -> 上に s 行ゼロを足して長さ L に戻す
+    return jnp.pad(x, ((s, 0), (0, 0)))[:L]
 
-    return dGs_l
-
-@partial(jit, static_argnames=("lmax",))
-def get_Gs(A, B, C, G00_coeffs, lmax=10):
+@partial(jit, static_argnames=['lmax'])
+def get_Gs(A, B, C, coeffs, lmax=10):
     L = lmax + 1
+    # (L, 9, nq)
+    dGs = get_dGs(A, B, C, coeffs, lmax)
+    nq = dGs.shape[-1]
 
-    # ---- l ごとの get_dGs_l を Python ループなしで評価（fori_loop + switch）----
-    # 事前に l 固有の分岐を作成（coeff を閉じ込める）
-    branches = []
-    for i in range(L):
-        coeff_i = G00_coeffs[i]  # shape (i+1, i+1)
-        def make_branch(coeff_i):
-            def branch(_):
-                # get_dGs_l は (9, nq) を返す想定
-                return get_dGs_l(A, B, C, coeff_i)
-            return branch
-        branches.append(make_branch(coeff_i))
+    G00s, dGdAs, dGdCs, d2GdA2s, d2GdC2s, d2GdAdCs, d3GdA3s, d3GdA2dCs, d4GdA4s = (dGs[:, i] for i in range(9))
 
-    # ループ本体：各 l で (9, nq) を返し、(L, 9, nq) に積む
-    out0 = jnp.zeros((L, 9, C.shape[0]), dtype=jnp.result_type(A, B, C))  # nq = len(self._q) 相当
-    # もし nq を C の shape から取れない場合は適宜置き換えてください
+    G00s_lm1, G00s_lm2, G00s_lm3, G00s_lm4 = (_shift_down(G00s, s, L) for s in (1,2,3,4))
+    dGdAs_lm1, dGdAs_lm2, dGdAs_lm3        = (_shift_down(dGdAs, s, L) for s in (1,2,3))
+    dGdCs_lm1, dGdCs_lm2                   = (_shift_down(dGdCs, s, L) for s in (1,2))
+    d2GdAdCs_lm1                           = _shift_down(d2GdAdCs, 1, L)
+    d2GdA2s_lm1, d2GdA2s_lm2               = (_shift_down(d2GdA2s, s, L) for s in (1,2))
+    d3GdA3s_lm1                            = _shift_down(d3GdA3s, 1, L)
 
-    def body(l, out):
-        dGs_l = jax.lax.switch(l, branches, operand=None)   # (9, nq)
-        return out.at[l].set(dGs_l)
-
-    dGs = jax.lax.fori_loop(0, L, body, out0)              # (L, 9, nq)
-
-    # ---- 軸の命名を合わせて取り出し（元コードと同じ）----
-    # dGs: (L, 9, nq) -> 各成分 (L, nq)
-    G00s       = dGs[:, 0, :]
-    dGdAs      = dGs[:, 1, :]
-    dGdCs      = dGs[:, 2, :]
-    d2GdA2s    = dGs[:, 3, :]
-    d2GdC2s    = dGs[:, 4, :]
-    d2GdAdCs   = dGs[:, 5, :]
-    d3GdA3s    = dGs[:, 6, :]
-    d3GdA2dCs  = dGs[:, 7, :]
-    d4GdA4s    = dGs[:, 8, :]
-
-    # ---- シフトは pad 一回 + スライスで（vstack 多用を排除）----
-    # 例：X_lm1 = [0; X[:-1]], X_lm2 = [0; 0; X[:-2]], ...
-    def shift_down(x, s):
-        # x: (L, nq) -> (L, nq) with s zeros inserted at top
-        return jnp.pad(x, ((s, 0), (0, 0)))[:L, :]
-
-    G00s_lm1, G00s_lm2, G00s_lm3, G00s_lm4 = (shift_down(G00s, s) for s in (1, 2, 3, 4))
-    dGdAs_lm1, dGdAs_lm2, dGdAs_lm3       = (shift_down(dGdAs, s) for s in (1, 2, 3))
-    dGdCs_lm1, dGdCs_lm2                   = (shift_down(dGdCs, s) for s in (1, 2))
-    d2GdAdCs_lm1                            = shift_down(d2GdAdCs, 1)
-    d2GdA2s_lm1, d2GdA2s_lm2               = (shift_down(d2GdA2s, s) for s in (1, 2))
-    d3GdA3s_lm1                             = shift_down(d3GdA3s, 1)
+    Acol, Ccol = A[None, :], C[None, :]  # (1,nq) for broadcasting with (L,nq)
     
-    nq = G00s.shape[1]
-    Gs = jnp.zeros((5, 3, L, nq), dtype=G00s.dtype)
+    Gs = jnp.zeros((5, 3, L, nq), dtype=A.dtype)
 
-    Gs = Gs.at[0, 0].set(G00s)
+    Gs = Gs.at[0,0].set(G00s)
 
-    Gs = Gs.at[1, 0].set(dGdAs + 0.5 * A * G00s_lm1)
-    Gs = Gs.at[0, 1].set(dGdCs + 0.5 * C * G00s_lm1)
+    Gs = Gs.at[1,0].set(dGdAs + 0.5 * Acol * G00s_lm1)
+    Gs = Gs.at[0,1].set(dGdCs + 0.5 * Ccol * G00s_lm1)
 
-    Gs = Gs.at[2, 0].set(d2GdA2s + A * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * (A**2) * G00s_lm2)
-    Gs = Gs.at[0, 2].set(d2GdC2s + C * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * (C**2) * G00s_lm2)
-    Gs = Gs.at[1, 1].set(d2GdAdCs + 0.5 * C * dGdAs_lm1 + 0.5 * A * dGdCs_lm1
-                         + 0.25 * (A * C) * G00s_lm2)
+    Gs = Gs.at[2,0].set(d2GdA2s + Acol * dGdAs_lm1 + 0.5 * G00s_lm1 + 0.25 * (Acol**2) * G00s_lm2)
+    Gs = Gs.at[0,2].set(d2GdC2s + Ccol * dGdCs_lm1 + 0.5 * G00s_lm1 + 0.25 * (Ccol**2) * G00s_lm2)
+    Gs = Gs.at[1,1].set(d2GdAdCs + 0.5 * Ccol * dGdAs_lm1 + 0.5 * Acol * dGdCs_lm1
+                         + 0.25 * (Acol * Ccol) * G00s_lm2)
 
-    Gs = Gs.at[3, 0].set(d3GdA3s + 1.5 * A * d2GdA2s_lm1 + 1.5 * dGdAs_lm1
-                         + 0.75 * (A**2) * dGdAs_lm2 + 0.75 * A * G00s_lm2
-                         + (A**3) / 8 * G00s_lm3)
+    Gs = Gs.at[3,0].set(d3GdA3s + 1.5 * Acol * d2GdA2s_lm1 + 1.5 * dGdAs_lm1
+                         + 0.75 * (Acol**2) * dGdAs_lm2 + 0.75 * Acol * G00s_lm2
+                         + (Acol**3) / 8 * G00s_lm3)
 
-    Gs = Gs.at[2, 1].set(d3GdA2dCs + 0.5 * C * d2GdA2s_lm1 + A * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1
-                         + 0.5 * A * C * dGdAs_lm2 + 0.25 * (A**2) * dGdCs_lm2
-                         + 0.25 * C * G00s_lm2 + (A**2) * C / 8 * G00s_lm3)
+    Gs = Gs.at[2,1].set(d3GdA2dCs + 0.5 * Ccol * d2GdA2s_lm1 + Acol * d2GdAdCs_lm1 + 0.5 * dGdCs_lm1
+                         + 0.5 * Acol * Ccol * dGdAs_lm2 + 0.25 * (Acol**2) * dGdCs_lm2
+                         + 0.25 * Ccol * G00s_lm2 + (Acol**2) * Ccol / 8 * G00s_lm3)
 
-    Gs = Gs.at[4, 0].set(d4GdA4s + 2 * A * d3GdA3s_lm1 + 3 * d2GdA2s_lm1
-                         + 1.5 * (A**2) * d2GdA2s_lm2 + 3 * A * dGdAs_lm2 + 0.75 * G00s_lm2
-                         + 0.5 * (A**3) * dGdAs_lm3 + 0.75 * (A**2) * G00s_lm3
-                         + (A**4) / 16 * G00s_lm4)
+    Gs = Gs.at[4,0].set(d4GdA4s + 2 * Acol * d3GdA3s_lm1 + 3 * d2GdA2s_lm1
+                         + 1.5 * (Acol**2) * d2GdA2s_lm2 + 3 * Acol * dGdAs_lm2 + 0.75 * G00s_lm2
+                         + 0.5 * (Acol**3) * dGdAs_lm3 + 0.75 * (Acol**2) * G00s_lm3
+                         + (Acol**4) / 16 * G00s_lm4)
 
     return Gs
