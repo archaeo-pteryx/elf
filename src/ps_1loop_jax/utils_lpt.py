@@ -26,58 +26,49 @@ def get_G00(A, B, C, coeff):
 
 def get_dGs(A, B, C, coeffs, lmax):
     L  = lmax + 1
+    nq = A.shape[0]
+    
+    rho2 = A**2 + C**2           # (nq,)
+    c2   = A**2 / rho2           # (nq,)
+    s2   = C**2 / rho2           # (nq,)
+    Bs2  = B * s2                # (nq,)
+    
+    l_idx = jnp.arange(L)        # (L,)
+    k_idx = jnp.arange(L)        # (K=L,)
+    i_idx = jnp.arange(L)        # (I=L,)
 
-    rho2 = A**2 + C**2
-    c2   = A**2 / rho2
-    s2   = C**2 / rho2
-    Bs2  = B * s2
+    # --- v_{l,k} = s2^(l-k) : (L,K,1,nq) ---
+    exp_lk = (l_idx[:, None, None] - k_idx[None, :, None]).reshape(L, L, 1, 1)     # (L,K,1,1)
+    v = jnp.power(s2.reshape(1, 1, 1, nq), exp_lk)                                 # (L,K,1,nq)
 
-    l_idx = jnp.arange(L)  # (L,)
-    k_idx = jnp.arange(L)  # (L,)
-    i_idx = jnp.arange(L)  # (L,)
+    # --- w_{l,i} = (-B)^(l+i) * s2^i : (L,1,I,nq) ---
+    powB_l    = jnp.power((-B)[None, :], l_idx[:, None])                          # (L, nq)
+    powB_i    = jnp.power((-B)[None, :], i_idx[:, None])                          # (I, nq)
+    s2_i      = jnp.power(s2[None, :],   i_idx[:, None])                          # (I, nq)
+    powB_i_s2 = powB_i * s2_i                                                     # (I, nq)
+    w = powB_l[:, None, None, :] * powB_i_s2[None, None, :, :]                    # (L,1,I,nq)
 
-    # ---- 三角マスク（k<=l, i<=l）で “無効セル” を完全に殺す ----
-    mask_lk = (k_idx[None, :] <= l_idx[:, None])         # (L,K)
-    mask_li = (i_idx[None, :] <= l_idx[:, None])         # (L,I)
-    mask = (mask_lk[:, :, None] & mask_li[:, None, :])   # (L,K,I)
-    coeffs = jnp.where(mask, coeffs, 0.0)                # (L,K,I)
-
-    # --- v_{l,k} = s2^(l-k) を負の冪なしで安全計算 ---
-    exp_lk = (l_idx[:, None] - k_idx[None, :])           # (L,K)
-    # 負の指数は使わない（mask_lkでゼロ化されるので安全に 0 を入れる）
-    v = jnp.where(
-        mask_lk[:, :, None],                             # (L,K,1)
-        jnp.power(s2[None, None, :], exp_lk[:, :, None]),# (L,K,1,nq)
-        0.0
-    )
-
-    # --- w_{l,i} = (-B)^(l+i) * s2^i （こちらは非負の冪のみ）---
-    powB_l    = jnp.power((-B)[None, :], l_idx[:, None])                 # (L,nq)
-    powB_i    = jnp.power((-B)[None, :], i_idx[:, None])                 # (I,nq)
-    s2_i      = jnp.power(s2[None, :],      i_idx[:, None])              # (I,nq)
-    w = powB_l[:, None, None, :] * (powB_i * s2_i)[None, None, :, :]     # (L,1,I,nq)
-
-    # --- term と term2（s2=0 は 0 扱い）---
-    term  = v * w * coeffs[..., None]                                    # (L,K,I,nq)
-    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                         # (nq,)
-    term2 = term * inv_s2[None, None, None, :]                            # (L,K,I,nq)
+    # --- term_{l,k,i,q} と term2 = term/s2（s2=0は0扱い）---
+    term  = v * w * coeffs[..., None]                                             # (L,K,I,nq)
+    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                                  # (nq,)
+    term2 = term * inv_s2[None, None, None, :]                                    # (L,K,I,nq)
 
     # --- n = l + i - k を (L,K,I,1) に ---
-    N = (l_idx[:, None, None] + i_idx[None, None, :] - k_idx[None, :, None])[..., None]  # (L,K,I,1)
+    N = (l_idx[:, None, None] + i_idx[None, None, :] - k_idx[None, :, None]).reshape(L, L, L, 1)
 
-    Bs2b = Bs2[None, None, None, :]
-    c2b  = c2 [None, None, None, :]
+    # --- スカラーを (1,1,1,nq) に持ち上げ（最後の軸が nq） ---
+    Bs2b = Bs2.reshape(1, 1, 1, nq)
+    c2b  = c2.reshape(1, 1, 1, nq)
+    
+    G00_sum  = jnp.sum(term, axis=(1, 2))                                         # (L, nq)
 
-    # ---- Σ_{k,i} ----
-    G00_sum  = jnp.sum(term, axis=(1, 2))
-
-    dGdA_sum = jnp.sum((-N + Bs2b) * term,  axis=(1, 2))
-    dGdC_sum = jnp.sum(( N - Bs2b) * term2, axis=(1, 2))
+    dGdA_sum = jnp.sum((-N + Bs2b) * term,  axis=(1, 2))                          # (L, nq)
+    dGdC_sum = jnp.sum(( N - Bs2b) * term2, axis=(1, 2))                          # (L, nq)
 
     d2A_sum = jnp.sum(
         (-N + 2*N*(1+N)*c2b + Bs2b - 4*(1+N)*c2b*Bs2b + 2*c2b*Bs2b**2) * term,
         axis=(1, 2)
-    )
+    )                                                                             # (L, nq)
 
     d2C_sum = jnp.sum(
         (N*(-3 + 2*(1+N)*c2b) + (3 - 4*c2b*(1+N))*Bs2b + 2*c2b*Bs2b**2) * term2,
@@ -113,9 +104,9 @@ def get_dGs(A, B, C, coeffs, lmax):
         + 4*c2b**2 * Bs2b**4) * term,
         axis=(1, 2)
     )
-
-    e2 = jnp.exp(-Bs2)
-    G00   = G00_sum * e2
+    
+    e2 = jnp.exp(-Bs2)                          # (nq,)
+    G00   = G00_sum * e2                        # (L, nq)
 
     dGdA  = dGdA_sum  * e2 * (2 * A / rho2)
     dGdC  = dGdC_sum  * e2 * (2 * c2 * jnp.sqrt(s2 / rho2))
@@ -128,8 +119,9 @@ def get_dGs(A, B, C, coeffs, lmax):
     d3A2C = d3A2C_sum * e2 * ( 4 * jnp.sqrt(s2) / (rho2**1.5))
 
     d4A   = d4A_sum   * e2 * (4 / (rho2**2))
-
-    return jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=1)  # (L,9,nq)
+    
+    out = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=1) # (L,9,nq)
+    return out
 
 def _shift_down(x, s, L):
     # x: (L, nq) -> 上に s 行ゼロを足して長さ L に戻す
