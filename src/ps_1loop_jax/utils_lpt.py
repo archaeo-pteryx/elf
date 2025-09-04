@@ -4,25 +4,53 @@ from jax import jit
 import jax.numpy as jnp
 from functools import partial
 
-@jit
-def get_G00(A, B, C, coeff):
-    x = -B
-    y = C**2 / (A**2 + C**2)
+# @jit
+# def get_G00(A, B, C, coeff):
+#     x = -B
+#     y = C**2 / (A**2 + C**2)
 
-    l = coeff.shape[0] - 1
-    i = jnp.arange(l + 1)
-    k = jnp.arange(l + 1)
+#     l = coeff.shape[0] - 1
+#     i = jnp.arange(l + 1)
+#     k = jnp.arange(l + 1)
 
-    v = jnp.power(y[..., None], l - k)
+#     v = jnp.power(y[..., None], l - k)
 
-    M = jnp.tensordot(v, coeff, axes=((-1,), (0,)))
+#     M = jnp.tensordot(v, coeff, axes=((-1,), (0,)))
 
-    xpow = jnp.power(x[..., None], l + i)
-    ypow = jnp.power(y[..., None], i)
+#     xpow = jnp.power(x[..., None], l + i)
+#     ypow = jnp.power(y[..., None], i)
 
-    res = jnp.sum(M * xpow * ypow, axis=-1) * jnp.exp(x * y)
+#     res = jnp.sum(M * xpow * ypow, axis=-1) * jnp.exp(x * y)
 
-    return res
+#     return res
+
+def get_G00s(A, B, C, coeffs, lmax):
+    L  = lmax + 1
+    nq = A.shape[0]
+    
+    rho2 = A**2 + C**2           # (nq,)
+    s2   = C**2 / rho2           # (nq,)
+    Bs2  = B * s2                # (nq,)
+    
+    l_idx = jnp.arange(L)        # (L,)
+    k_idx = jnp.arange(L)        # (K=L,)
+    i_idx = jnp.arange(L)        # (I=L,)
+
+    # --- v_{l,k} = s2^(l-k) : (L,K,1,nq) ---
+    exp_lk = (l_idx[:, None, None] - k_idx[None, :, None]).reshape(L, L, 1, 1)     # (L,K,1,1)
+    v = jnp.power(s2.reshape(1, 1, 1, nq), exp_lk)                                 # (L,K,1,nq)
+
+    # --- w_{l,i} = (-B)^(l+i) * s2^i : (L,1,I,nq) ---
+    powB_l    = jnp.power((-B)[None, :], l_idx[:, None])                          # (L, nq)
+    powB_i    = jnp.power((-B)[None, :], i_idx[:, None])                          # (I, nq)
+    s2_i      = jnp.power(s2[None, :],   i_idx[:, None])                          # (I, nq)
+    powB_i_s2 = powB_i * s2_i                                                     # (I, nq)
+    w = powB_l[:, None, None, :] * powB_i_s2[None, None, :, :]                    # (L,1,I,nq)
+    
+    term  = v * w * coeffs[..., None]                                             # (L,K,I,nq)
+    G00 = jnp.exp(-Bs2) * jnp.sum(term, axis=(1, 2))                   # (L, nq)
+    
+    return G00
 
 def get_dGs(A, B, C, coeffs, lmax):
     L  = lmax + 1
