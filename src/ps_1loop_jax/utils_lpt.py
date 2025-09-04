@@ -43,31 +43,30 @@ def get_dGs(A, B, C, coeffs, lmax):
     c2   = A**2 / rho2           # (nq,)
     s2   = C**2 / rho2           # (nq,)
     Bs2  = B * s2                # (nq,)
-    
-    l_idx = jnp.arange(L)        # (L,)
-    k_idx = jnp.arange(L)        # (K=L,)
-    i_idx = jnp.arange(L)        # (I=L,)
 
-    # --- v_{l,k} = s2^(l-k) : (L,K,1,nq) ---
-    exp_lk = (l_idx[:, None, None] - k_idx[None, :, None]).reshape(L, L, 1, 1)     # (L,K,1,1)
-    v = jnp.power(s2.reshape(1, 1, 1, nq), exp_lk)                                 # (L,K,1,nq)
+    l_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
+    k_idx = jnp.arange(L, dtype=jnp.int32)  # (K=L,)
+    i_idx = jnp.arange(L, dtype=jnp.int32)  # (I=L,)
 
-    # --- w_{l,i} = (-B)^(l+i) * s2^i : (L,1,I,nq) ---
-    powB_l    = jnp.power((-B)[None, :], l_idx[:, None])                          # (L, nq)
-    powB_i    = jnp.power((-B)[None, :], i_idx[:, None])                          # (I, nq)
-    s2_i      = jnp.power(s2[None, :],   i_idx[:, None])                          # (I, nq)
-    powB_i_s2 = powB_i * s2_i                                                     # (I, nq)
-    w = powB_l[:, None, None, :] * powB_i_s2[None, None, :, :]                    # (L,1,I,nq)
+    powB_l = jnp.power((-B)[None, :], l_idx[:, None])   # (L, nq)
+    powB_i = jnp.power((-B)[None, :], i_idx[:, None])   # (I, nq)
+    x = powB_l[:, None, None, :] * powB_i[None, None, :, :]  # (L,1,I,nq)
 
-    # --- term_{l,k,i,q} と term2 = term/s2（s2=0は0扱い）---
-    term  = v * w * coeffs[..., None]                                             # (L,K,I,nq)
-    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                                  # (nq,)
-    term2 = term * inv_s2[None, None, None, :]                                    # (L,K,I,nq)
+    exp_lki = (l_idx[:, None, None]
+               + i_idx[None, None, :]
+               - k_idx[None, :, None])                  # (L,K,I), int32
+    nonneg_mask = (exp_lki >= 0)
+    exp_lki_clamped = jnp.where(nonneg_mask, exp_lki, 0)
+    y_raw = jnp.power(s2[None, None, None, :], exp_lki_clamped[..., None])  # (L,K,I,nq)
+    y = jnp.where(nonneg_mask[..., None], y_raw, 0.0)
 
-    # --- n = l + i - k を (L,K,I,1) に ---
-    N = (l_idx[:, None, None] + i_idx[None, None, :] - k_idx[None, :, None]).reshape(L, L, L, 1)
+    # --- term_{l,k,i,q} and term2 = term/s2 ---
+    term = x * y * coeffs[..., None]                                             # (L,K,I,nq)
+    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                                 # (nq,)
+    term2 = term * inv_s2[None, None, None, :]                                   # (L,K,I,nq)
 
-    # --- スカラーを (1,1,1,nq) に持ち上げ（最後の軸が nq） ---
+    N = exp_lki.reshape(L, L, L, 1)
+
     Bs2b = Bs2.reshape(1, 1, 1, nq)
     c2b  = c2.reshape(1, 1, 1, nq)
     
