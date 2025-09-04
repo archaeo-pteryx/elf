@@ -136,7 +136,7 @@ class PowerSpectrum1LoopLPT:
         C    = k * q * s                           # (nq,)
 
         base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X + Y))  # (nq,)
-        
+
         G00s = get_G00s(A, B, C, self.G00_coeffs, self.lmax) # (L, nq)
         L = self.lmax + 1
 
@@ -149,13 +149,14 @@ class PowerSpectrum1LoopLPT:
         logk = jnp.log(k)
         logk_fft = jnp.log(self._k)
 
-        def per_l(l, g):  # g: (nk,)
-            pk_fft = self.get_pk_ln(l, -3, g)          # (nk,)
-            return jnp.interp(logk, logk_fft, pk_fft)  # (nk,)
+        def per_l(l, g):
+            pk_fft = self.get_pk_ln(l, -3, g)
+            return jnp.interp(logk, logk_fft, pk_fft)
         
-        terms = jax.vmap(per_l, in_axes=(0, 0))(jnp.arange(L), integrands)  # (L, nk)
+        pkmu_ls = jax.vmap(per_l, in_axes=(0, 0))(jnp.arange(L), integrands)  # (L,)
+        pkmu = jnp.sum(pkmu_ls)
 
-        return jnp.sum(terms, axis=0)
+        return pkmu
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel(self, k, mu, pk_data, f):
@@ -171,9 +172,8 @@ class PowerSpectrum1LoopLPT:
 
         def per_mu(mu_j):
             return jax.vmap(lambda k_i: self.get_pkmu_zel_k_mu(k_i, mu_j, X_lin, Y_lin, f))(k)  # (nk,)
-        pkmu = jax.vmap(per_mu)(mu)      # (nmu, nk)
-        pkmu = jnp.transpose(pkmu, (1, 0))   # (nk, nmu)
-
+        pkmu = jax.vmap(per_mu)(mu).T      # (nk, nmu)
+        
         return pkmu
 
     @partial(jit, static_argnames=('self',))
