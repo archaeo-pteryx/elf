@@ -4,7 +4,6 @@ from jax import jit
 import jax.numpy as jnp
 from functools import partial
 
-
 def get_G00s(A, B, C, coeffs, lmax):
     L  = lmax + 1
 
@@ -137,7 +136,6 @@ def _shift_down(x, s, L):
     # x: (L, nq) -> 上に s 行ゼロを足して長さ L に戻す
     return jnp.pad(x, ((s, 0), (0, 0)))[:L]
 
-@partial(jit, static_argnames=['lmax'])
 def get_Gs(A, B, C, coeffs, lmax=10):
     L = lmax + 1
     # (L, 9, nq)
