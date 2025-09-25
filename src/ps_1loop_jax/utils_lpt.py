@@ -34,6 +34,57 @@ def get_G00s(A, B, C, coeffs, lmax):
 
     return G00s
 
+def get_G00s_batched(A, B, C, coeffs, lmax):
+    """
+    A,B,C : (*batch, nq)   例: (nk, nmu, nq)
+    coeffs: (L, L, L)      （軸は [l, k, i]）
+    lmax  : int
+    return: (L, *batch, nq)
+    """
+    L = lmax + 1
+    *batch, nq = A.shape
+
+    rho2 = A**2 + C**2                  # (*batch, nq)
+    s2   = (C**2) / rho2                # (*batch, nq)
+    Bs2  = B * s2                       # (*batch, nq)
+
+    # 整数インデックス
+    l_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
+    k_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
+    i_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
+
+    # (-B)^(l+i) = (-B)^l * (-B)^i
+    powB_l = jnp.power((-B)[None, ...], l_idx[:, None])   # (L, *batch, nq)
+    powB_i = jnp.power((-B)[None, ...], i_idx[:, None])   # (L, *batch, nq)
+    # x: (L, 1, I, *batch, nq)
+    x = powB_l[:, None, ...] * powB_i[None, :, ...]       # (L, L, *batch, nq) → 後で I 軸として扱う
+    x = x.reshape(L, 1, L, *batch, nq)
+
+    # s2^(l+i-k) （負指数は0でマスク）
+    exp_lki = (l_idx[:, None, None]
+               + i_idx[None, None, :]
+               - k_idx[None, :, None])                    # (L,K,I), int32
+    nonneg = (exp_lki >= 0)
+    exp_clamped = jnp.where(nonneg, exp_lki, 0)
+
+    # y: (L,K,I, *batch, nq)
+    # s2[None,None,None,...] に (L,K,I,1,…,1,nq) を掛ける
+    broadcast_shape = (L, L, L) + (1,)*len(batch) + (nq,)
+    s2_exp_base = s2.reshape((1,)*3 + (*batch, nq))       # (1,1,1,*batch,nq)
+    y_raw = jnp.power(s2_exp_base, exp_clamped.reshape(broadcast_shape))
+    y = jnp.where(nonneg.reshape((L, L, L) + (1,)*len(batch) + (1,)), y_raw, 0.0)
+
+    # 係数を dtype 整合 & ブロードキャスト
+    coeffs = coeffs.astype(A.dtype).reshape(L, L, L, *([1]*len(batch)), 1)  # (L,K,I,1...,1)
+
+    # term と和（K,I を畳む）
+    term = x * y * coeffs                         # (L,K,I,*batch,nq)
+    G = jnp.sum(term, axis=(1, 2))                # (L, *batch, nq)
+
+    # 最後に exp(-B*s2)
+    G00s = jnp.exp(-Bs2).reshape((1,)*1 + (*batch, nq)) * G
+    return G00s                                   # (L, *batch, nq)
+
 def get_dGs(A, B, C, coeffs, lmax):
     L  = lmax + 1
     nq = A.shape[0]
@@ -129,7 +180,7 @@ def get_dGs(A, B, C, coeffs, lmax):
 
     d4A   = d4A_sum   * e2 * (4 / (rho2**2))
     
-    out = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=1) # (L,9,nq)
+    out = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=0) # (9, L, nq)
     return out
 
 def _shift_down(x, s, L):
@@ -138,11 +189,10 @@ def _shift_down(x, s, L):
 
 def get_Gs(A, B, C, coeffs, lmax=10):
     L = lmax + 1
-    # (L, 9, nq)
-    dGs = get_dGs(A, B, C, coeffs, lmax)
+    dGs = get_dGs(A, B, C, coeffs, lmax) # (9, L, nq)
     nq = dGs.shape[-1]
 
-    G00s, dGdAs, dGdCs, d2GdA2s, d2GdC2s, d2GdAdCs, d3GdA3s, d3GdA2dCs, d4GdA4s = (dGs[:, i] for i in range(9))
+    G00s, dGdAs, dGdCs, d2GdA2s, d2GdC2s, d2GdAdCs, d3GdA3s, d3GdA2dCs, d4GdA4s = (dGs[i] for i in range(9))
 
     G00s_lm1, G00s_lm2, G00s_lm3, G00s_lm4 = (_shift_down(G00s, s, L) for s in (1,2,3,4))
     dGdAs_lm1, dGdAs_lm2, dGdAs_lm3        = (_shift_down(dGdAs, s, L) for s in (1,2,3))
@@ -178,4 +228,9 @@ def get_Gs(A, B, C, coeffs, lmax=10):
                          + 0.5 * (Acol**3) * dGdAs_lm3 + 0.75 * (Acol**2) * G00s_lm3
                          + (Acol**4) / 16 * G00s_lm4)
 
-    return Gs
+    return Gs # (5, 3, L, nq)
+
+def get_Gs_vmapped(A, B, C, coeffs, lmax):
+    inner = jax.vmap(get_Gs, in_axes=(0, 0, 0, None, None), out_axes=0)  # -> (nmu, 5, 3, L, nq)
+    outer = jax.vmap(inner,  in_axes=(0, 0, 0, None, None), out_axes=0)  # -> (nk, nmu, 5, 3, L, nq)
+    return outer(A, B, C, coeffs, lmax)
