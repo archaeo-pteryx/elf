@@ -1,195 +1,229 @@
-import jax
-# jax.config.update('jax_enable_x64', True)
-from jax import jit
 import jax.numpy as jnp
-from functools import partial
 
-def get_G00s(A, B, C, coeffs, lmax):
-    L  = lmax + 1
+def _pow_table_vec(x, L: int):
+    x = jnp.asarray(x)
+    one = jnp.ones((1, x.shape[0]), dtype=x.dtype)  # (1,nq)
+    if L == 1:
+        return one
+    xs   = jnp.repeat(x[None, :], L-1, axis=0)     # (L-1,nq)
+    base = jnp.concatenate([one, xs], axis=0)      # (L,nq)
+    return jnp.cumprod(base, axis=0)               # (L,nq)
 
-    rho2 = A**2 + C**2
-    s2   = C**2 / rho2            # (nq,)
-    Bs2  = B * s2                 # (nq,)
-
-    l_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
-    k_idx = jnp.arange(L, dtype=jnp.int32)  # (K=L,)
-    i_idx = jnp.arange(L, dtype=jnp.int32)  # (I=L,)
-
-    powB_l = jnp.power((-B)[None, :], l_idx[:, None])   # (L, nq)
-    powB_i = jnp.power((-B)[None, :], i_idx[:, None])   # (I, nq)
-    x = powB_l[:, None, None, :] * powB_i[None, None, :, :]  # (L,1,I,nq)
-
-    exp_lki = (l_idx[:, None, None]
-               + i_idx[None, None, :]
-               - k_idx[None, :, None])                  # (L,K,I), int32
-    nonneg_mask = (exp_lki >= 0)
-    exp_lki_clamped = jnp.where(nonneg_mask, exp_lki, 0)
-    y_raw = jnp.power(s2[None, None, None, :], exp_lki_clamped[..., None])  # (L,K,I,nq)
-    y = jnp.where(nonneg_mask[..., None], y_raw, 0.0)
-
-    coeffs = coeffs.astype(A.dtype)                             # (L,K,I)
-
-    term = x * y * coeffs[..., None]                            # (L,K,I,nq)
-    G00s = jnp.exp(-Bs2)[None, :] * jnp.sum(term, axis=(1, 2))  # (L,nq)
-
-    return G00s
-
-def get_G00s_batched(A, B, C, coeffs, lmax):
-    """
-    A,B,C : (*batch, nq)   例: (nk, nmu, nq)
-    coeffs: (L, L, L)      （軸は [l, k, i]）
-    lmax  : int
-    return: (L, *batch, nq)
-    """
+# @partial(jit, static_argnames=['lmax'])
+def get_G00s(A, B, C, c2, s2, coeffs, lmax):
+    
     L = lmax + 1
-    *batch, nq = A.shape
+    Bs2  = B * s2            # (nq,)
 
-    rho2 = A**2 + C**2                  # (*batch, nq)
-    s2   = (C**2) / rho2                # (*batch, nq)
-    Bs2  = B * s2                       # (*batch, nq)
+    # (-B)^l, (s2)^l
+    B_pows = _pow_table_vec(-B, L)   # (-B)^l   (L,nq)
+    s2_pows = jnp.power(s2, jnp.arange(L))
 
-    # 整数インデックス
-    l_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
-    k_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
-    i_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
+    # indices and non-negative masking
+    li = jnp.arange(L)[:, None, None]
+    ki = jnp.arange(L)[None, :, None]
+    ii = jnp.arange(L)[None, None, :]
+    N  = (li + ii - ki)                          # (L,K,I)
+    mask = (N >= 0)
+    coeffs_m = coeffs * mask.astype(coeffs.dtype)
 
-    # (-B)^(l+i) = (-B)^l * (-B)^i
-    powB_l = jnp.power((-B)[None, ...], l_idx[:, None])   # (L, *batch, nq)
-    powB_i = jnp.power((-B)[None, ...], i_idx[:, None])   # (L, *batch, nq)
-    # x: (L, 1, I, *batch, nq)
-    x = powB_l[:, None, ...] * powB_i[None, :, ...]       # (L, L, *batch, nq) → 後で I 軸として扱う
-    x = x.reshape(L, 1, L, *batch, nq)
+    # (-B)^(l+i) * s2^(l+i-k) = (BlSl) * (BiSi) * inv(Sk)
+    BlSl = B_pows * s2_pows[:, None] # (L,nq)
+    BiSi = B_pows * s2_pows[:, None] # (I,nq)
 
-    # s2^(l+i-k) （負指数は0でマスク）
-    exp_lki = (l_idx[:, None, None]
-               + i_idx[None, None, :]
-               - k_idx[None, :, None])                    # (L,K,I), int32
-    nonneg = (exp_lki >= 0)
-    exp_clamped = jnp.where(nonneg, exp_lki, 0)
+    tiny = jnp.finfo(A.dtype).tiny
+    k_idx = jnp.arange(L, dtype=A.dtype)
+    invSk_dense = jnp.power(s2, -k_idx)
+    invSk_safe  = jnp.where(
+        s2 <= tiny,
+        jnp.concatenate(
+            [jnp.array([1.0], dtype=A.dtype),
+             jnp.zeros((L-1,), dtype=A.dtype)]
+        ),
+        invSk_dense
+    )                                            # (K,)
 
-    # y: (L,K,I, *batch, nq)
-    # s2[None,None,None,...] に (L,K,I,1,…,1,nq) を掛ける
-    broadcast_shape = (L, L, L) + (1,)*len(batch) + (nq,)
-    s2_exp_base = s2.reshape((1,)*3 + (*batch, nq))       # (1,1,1,*batch,nq)
-    y_raw = jnp.power(s2_exp_base, exp_clamped.reshape(broadcast_shape))
-    y = jnp.where(nonneg.reshape((L, L, L) + (1,)*len(batch) + (1,)), y_raw, 0.0)
-
-    # 係数を dtype 整合 & ブロードキャスト
-    coeffs = coeffs.astype(A.dtype).reshape(L, L, L, *([1]*len(batch)), 1)  # (L,K,I,1...,1)
-
-    # term と和（K,I を畳む）
-    term = x * y * coeffs                         # (L,K,I,*batch,nq)
-    G = jnp.sum(term, axis=(1, 2))                # (L, *batch, nq)
-
-    # 最後に exp(-B*s2)
-    G00s = jnp.exp(-Bs2).reshape((1,)*1 + (*batch, nq)) * G
-    return G00s                                   # (L, *batch, nq)
-
-def get_dGs(A, B, C, coeffs, lmax):
-    L  = lmax + 1
-    nq = A.shape[0]
+    # --- i contraction： (l k i)×(i q)->(l k q) ---
+    def red_i(PNk):  # PNk: (L,K,I)
+        return jnp.einsum('lki,iq->lkq', coeffs_m * PNk, BiSi)
     
-    rho2 = A**2 + C**2           # (nq,)
-    c2   = A**2 / rho2           # (nq,)
-    s2   = C**2 / rho2           # (nq,)
-    Bs2  = B * s2                # (nq,)
+    # --- k contraction + l factor： (l k q)×(k)->(l q), multiply BlSl ---
+    def red_k(Tlkq):
+        return jnp.einsum('lkq,k->lq', Tlkq, invSk_safe) * BlSl
 
-    l_idx = jnp.arange(L, dtype=jnp.int32)  # (L,)
-    k_idx = jnp.arange(L, dtype=jnp.int32)  # (K=L,)
-    i_idx = jnp.arange(L, dtype=jnp.int32)  # (I=L,)
+    # S_d = Σ coeffs·N^d·term
+    One = jnp.ones_like(N, dtype=A.dtype)
 
-    powB_l = jnp.power((-B)[None, :], l_idx[:, None])   # (L, nq)
-    powB_i = jnp.power((-B)[None, :], i_idx[:, None])   # (I, nq)
-    x = powB_l[:, None, None, :] * powB_i[None, None, :, :]  # (L,1,I,nq)
+    S0 = red_k(red_i(One))   # (L,nq)
 
-    exp_lki = (l_idx[:, None, None]
-               + i_idx[None, None, :]
-               - k_idx[None, :, None])                  # (L,K,I), int32
-    nonneg_mask = (exp_lki >= 0)
-    exp_lki_clamped = jnp.where(nonneg_mask, exp_lki, 0)
-    y_raw = jnp.power(s2[None, None, None, :], exp_lki_clamped[..., None])  # (L,K,I,nq)
-    y = jnp.where(nonneg_mask[..., None], y_raw, 0.0)
+    # overall factors
+    e2   = jnp.exp(-Bs2)[None, :]                               # (1,nq)
 
-    # --- term_{l,k,i,q} and term2 = term/s2 ---
-    term = x * y * coeffs[..., None]                                             # (L,K,I,nq)
-    inv_s2 = jnp.where(s2 == 0.0, 0.0, 1.0 / s2)                                 # (nq,)
-    term2 = term * inv_s2[None, None, None, :]                                   # (L,K,I,nq)
+    # G00
+    G00   = S0 * e2
+    return G00
 
-    N = exp_lki.reshape(L, L, L, 1)
-
-    Bs2b = Bs2.reshape(1, 1, 1, nq)
-    c2b  = c2.reshape(1, 1, 1, nq)
+# @partial(jit, static_argnames=['lmax'])
+def get_dGs(A, B, C, c2, s2, coeffs, lmax):
     
-    G00_sum  = jnp.sum(term, axis=(1, 2))                                         # (L, nq)
+    L = lmax + 1
 
-    dGdA_sum = jnp.sum((-N + Bs2b) * term,  axis=(1, 2))                          # (L, nq)
-    dGdC_sum = jnp.sum(( N - Bs2b) * term2, axis=(1, 2))                          # (L, nq)
+    rho2 = A*A + C*C         # (nq,)
+    Bs2  = B * s2            # (nq,)
 
-    d2A_sum = jnp.sum(
-        (-N + 2*N*(1+N)*c2b + Bs2b - 4*(1+N)*c2b*Bs2b + 2*c2b*Bs2b**2) * term,
-        axis=(1, 2)
-    )                                                                             # (L, nq)
+    # (-B)^l, (s2)^l
+    B_pows = _pow_table_vec(-B, L)   # (-B)^l   (L,nq)
+    s2_pows = jnp.power(s2, jnp.arange(L))
 
-    d2C_sum = jnp.sum(
-        (N*(-3 + 2*(1+N)*c2b) + (3 - 4*c2b*(1+N))*Bs2b + 2*c2b*Bs2b**2) * term2,
-        axis=(1, 2)
-    )
+    # indices and non-negative masking
+    li = jnp.arange(L)[:, None, None]
+    ki = jnp.arange(L)[None, :, None]
+    ii = jnp.arange(L)[None, None, :]
+    N  = (li + ii - ki)                          # (L,K,I)
+    mask = (N >= 0)
+    coeffs_m = coeffs * mask.astype(coeffs.dtype)
 
-    dAdC_sum = jnp.sum(
-        (N*(-1 + (1+N)*c2b) + (1 - 2*(1+N)*c2b)*Bs2b + c2b*Bs2b**2) * term2,
-        axis=(1, 2)
-    )
+    # (-B)^(l+i) * s2^(l+i-k) = (BlSl) * (BiSi) * inv(Sk)
+    BlSl = B_pows * s2_pows[:, None] # (L,nq)
+    BiSi = B_pows * s2_pows[:, None] # (I,nq)
 
-    d3A_sum = jnp.sum(
-        ( N*(1+N)*(-3 + 2*(2+N)*c2b)
-        - 6*(1+N)*(-1 + (2+N)*c2b)*Bs2b
-        + 3*(-1 + 2*(2+N)*c2b)*Bs2b**2
-        - 2*c2b*Bs2b**3) * term,
-        axis=(1, 2)
-    )
+    tiny = jnp.finfo(A.dtype).tiny
+    k_idx = jnp.arange(L, dtype=A.dtype)
+    invSk_dense = jnp.power(s2, -k_idx)
+    invSk_safe  = jnp.where(
+        s2 <= tiny,
+        jnp.concatenate(
+            [jnp.array([1.0], dtype=A.dtype),
+             jnp.zeros((L-1,), dtype=A.dtype)]
+        ),
+        invSk_dense
+    )                                            # (K,)
 
-    d3A2C_sum = jnp.sum(
-        ( N + N*(1+N)*(-5 + 2*(2+N)*c2b)*c2b
-        - (1 + 2*(1+N)*(-5 + 3*c2b*(2+N))*c2b)*Bs2b
-        + (-5 + 6*(2+N)*c2b)*c2b*Bs2b**2
-        - 2*c2b**2 * Bs2b**3) * term2,
-        axis=(1, 2)
-    )
-
-    d4A_sum = jnp.sum(
-        ( N*(1+N)*(3 + 4*(2+N)*(-3 + (3+N)*c2b)*c2b)
-        - 2*(1+N)*(3 + 2*c2b*(2+N)*(-9 + 4*c2b*(3+N)))*Bs2b
-        + 3*(1 + 4*(2+N)*(-3 + 2*(3+N)*c2b)*c2b)*Bs2b**2
-        - 4*(-3 + 4*(3+N)*c2b)*c2b*Bs2b**3
-        + 4*c2b**2 * Bs2b**4) * term,
-        axis=(1, 2)
-    )
+    # --- i contraction： (l k i)×(i q)->(l k q) ---
+    def red_i(PNk):  # PNk: (L,K,I)
+        return jnp.einsum('lki,iq->lkq', coeffs_m * PNk, BiSi)
     
-    e2 = jnp.exp(-Bs2)                          # (nq,)
-    G00   = G00_sum * e2                        # (L, nq)
+    # --- k contraction + l factor： (l k q)×(k)->(l q), multiply BlSl ---
+    def red_k(Tlkq):
+        return jnp.einsum('lkq,k->lq', Tlkq, invSk_safe) * BlSl
 
-    dGdA  = dGdA_sum  * e2 * (2 * A / rho2)
-    dGdC  = dGdC_sum  * e2 * (2 * c2 * jnp.sqrt(s2 / rho2))
+    # S_d = Σ coeffs·N^d·term
+    One = jnp.ones_like(N, dtype=A.dtype)
+    Nd  = N.astype(A.dtype)
+    N2  = Nd*Nd
+    N3  = N2*Nd
+    N4  = N2*N2
 
-    d2A   = d2A_sum   * e2 * (2 / rho2)
-    d2C   = d2C_sum   * e2 * (2 * c2 / rho2)
-    dAdC  = dAdC_sum  * e2 * (-4 * jnp.sqrt(c2 * s2) / rho2)
+    S0 = red_k(red_i(One))   # (L,nq)
+    S1 = red_k(red_i(Nd))
+    S2 = red_k(red_i(N2))
+    S3 = red_k(red_i(N3))
+    S4 = red_k(red_i(N4))
 
-    d3A   = d3A_sum   * e2 * (-4 * jnp.sqrt(c2) / (rho2**1.5))
-    d3A2C = d3A2C_sum * e2 * ( 4 * jnp.sqrt(s2) / (rho2**1.5))
+    # term2 = term / s2 → T_d = (1/s2) * S_d
+    tiny  = jnp.finfo(A.dtype).tiny
+    zero  = jnp.array(0.0, dtype=A.dtype)
+    invs2 = jnp.where(s2 <= tiny, zero, 1.0 / s2)   # s2 は 0次元でもOK
+    T0, T1, T2, T3 = (invs2*S0, invs2*S1, invs2*S2, invs2*S3)
 
-    d4A   = d4A_sum   * e2 * (4 / (rho2**2))
-    
-    out = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=0) # (9, L, nq)
+    # overall factors
+    e2   = jnp.exp(-Bs2)[None, :]                               # (1,nq)
+    Afac = (2*A/rho2)[None, :]
+    Cfac = (2*c2*jnp.sqrt(jnp.where(rho2==0, 0., s2/rho2)))[None, :]
+    A2f  = (2/rho2)[None, :]
+    C2f  = (2*c2/rho2)[None, :]
+    ACf  = (-4*jnp.sqrt(c2*s2)/rho2)[None, :]
+    A3f  = (-4*jnp.sqrt(c2)/(rho2**1.5 + 1e-30))[None, :]
+    A2Cf = ( 4*jnp.sqrt(s2)/(rho2**1.5 + 1e-30))[None, :]
+    A4f  = ( 4/(rho2**2 + 1e-30))[None, :]
+
+    # G00
+    G00   = S0 * e2
+
+    # dGdA_sum = -S1 + Bs2*S0
+    dGdA  = (-S1 + Bs2[None,:]*S0) * e2 * Afac
+
+    # dGdC_sum =  T1 - Bs2*T0
+    dGdC  = ( T1 - Bs2[None,:]*T0) * e2 * Cfac
+
+    # d2A_sum = -S1 + 2 c2 (S1+S2) + Bs2 S0 - 4 c2 Bs2 (S0+S1) + 2 c2 Bs2^2 S0
+    d2A   = (- S1
+             + 2.0*c2*(S1 + S2)
+             + Bs2[None,:]*S0
+             - 4.0*c2*Bs2[None,:]*(S0 + S1)
+             + 2.0*c2*(Bs2[None,:]**2)*S0) * e2 * A2f
+
+    # d2C_sum = -3 T1 + 2 c2 (T1+T2) + Bs2 (3 T0 - 4 c2 (T0+T1)) + 2 c2 Bs2^2 T0
+    d2C   = (-3.0*T1
+             + 2.0*c2*(T1 + T2)
+             + Bs2[None,:]*(3.0*T0 - 4.0*c2*(T0 + T1))
+             + 2.0*c2*(Bs2[None,:]**2)*T0) * e2 * C2f
+
+    # dAdC_sum = -T1 + c2 (T1+T2) + Bs2 (T0 - 2 c2 (T0+T1)) + c2 Bs2^2 T0
+    dAdC  = (- T1
+             + c2*(T1 + T2)
+             + Bs2[None,:]*(T0 - 2.0*c2*(T0 + T1))
+             + c2*(Bs2[None,:]**2)*T0) * e2 * ACf
+
+    # d3A_sum：
+    #   P1 = N(1+N)(-3 + 2(2+N)c2) = (-3)(S1+S2) + 2 c2 (S3 + 3S2 + 2S1)
+    P1 = (-3.0)*(S1 + S2) + 2.0*c2*(S3 + 3.0*S2 + 2.0*S1)
+    #   P2 = +6(1+N)Bs2 - 6 c2 (N^2+3N+2)Bs2
+    P2 = Bs2[None,:]*( 6.0*(S0 + S1) - 6.0*c2*(S2 + 3.0*S1 + 2.0*S0) )
+    #   P3 = +3(-1 + 4 c2)Bs2^2*S0 + 3*(2 c2)Bs2^2*S1
+    P3 = 3.0 * ( (-1.0 + 4.0*c2) * S0 + 2.0*c2 * S1 ) * (Bs2[None,:]**2)
+    #   P4 = - 2 c2 Bs2^3 S0
+    P4 = -2.0 * c2 * (Bs2[None,:]**3) * S0
+
+    d3A   = (P1 + P2 + P3 + P4) * e2 * A3f
+
+    # d3A2C_sum：
+    Q1 = T1
+    Q2 = c2*( -5.0*(T1 + T2) + 2.0*c2*(T3 + 3.0*T2 + 2.0*T1) )
+    Q3 = (- Bs2[None,:]*T0
+          + 2.0*c2*Bs2[None,:]*( 5.0*(T0+T1) - 6.0*c2*(T0+T1) - 3.0*c2*(T1+T2) ))
+    Q4 = c2*(Bs2[None,:]**2)*( -5.0*T0 + 12.0*c2*T0 + 6.0*c2*T1 )
+    Q5 = -2.0 * (c2**2) * (Bs2[None,:]**3) * T0
+
+    d3A2C = (Q1 + Q2 + Q3 + Q4 + Q5) * e2 * A2Cf
+
+    # d4A_sum
+    a0 = 3.0 - 24.0*c2 + 24.0*(c2**2)
+    a1 = -12.0*c2 + 20.0*(c2**2)
+    a2 = 4.0*(c2**2)
+    term1 = a0*S1 + (a0+a1)*S2 + (a1+a2)*S3 + a2*S4
+
+    b0 = 3.0 + (-36.0*c2 + 48.0*(c2**2))
+    b1 = (3.0 - 18.0*c2 + 40.0*(c2**2))
+    b2 = (8.0*(c2**2))
+    c0, c1, c2c, c3 = b0, (b0+b1), (b1+b2), b2
+    term2 = -2.0 * Bs2[None,:] * ( c0*S0 + c1*S1 + c2c*S2 + c3*S3 )
+
+    d0 = 1.0 - 24.0*c2 + 48.0*(c2**2)
+    d1 = -12.0*c2 + 40.0*(c2**2)
+    d2 = 8.0*(c2**2)
+    term3 = 3.0 * (Bs2[None,:]**2) * ( d0*S0 + d1*S1 + d2*S2 )
+
+    e0 = 12.0*c2 - 48.0*(c2**2)
+    e1 = -16.0*(c2**2)
+    term4 = (Bs2[None,:]**3) * ( e0*S0 + e1*S1 )
+
+    term5 = 4.0 * (c2**2) * (Bs2[None,:]**4) * S0
+
+    d4A = (term1 + term2 + term3 + term4 + term5) * e2 * A4f
+
+    out = jnp.stack([G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A], axis=0)  # (9,L,nq)
     return out
 
 def _shift_down(x, s, L):
     # x: (L, nq) -> 上に s 行ゼロを足して長さ L に戻す
     return jnp.pad(x, ((s, 0), (0, 0)))[:L]
 
-def get_Gs(A, B, C, coeffs, lmax=10):
+# @partial(jit, static_argnames=['lmax'])
+def get_Gs(A, B, C, c2, s2, coeffs, lmax=10):
     L = lmax + 1
-    dGs = get_dGs(A, B, C, coeffs, lmax) # (9, L, nq)
+    
+    dGs = get_dGs(A, B, C, c2, s2, coeffs, lmax) # (9, L, nq)
     nq = dGs.shape[-1]
 
     G00s, dGdAs, dGdCs, d2GdA2s, d2GdC2s, d2GdAdCs, d3GdA3s, d3GdA2dCs, d4GdA4s = (dGs[i] for i in range(9))
@@ -229,8 +263,3 @@ def get_Gs(A, B, C, coeffs, lmax=10):
                          + (Acol**4) / 16 * G00s_lm4)
 
     return Gs # (5, 3, L, nq)
-
-def get_Gs_vmapped(A, B, C, coeffs, lmax):
-    inner = jax.vmap(get_Gs, in_axes=(0, 0, 0, None, None), out_axes=0)  # -> (nmu, 5, 3, L, nq)
-    outer = jax.vmap(inner,  in_axes=(0, 0, 0, None, None), out_axes=0)  # -> (nk, nmu, 5, 3, L, nq)
-    return outer(A, B, C, coeffs, lmax)
