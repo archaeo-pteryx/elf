@@ -3,7 +3,7 @@
 ####
 
 import jax
-jax.config.update('jax_enable_x64', True)
+# jax.config.update('jax_enable_x64', True)
 from jax import jit
 import jax.numpy as jnp
 import numpy as np
@@ -11,7 +11,7 @@ from scipy.special import gamma
 from functools import partial
 
 
-@partial(jit, static_argnames=['npad'])
+# @partial(jit, static_argnames=['npad'])
 def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
     # zero padding
     fx = jnp.concatenate([jnp.zeros(npad), fx, jnp.zeros(npad)], axis=0)
@@ -31,6 +31,29 @@ def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
 
     # unpad
     res = res[npad:len(fx)-npad]
+    
+    return res
+
+# @partial(jit, static_argnames=['npad'])
+def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
+    # zero padding
+    fx = jnp.pad(fx, ((0, 0), (npad, npad))) # (ncomp, nfft)
+
+    # damp high-x end
+    fx = fx * jnp.exp(-(x / x_high)**2)[None, :] # (ncomp, nfft)
+
+    # FFT on biased data
+    c_m = jnp.fft.rfft(fx * (x**(-nu))[None, :]) # (ncomp, nfft)
+
+    # apply the smoothing window on Fourier components
+    c_m = c_m * w_m[None, :] # (ncomp, nfft)
+
+    # Inverse FFT to get the Hankel transform
+    res = jnp.fft.irfft(jnp.conj(c_m * u_m[None, :])) # (ncomp, nfft)
+    res = res * (y**(-nu))[None, :] * jnp.sqrt(jnp.pi) / 4. # (ncomp, nfft)
+
+    # unpad
+    res = res[:, npad:fx.shape[1]-npad] # (ncomp, nfft)
     
     return res
 
