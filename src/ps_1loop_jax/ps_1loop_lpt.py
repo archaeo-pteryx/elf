@@ -128,10 +128,12 @@ class PowerSpectrum1LoopLPT:
         q  = self._q             # (nq,)
 
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_int = get_pk_int(pk_data)
+
         xi_0m2 = self.get_xi_ln(0, -2, pk_lin)
         xi_2m2 = self.get_xi_ln(2, -2, pk_lin)
-        xi_0m2_0 = 
-        X_lin  = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)   # (nq,)
+        # X_lin  = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)   # (nq,)
+        X_lin  = 2/3 * (pk_int - xi_0m2 - xi_2m2)   # (nq,)
         Y_lin  = 2 * xi_2m2                            # (nq,)
         L      = self.lmax + 1
         logk_fft = jnp.log(self._k)
