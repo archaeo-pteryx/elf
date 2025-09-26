@@ -1,7 +1,6 @@
 import os
 
 import jax
-# jax.config.update('jax_enable_x64', True)
 from jax import jit
 from functools import partial
 from jax import lax
@@ -122,60 +121,6 @@ class PowerSpectrum1LoopLPT:
         xi_ln = xi_ln.at[ls, ns].set(xis)
         return xi_ln
     
-    # def get_pkmu_zel_k_mu(self, k, mu, X, Y, f):
-
-    #     Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
-    #     K    = k * Kfac
-    #     Ksq  = K**2
-    #     c    = (1 + f * mu**2) / Kfac
-    #     s    = f * mu * jnp.sqrt(1 - mu**2) / Kfac
-
-    #     q    = self._q                             # (nq,)
-    #     A    = k * q * c                           # (nq,)
-    #     B    = -0.5 * Ksq * Y                      # (nq,)
-    #     C    = k * q * s                           # (nq,)
-
-    #     base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X + Y))  # (nq,)
-
-    #     G00s = get_G00s(A, B, C, self.G00_coeffs, self.lmax) # (L, nq)
-    #     L = self.lmax + 1
-
-    #     inv = -2.0 / (k * q)                       # (nq,)
-    #     ones = jnp.ones_like(inv)[None, :]
-    #     reps = jnp.repeat(inv[None, :], L, axis=0)
-    #     weights = jnp.cumprod(jnp.concatenate([ones, reps[:-1]], axis=0), axis=0)  # (L, nq)
-    #     integrands = base[None, :] * weights * G00s
-
-    #     logk = jnp.log(k)
-    #     logk_fft = jnp.log(self._k)
-
-    #     def per_l(l, g):
-    #         pk_fft = self.get_pk_ln(l, -3, g)
-    #         return jnp.interp(logk, logk_fft, pk_fft)
-        
-    #     pkmu_ls = jax.vmap(per_l, in_axes=(0, 0))(jnp.arange(L), integrands)  # (L,)
-    #     pkmu = jnp.sum(pkmu_ls)
-
-    #     return pkmu
-    
-    # @partial(jit, static_argnames=['self'])
-    # def get_pkmu_zel(self, k, mu, pk_data, f):
-    #     k = jnp.atleast_1d(k)
-    #     mu = jnp.atleast_1d(mu)
-
-    #     pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        
-    #     xi_0m2 = self.get_xi_ln(0, -2, pk_lin)
-    #     xi_2m2 = self.get_xi_ln(2, -2, pk_lin)
-    #     X_lin = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)
-    #     Y_lin = 2 * xi_2m2
-        
-    #     def per_k(k_i):
-    #         return jax.vmap(lambda mu_j: self.get_pkmu_zel_k_mu(k_i, mu_j, X_lin, Y_lin, f))(mu)  # (nmu,)
-    #     pkmu = jax.vmap(per_k)(k)  # (nk, nmu)
-        
-    #     return pkmu
-
     @partial(jit, static_argnames=['self'])
     def get_pkmu_zel(self, k, mu, pk_data, f):
         k  = jnp.atleast_1d(k)   # (nk,)
@@ -185,6 +130,7 @@ class PowerSpectrum1LoopLPT:
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         xi_0m2 = self.get_xi_ln(0, -2, pk_lin)
         xi_2m2 = self.get_xi_ln(2, -2, pk_lin)
+        xi_0m2_0 = 
         X_lin  = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)   # (nq,)
         Y_lin  = 2 * xi_2m2                            # (nq,)
         L      = self.lmax + 1
@@ -212,7 +158,7 @@ class PowerSpectrum1LoopLPT:
                 C = k_i * q * s                         # (nq,)
 
                 base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin + Y_lin))  # (nq,)
-                G00s = get_G00s(A, B, C, self.G00_coeffs, self.lmax)  # (L, nq)
+                G00s = get_G00s(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)  # (L, nq)
 
                 g = (weights * G00s) * base[None, :]    # (L, nq)
 
@@ -364,7 +310,7 @@ class PowerSpectrum1LoopLPT:
 
         return pkmu_terms
     
-    @partial(jit, static_argnames=['self'])
+    # @partial(jit, static_argnames=['self'])
     def get_pkmu_terms(self, k, mu, pk_data, f, k_IR=0.2):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
@@ -549,12 +495,17 @@ class PowerSpectrum1LoopLPT:
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         pk_lin_lt = pk_lin * jnp.exp(-0.5 * (self._k / k_IR)**2)
 
+        # integrals of pk
+        pk_int = get_pk_int(pk_data)
+        pk_data_lt = jnp.stack([self._k, pk_data_lt], axis=0)
+        pk_int_lt = get_pk_int(pk_data_lt)
+
         # generalized correlation functions
         xi_ln = self.get_xi_ln_array(pk_lin)
         xi_ln_lt = self.get_xi_ln_array(pk_lin_lt)
         
         # tree-level terms
-        corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt)
+        corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt, pk_int, pk_int_lt)
 
         # one-loop terms
         Qs = self.get_Qs(xi_ln)
@@ -566,11 +517,13 @@ class PowerSpectrum1LoopLPT:
         return corrs
     
     # @partial(jit, static_argnames=['self'])
-    def get_corrs_tree(self, xi_ln, xi_ln_lt):
-        X_lin = 2/3 * (xi_ln[0,-2][0] - xi_ln[0,-2] - xi_ln[2,-2])
+    def get_corrs_tree(self, xi_ln, xi_ln_lt, pk_int, pk_int_lt):
+        # X_lin = 2/3 * (xi_ln[0,-2][0] - xi_ln[0,-2] - xi_ln[2,-2])
+        X_lin = 2/3 * (pk_int - xi_ln[0,-2] - xi_ln[2,-2])
         Y_lin = 2 * xi_ln[2,-2]
 
-        X_lin_lt = 2/3 * (xi_ln_lt[0,-2][0] - xi_ln_lt[0,-2] - xi_ln_lt[2,-2])
+        # X_lin_lt = 2/3 * (xi_ln_lt[0,-2][0] - xi_ln_lt[0,-2] - xi_ln_lt[2,-2])
+        X_lin_lt = 2/3 * (pk_int_lt - xi_ln_lt[0,-2] - xi_ln_lt[2,-2])
         Y_lin_lt = 2 * xi_ln_lt[2,-2]
 
         X_lin_gt = X_lin - X_lin_lt
@@ -591,10 +544,14 @@ class PowerSpectrum1LoopLPT:
         integrand_Q8 = 2/3 * xi_ln[0,0]**2 - 2/3 * xi_ln[2,0]**2
         integrand_Q_Up_G2 = 2/5 * xi_ln[1,-1]**2 - 2/5 * xi_ln[3,-1]**2
 
-        Q1 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q1)
-        Q5 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q5)
-        Q8 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q8)
-        Q_Up_G2 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q_Up_G2)
+        # Q1 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q1)
+        # Q5 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q5)
+        # Q8 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q8)
+        # Q_Up_G2 = self.get_pk_ln(0, 0, 4 * jnp.pi * integrand_Q_Up_G2)
+
+        integrand_Qs = jnp.stack([integrand_Q1, integrand_Q5, integrand_Q8, integrand_Q_Up_G2], axis=0)
+        Qs = self.get_pk_ln_batched(0, 0, 4 * jnp.pi * integrand_Qs)
+        Q1, Q5, Q8, Q_Up_G2 = Qs[0], Qs[1], Qs[2], Qs[3]
 
         Q2 = 2 * Q5 - Q1
 
