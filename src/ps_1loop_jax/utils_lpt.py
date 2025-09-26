@@ -43,18 +43,12 @@ def get_G00s(A, B, C, c2, s2, coeffs, lmax):
         invSk_dense
     )                                            # (K,)
 
-    # --- i contraction： (l k i)×(i q)->(l k q) ---
-    def red_i(PNk):  # PNk: (L,K,I)
-        return jnp.einsum('lki,iq->lkq', coeffs_m * PNk, BiSi)
-    
-    # --- k contraction + l factor： (l k q)×(k)->(l q), multiply BlSl ---
-    def red_k(Tlkq):
-        return jnp.einsum('lkq,k->lq', Tlkq, invSk_safe) * BlSl
+    def contract_ki(PNk):  # PNk: (L,K,I)
+        return jnp.einsum('lki,lq,iq,k->lq', coeffs_m * PNk, BlSl, BiSi, invSk_safe)
 
     # S_d = Σ coeffs·N^d·term
     One = jnp.ones_like(N, dtype=A.dtype)
-
-    S0 = red_k(red_i(One))   # (L,nq)
+    S0 = contract_ki(One)   # (L,nq)
 
     # overall factors
     e2   = jnp.exp(-Bs2)[None, :]                               # (1,nq)
@@ -99,26 +93,21 @@ def get_dGs(A, B, C, c2, s2, coeffs, lmax):
         invSk_dense
     )                                            # (K,)
 
-    # --- i contraction： (l k i)×(i q)->(l k q) ---
-    def red_i(PNk):  # PNk: (L,K,I)
-        return jnp.einsum('lki,iq->lkq', coeffs_m * PNk, BiSi)
-    
-    # --- k contraction + l factor： (l k q)×(k)->(l q), multiply BlSl ---
-    def red_k(Tlkq):
-        return jnp.einsum('lkq,k->lq', Tlkq, invSk_safe) * BlSl
+    def contract_ki(PNk):  # PNk: (L,K,I)
+        return jnp.einsum('lki,lq,iq,k->lq', coeffs_m * PNk, BlSl, BiSi, invSk_safe)
 
     # S_d = Σ coeffs·N^d·term
-    One = jnp.ones_like(N, dtype=A.dtype)
-    Nd  = N.astype(A.dtype)
-    N2  = Nd*Nd
-    N3  = N2*Nd
-    N4  = N2*N2
+    One = jnp.ones_like(N, dtype=A.dtype) # (L,K,I)
+    Nd  = N.astype(A.dtype)               # (L,K,I)
+    N2  = Nd*Nd                           # (L,K,I)
+    N3  = N2*Nd                           # (L,K,I)
+    N4  = N2*N2                           # (L,K,I)
 
-    S0 = red_k(red_i(One))   # (L,nq)
-    S1 = red_k(red_i(Nd))
-    S2 = red_k(red_i(N2))
-    S3 = red_k(red_i(N3))
-    S4 = red_k(red_i(N4))
+    S0 = contract_ki(One)   # (L,nq)
+    S1 = contract_ki(Nd)
+    S2 = contract_ki(N2)
+    S3 = contract_ki(N3)
+    S4 = contract_ki(N4)
 
     # term2 = term / s2 → T_d = (1/s2) * S_d
     tiny  = jnp.finfo(A.dtype).tiny
