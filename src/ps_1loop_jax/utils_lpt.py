@@ -10,91 +10,57 @@ def _pow_table_vec(x, L: int):
     return jnp.cumprod(base, axis=0)               # (L,nq)
 
 # @partial(jit, static_argnames=['lmax'])
-def get_G00s(A, B, C, c2, s2, coeffs, lmax):
-    
-    L = lmax + 1
-    Bs2  = B * s2            # (nq,)
+def get_G00s(B, s2, coeffs, lmax):
+    L   = lmax + 1
+    Bs2 = B * s2  # (nq,)
 
-    # (-B)^l, (s2)^l
-    B_pows = _pow_table_vec(-B, L)   # (-B)^l   (L,nq)
-    s2_pows = jnp.power(s2, jnp.arange(L))
-
-    # indices and non-negative masking
+    # N = l + i - k
     li = jnp.arange(L)[:, None, None]
     ki = jnp.arange(L)[None, :, None]
     ii = jnp.arange(L)[None, None, :]
-    N  = (li + ii - ki)                          # (L,K,I)
+    N  = li + ii - ki                         # (L,K,I)
     mask = (N >= 0)
-    coeffs_m = coeffs * mask.astype(coeffs.dtype)
 
-    # (-B)^(l+i) * s2^(l+i-k) = (BlSl) * (BiSi) * inv(Sk)
-    BlSl = B_pows * s2_pows[:, None] # (L,nq)
-    BiSi = B_pows * s2_pows[:, None] # (I,nq)
+    # (-B)^l, (-B)^i
+    B_pows = _pow_table_vec(-B, L)  # (L,nq)
 
-    tiny = jnp.finfo(A.dtype).tiny
-    k_idx = jnp.arange(L, dtype=A.dtype)
-    invSk_dense = jnp.power(s2, -k_idx)
-    invSk_safe  = jnp.where(
-        s2 <= tiny,
-        jnp.concatenate(
-            [jnp.array([1.0], dtype=A.dtype),
-             jnp.zeros((L-1,), dtype=A.dtype)]
-        ),
-        invSk_dense
-    )                                            # (K,)
+    # s2^(l+i-k)
+    s2_powN = jnp.where(mask, jnp.power(s2, N), 0.0)  # (L,K,I)
 
-    def contract_ki(PNk):  # PNk: (L,K,I)
-        return jnp.einsum('lki,lq,iq,k->lq', coeffs_m * PNk, BlSl, BiSi, invSk_safe)
+    # core[l,k,i] = coeff[l,k,i] * s2^(l+i-k)
+    core = coeffs * mask.astype(coeffs.dtype) * s2_powN  # (L,K,I)
 
-    # S_d = Σ coeffs·N^d·term
-    One = jnp.ones_like(N, dtype=A.dtype)
-    S0 = contract_ki(One)   # (L,nq)
+    # contraction：Σ_{k,i} core[l,k,i] * (-B)^l(q) * (-B)^i(q)
+    S0 = jnp.einsum('lki,lq,iq->lq', core, B_pows, B_pows)  # (L,nq)
 
-    # overall factors
-    e2   = jnp.exp(-Bs2)[None, :]                               # (1,nq)
-
-    # G00
-    G00   = S0 * e2
+    G00 = S0 * jnp.exp(-Bs2)[None, :]  # (L,nq)
     return G00
 
 # @partial(jit, static_argnames=['lmax'])
 def get_dGs(A, B, C, c2, s2, coeffs, lmax):
-    
     L = lmax + 1
 
     rho2 = A*A + C*C         # (nq,)
     Bs2  = B * s2            # (nq,)
-
-    # (-B)^l, (s2)^l
-    B_pows = _pow_table_vec(-B, L)   # (-B)^l   (L,nq)
-    s2_pows = jnp.power(s2, jnp.arange(L))
-
-    # indices and non-negative masking
+    
+    # N = l + i - k
     li = jnp.arange(L)[:, None, None]
     ki = jnp.arange(L)[None, :, None]
     ii = jnp.arange(L)[None, None, :]
-    N  = (li + ii - ki)                          # (L,K,I)
+    N  = li + ii - ki                         # (L,K,I)
     mask = (N >= 0)
-    coeffs_m = coeffs * mask.astype(coeffs.dtype)
 
-    # (-B)^(l+i) * s2^(l+i-k) = (BlSl) * (BiSi) * inv(Sk)
-    BlSl = B_pows * s2_pows[:, None] # (L,nq)
-    BiSi = B_pows * s2_pows[:, None] # (I,nq)
+    # (-B)^l, (-B)^i
+    B_pows = _pow_table_vec(-B, L)  # (L,nq)
 
-    tiny = jnp.finfo(A.dtype).tiny
-    k_idx = jnp.arange(L, dtype=A.dtype)
-    invSk_dense = jnp.power(s2, -k_idx)
-    invSk_safe  = jnp.where(
-        s2 <= tiny,
-        jnp.concatenate(
-            [jnp.array([1.0], dtype=A.dtype),
-             jnp.zeros((L-1,), dtype=A.dtype)]
-        ),
-        invSk_dense
-    )                                            # (K,)
+    # s2^(l+i-k)
+    s2_powN = jnp.where(mask, jnp.power(s2, N), 0.0)  # (L,K,I)
+
+    # core[l,k,i] = coeff[l,k,i] * s2^(l+i-k)
+    core = coeffs * mask.astype(coeffs.dtype) * s2_powN  # (L,K,I)
 
     def contract_ki(PNk):  # PNk: (L,K,I)
-        return jnp.einsum('lki,lq,iq,k->lq', coeffs_m * PNk, BlSl, BiSi, invSk_safe)
+        return jnp.einsum('lki,lq,iq->lq', core * PNk, B_pows, B_pows)  # (L,nq)
 
     # S_d = Σ coeffs·N^d·term
     One = jnp.ones_like(N, dtype=A.dtype) # (L,K,I)
@@ -112,19 +78,19 @@ def get_dGs(A, B, C, c2, s2, coeffs, lmax):
     # term2 = term / s2 → T_d = (1/s2) * S_d
     tiny  = jnp.finfo(A.dtype).tiny
     zero  = jnp.array(0.0, dtype=A.dtype)
-    invs2 = jnp.where(s2 <= tiny, zero, 1.0 / s2)   # s2 は 0次元でもOK
+    invs2 = jnp.where(s2 <= tiny, zero, 1.0 / s2)
     T0, T1, T2, T3 = (invs2*S0, invs2*S1, invs2*S2, invs2*S3)
 
     # overall factors
     e2   = jnp.exp(-Bs2)[None, :]                               # (1,nq)
-    Afac = (2*A/rho2)[None, :]
-    Cfac = (2*c2*jnp.sqrt(jnp.where(rho2==0, 0., s2/rho2)))[None, :]
-    A2f  = (2/rho2)[None, :]
-    C2f  = (2*c2/rho2)[None, :]
-    ACf  = (-4*jnp.sqrt(c2*s2)/rho2)[None, :]
-    A3f  = (-4*jnp.sqrt(c2)/(rho2**1.5 + 1e-30))[None, :]
-    A2Cf = ( 4*jnp.sqrt(s2)/(rho2**1.5 + 1e-30))[None, :]
-    A4f  = ( 4/(rho2**2 + 1e-30))[None, :]
+    Afac = (2 * A / rho2)[None, :]
+    Cfac = (2 * c2 * jnp.sqrt(s2 / rho2))[None, :]
+    A2f  = (2 / rho2)[None, :]
+    C2f  = (2 * c2 / rho2)[None, :]
+    ACf  = (-4 * jnp.sqrt(c2 * s2) / rho2)[None, :]
+    A3f  = (-4 * jnp.sqrt(c2) / rho2**1.5)[None, :]
+    A2Cf = ( 4 * jnp.sqrt(s2) / rho2**1.5)[None, :]
+    A4f  = ( 4 / rho2**2)[None, :]
 
     # G00
     G00   = S0 * e2
