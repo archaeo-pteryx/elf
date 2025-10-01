@@ -59,21 +59,16 @@ def get_dGs(A, B, C, c2, s2, coeffs, lmax):
     # core[l,k,i] = coeff[l,k,i] * s2^(l+i-k)
     core = coeffs * mask.astype(coeffs.dtype) * s2_powN  # (L,K,I)
 
-    def contract_ki(PNk):  # PNk: (L,K,I)
-        return jnp.einsum('lki,lq,iq->lq', core * PNk, B_pows, B_pows)  # (L,nq)
-
     # S_d = Σ coeffs·N^d·term
     One = jnp.ones_like(N, dtype=A.dtype) # (L,K,I)
     Nd  = N.astype(A.dtype)               # (L,K,I)
     N2  = Nd*Nd                           # (L,K,I)
     N3  = N2*Nd                           # (L,K,I)
     N4  = N2*N2                           # (L,K,I)
+    poly = jnp.stack([One, Nd, N2, N3, N4], axis=0)   # (5,L,K,I)
 
-    S0 = contract_ki(One)   # (L,nq)
-    S1 = contract_ki(Nd)
-    S2 = contract_ki(N2)
-    S3 = contract_ki(N3)
-    S4 = contract_ki(N4)
+    S = jnp.einsum('dlki,lki,lq,iq->dlq', poly, core, B_pows, B_pows) # (5,L,nq)
+    S0, S1, S2, S3, S4 = S
 
     # term2 = term / s2 → T_d = (1/s2) * S_d
     tiny  = jnp.finfo(A.dtype).tiny
