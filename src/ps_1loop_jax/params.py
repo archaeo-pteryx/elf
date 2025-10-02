@@ -2,76 +2,60 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-# ── indexing
-F, H                 = range(2)
-K_NL, NDENS          = range(2)
 
 @register_pytree_node_class
 @dataclass(frozen=True)
 class EPTParams:
-    scalars: jnp.ndarray  # shape (2,)   [f, h]
-    bias:    jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    ctr:     jnp.ndarray  # shape (4,)   [c0, c2, c4, cfog]
-    stoch:   jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    nl:      jnp.ndarray  # shape (2,)   [k_nl, ndens]
+    cosmo: jnp.ndarray  # shape (2,)   [f, h]
+    bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
+    ctr:   jnp.ndarray  # shape (4,)   [c0, c2, c4, cfog]
+    stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
+    nl:    jnp.ndarray  # shape (2,)   [k_nl, ndens]
 
     def tree_flatten(self):
-        return (self.scalars, self.bias, self.ctr, self.stoch, self.nl), None
+        return (self.cosmo, self.bias, self.ctr, self.stoch, self.nl), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        scalars, bias, ctr, stoch, nl = children
-        return cls(scalars, bias, ctr, stoch, nl)
+        cosmo, bias, ctr, stoch, nl = children
+        return cls(cosmo, bias, ctr, stoch, nl)
     
     @property
-    def f(self):     return self.scalars[F]
+    def f(self):     return self.cosmo[0]
     @property
-    def h(self):     return self.scalars[H]
+    def h(self):     return self.cosmo[1]
     @property
-    def k_nl(self):  return self.nl[K_NL]
+    def k_nl(self):  return self.nl[0]
     @property
-    def ndens(self): return self.nl[NDENS]
+    def ndens(self): return self.nl[1]
 
 def make_ept_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=jnp.float32):
-    scalars = jnp.array([f, h], dtype)
-    bias    = jnp.asarray(bias,  dtype)
-    ctr     = jnp.asarray(ctr,   dtype)
-    stoch   = jnp.asarray(stoch, dtype)
-    nl      = jnp.asarray([k_nl, ndens], dtype)
-    assert scalars.shape == (2,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
-    return EPTParams(scalars, bias, ctr, stoch, nl)
+    cosmo = jnp.array([f, h], dtype)
+    bias  = jnp.array(bias,  dtype)
+    ctr   = jnp.array(ctr,   dtype)
+    stoch = jnp.array(stoch, dtype)
+    nl    = jnp.array([k_nl, ndens], dtype)
+    return EPTParams(cosmo, bias, ctr, stoch, nl)
 
 @register_pytree_node_class
 @dataclass(frozen=True)
 class LPTParams:
-    scalars: jnp.ndarray  # shape (2,)   [f, h]
-    bias:    jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    ctr:     jnp.ndarray  # shape (4,)   [a0, a2, a4, a6]
-    stoch:   jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    nl:      jnp.ndarray  # shape (2,)   [k_nl, ndens]
+    f:     jnp.ndarray  # shape (,)   [f]
+    bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
+    ctr:   jnp.ndarray  # shape (4,)   [alpha0, alpha2, alpha4, alpha6]
+    stoch: jnp.ndarray  # shape (3,)   [R_h, sigma2, sigma4]
 
     def tree_flatten(self):
-        return (self.scalars, self.bias, self.ctr, self.stoch, self.nl), None
+        return (self.f, self.bias, self.ctr, self.stoch), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        scalars, bias, ctr, stoch, nl = children
-        return cls(scalars, bias, ctr, stoch, nl)
-    
-    @property
-    def f(self):     return self.scalars[F]
-    @property
-    def h(self):     return self.scalars[H]
-    @property
-    def k_nl(self):  return self.nl[K_NL]
-    @property
-    def ndens(self): return self.nl[NDENS]
+        f, bias, ctr, stoch = children
+        return cls(f, bias, ctr, stoch)
 
-def make_lpt_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=jnp.float32):
-    scalars = jnp.array([f, h], dtype)
-    bias    = jnp.asarray(bias,  dtype)
-    ctr     = jnp.asarray(ctr,   dtype)
-    stoch   = jnp.asarray(stoch, dtype)
-    nl      = jnp.asarray([k_nl, ndens], dtype)
-    assert scalars.shape == (2,) and bias.shape == (4,) and ctr.shape == (4,) and stoch.shape == (3,) and nl.shape == (2,)
-    return LPTParams(scalars, bias, ctr, stoch, nl)
+def make_lpt_params(*, f, bias, ctr, stoch, dtype=jnp.float32):
+    f     = jnp.array(f, dtype)
+    bias  = jnp.array(bias,  dtype)
+    ctr   = jnp.array(ctr,   dtype)
+    stoch = jnp.array(stoch, dtype)
+    return LPTParams(f, bias, ctr, stoch)
