@@ -329,7 +329,7 @@ class PowerSpectrum1LoopLPT:
         f = params.f
         b1, b2, bs, b3 = params.bias
         alpha0, alpha2, alpha4, alpha6 = params.ctr
-        R_h, sigma2, sigma4 = params.stoch
+        R_h3, sigma2, sigma4 = params.stoch
 
         bias_facs = jnp.array([
             1.,            # 1
@@ -355,7 +355,7 @@ class PowerSpectrum1LoopLPT:
         pkmu = pkmu + pkmu_ctr
 
         # stochasticity
-        pkmu_stoch = R_h**3 * (1 + sigma2 * jnp.outer(k**2, mu**2) + sigma4 * jnp.outer(k**4, mu**4))
+        pkmu_stoch = R_h3 * (1 + sigma2 * jnp.outer(k**2, mu**2) + sigma4 * jnp.outer(k**4, mu**4))
         pkmu = pkmu + pkmu_stoch
 
         return pkmu  # (nk, nmu)
