@@ -1,52 +1,35 @@
 import jax
 # jax.config.update('jax_enable_x64', True)
-from jax import jit
-from functools import partial
 
 import jax.numpy as jnp
 import quadax
-import interpax
 import re
 
 kernel_to_decomp_dict = {
     # matter
-    '22_dd': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    '13_dd': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    '22_dv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    '13_dv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    '22_vv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    '13_vv': [('pk_lin', -0.3), ('pk_lin', -0.3)],
-    # biased tracer (Gaussian)
-    'I_d2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_d2_d2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_d2_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_G2_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'F_G2': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_d2_v': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    'I_s2_v': [('pk_lin', -1.6), ('pk_lin', -1.6)],
-    # local PNG
-    'I_phi': [('pk_1phi', -1.6), ('pk_lin', -0.3)],
-    'I_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'I_d2_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'I_G2_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'I_d2_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'I_G2_phi-d': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'F_phi': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
-    'F_G2_LPNG': [('pk_lin', -1.6), ('pk_1phi', -1.6)],
-    'I_phi_tilde': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
-    'I_phi_tilde_d2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
-    'I_phi_tilde_G2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
-    # biased tracer in redshift space (Gaussian)
-    '22': [('pk_lin', -0.7), ('pk_lin', -0.7)],
-    '13': [('pk_lin', -0.7), ('pk_lin', -0.7)],
-    # biased tracer in redshift space (local PNG contribution)
-    '12_lpng1': [('pk_1phi', -1.6), ('Mk', 0.2)],
-    '12_lpng2': [('pk_1phi', -2.1), ('pk_1phi', -2.1)],
-    '22_lpng': [('pk_lin', -0.7), ('pk_1phi', -0.9)],
-    '13_lpng1': [('pk_lin', -0.7), ('pk_1phi', -0.9)],
-    '13_lpng3': [('pk_1phi', -1.6), ('pk_lin', -1.6)],
+    '22_dd': -0.3,
+    '13_dd': -0.3,
+    # biased tracer
+    'I_d2': -1.6,
+    'I_G2': -1.6,
+    'I_d2_d2': -1.6,
+    'I_d2_G2': -1.6,
+    'I_G2_G2': -1.6,
+    'F_G2': -1.6,
 }
+
+def get_nu_from_name(name):
+    if name in kernel_to_decomp_dict.keys():
+        return kernel_to_decomp_dict[name]
+    else:
+        degree_dict = get_degree_dict(name)
+        if 'b2' in degree_dict.keys():
+            if degree_dict['b2'] > 0: return -1.6
+        if 'bG2' in degree_dict.keys():
+            if degree_dict['bG2'] > 0: return -1.6
+        if 'bGamma3' in degree_dict.keys():
+            if degree_dict['bGamma3'] > 0: return -1.6
+        return -0.3
 
 def get_degree_dict(name):
     degree_name = re.split('=', name)[-1]
@@ -59,77 +42,72 @@ def get_degree_dict(name):
         degree_dict[key] = val
     return degree_dict
 
-@jit
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
     k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
-    # pk = jnp.exp(interpax.interp1d(jnp.log(k), jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic')
+    # pk = interpax.interp1d(jnp.log(k), jnp.log(k_extrap), pk_extrap, method='cubic')
     pk = jnp.interp(jnp.log(k), jnp.log(k_extrap), pk_extrap)
     return pk
 
-@partial(jit, static_argnames=['num'])
 def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
     res = quadax.simpson(q * get_pk(q, pk_data, kmin * 0.1, kmax * 10.), x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
-@partial(jit, static_argnames=['num'])
 def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
     res = quadax.simpson(q**3 * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)**2, x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
-# @partial(jit, static_argnames=['num_extrap'])
-# def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
-
-#     dlnx_low = jnp.log(x[1] / x[0])
-#     dlny_low = jnp.log(y[1] / y[0])
-#     num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int) + 1
-
-#     x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
-#     y_low = y[0] * jnp.exp(dlny_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
-
-#     dlnx_high = jnp.log(x[-1] / x[-2])
-#     dlny_high = jnp.log(y[-1] / y[-2])
-#     num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int) + 1
-
-#     x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
-#     y_high = y[-1] * jnp.exp(dlny_high * num_high / num_extrap * jnp.arange(1, num_extrap+1))
-
-#     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
-#     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
-    
-#     return x_extrap, y_extrap
-
-@partial(jit, static_argnames=['num_extrap'])
 def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
+    x_dtype = x.dtype
+    y_dtype = y.dtype
 
-    dlnx_low = jnp.log(x[1] / x[0])
+    xmin = jnp.asarray(xmin, x_dtype)
+    xmax = jnp.asarray(xmax, x_dtype)
+
+    dlnx_low  = jnp.log(x[1] / x[0])
     dlnx_high = jnp.log(x[-1] / x[-2])
 
-    num_low = (jnp.log(x[0] / xmin) / dlnx_low).astype(int) + 1
-    x_low = x[0] * jnp.exp(dlnx_low * num_low / num_extrap * jnp.arange(-num_extrap, 0))
+    num_low  = (jnp.log(x[0] / xmin) / dlnx_low).astype(jnp.int32) + 1
+    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(jnp.int32) + 1
 
-    y_low = jnp.where(
-        y[0] > 0,
-        y[0] * jnp.exp(jnp.log(y[1] / y[0]) * num_low / num_extrap * jnp.arange(-num_extrap, 0)),
-        jnp.zeros(num_extrap)
-    )
+    fac_low  = num_low.astype(x_dtype)  / jnp.asarray(num_extrap, x_dtype)
+    fac_high = num_high.astype(x_dtype) / jnp.asarray(num_extrap, x_dtype)
 
-    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(int) + 1
-    x_high = x[-1] * jnp.exp(dlnx_high * num_high / num_extrap * jnp.arange(1, num_extrap + 1))
+    t_low  = jnp.arange(-num_extrap, 0, dtype=x_dtype)
+    t_high = jnp.arange(1, num_extrap + 1, dtype=x_dtype)
 
-    y_high = jnp.where(
-        y[-1] > 0,
-        y[-1] * jnp.exp(jnp.log(y[-1] / y[-2]) * num_high / num_extrap * jnp.arange(1, num_extrap + 1)),
-        jnp.zeros(num_extrap)
-    )
+    x_low  = x[0]  * jnp.exp(dlnx_low  * fac_low  * t_low)
+    x_high = x[-1] * jnp.exp(dlnx_high * fac_high * t_high)
+
+    def _low_true(_):
+        den   = jnp.where(y[0] == 0, jnp.inf, y[0])
+        ratio = y[1] / den
+        ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)  # log(1)=0
+        growth = jnp.exp(jnp.log(ratio) * (num_low.astype(y_dtype) / jnp.asarray(num_extrap, y_dtype)) * t_low.astype(y_dtype))
+        return y[0] * growth
+
+    def _low_false(_):
+        return jnp.zeros((num_extrap,), dtype=y_dtype)
+
+    y_low = jax.lax.cond(y[0] > 0, _low_true, _low_false, operand=None)
+
+    def _high_true(_):
+        den   = jnp.where(y[-2] == 0, jnp.inf, y[-2])
+        ratio = y[-1] / den
+        ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)
+        growth = jnp.exp(jnp.log(ratio) * (num_high.astype(y_dtype) / jnp.asarray(num_extrap, y_dtype)) * t_high.astype(y_dtype))
+        return y[-1] * growth
+
+    def _high_false(_):
+        return jnp.zeros((num_extrap,), dtype=y_dtype)
+
+    y_high = jax.lax.cond(y[-1] > 0, _high_true, _high_false, operand=None)
 
     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
-
     return x_extrap, y_extrap
 
-@jit
 def interp2d_separable_linear(x, y, x_grid, y_grid, values):
     interp_y = jax.vmap(lambda row: jnp.interp(y, y_grid, row))(values)  # shape: (mx, ny)
     interp_xy = jax.vmap(lambda col: jnp.interp(x, x_grid, col.T))(interp_y.T)  # shape: (ny, nx)
