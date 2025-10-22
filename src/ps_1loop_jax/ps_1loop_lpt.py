@@ -89,7 +89,9 @@ class PowerSpectrum1LoopLPT:
         g_l_q = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_q) for l in l_list])
         self._u_m_q = jnp.array([(self._q_padded[0] * self._y_q[0])**(-1j * eta_m_q) * g_l_q[l] for l in l_list])
 
-        self._k_high = self._kmax / 10
+        # self._k_high = self._kmax / 10
+        # self._q_high = jnp.max(self._q) / 10
+        self._k_high = 1e10
         self._q_high = jnp.max(self._q) / 10
         
         c_window_width = 0.2
@@ -250,7 +252,7 @@ class PowerSpectrum1LoopLPT:
                 # --- 23 integrands of (L, nq)---
                 # matter
                 integrand_ZA   = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-                integrand_AA   = (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
+                integrand_AA   = Ksq**2 / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
                 integrand_A22  = -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
                                             + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
                 integrand_A13  = -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
@@ -261,11 +263,9 @@ class PowerSpectrum1LoopLPT:
 
                 # LIMD bias
                 integrand_U10 = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3)
-                # integrand_A_U = Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
-                integrand_A_U = (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
-                # integrand_A10 = -Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k_i * mu_j)**2 * mq0 * X10 - f * k_i * mu_j *mq1_nq1*Y10
-                integrand_A10 = -Ksq * (X10 * mq0 + Y10 * mq2) 
-                # - f * k_i**2 * mu_j * (X10 * mu_j * (1+f) * mq0 + Kfac * Y10 * 0.) # A10
+                integrand_A_U = Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
+                # integrand_A10 = -Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k_i * mu_j)**2 * mq0 * X10 - f * k_i * mu_j * mq1_nq1 * Y10
+                integrand_A10 = -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10) # A10
 
                 integrand_xi   = mq0 * xi_lin
                 integrand_A_xi = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
@@ -273,7 +273,6 @@ class PowerSpectrum1LoopLPT:
                 integrand_U_U  = -Ksq * mq2 * U_lin**2
 
                 integrand_U20  = -(K * mq1 + f * k_i * mu_j * nq1) * U20
-                # integrand_U_U = -Ksq * mq2 * U_lin**2
 
                 integrand_xi_U  = -2 * K * mq1 * xi_lin * U_lin
                 integrand_xi_xi = 0.5 * mq0 * xi_lin**2
@@ -393,17 +392,17 @@ class PowerSpectrum1LoopLPT:
                                         + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
                 # LIMD bias
-                integrand_b1  = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3)
-                integrand_b1 +=  Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * (K * U_lin)
-                integrand_b1 += -Ksq * (mq0 * X10 + mq2 * Y10) - f * (1 + f) * (k_i * mu_j)**2 * mq0 * X10 - f * k_i * mu_j *mq1_nq1*Y10
+                integrand_b1  = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3) # U10
+                integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin) # A> U_lin
+                integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10) # A10
 
-                integrand_b1_b1  =  mq0 * xi_lin
-                integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
-                integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11
-                integrand_b1_b1 += -Ksq * mq2 * U_lin**2
+                integrand_b1_b1  = mq0 * xi_lin # xi_lin
+                integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin # A> xi_lin
+                integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11 # U11
+                integrand_b1_b1 += -Ksq * mq2 * U_lin**2 # U_lin^2
 
-                integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20
-                integrand_b2 += -Ksq * mq2 * U_lin**2
+                integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20 # U20
+                integrand_b2 += -Ksq * mq2 * U_lin**2 # 
 
                 integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
                 integrand_b2_b2 = 0.5 * mq0 * xi_lin**2
@@ -413,8 +412,8 @@ class PowerSpectrum1LoopLPT:
                 integrand_bs += -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
 
                 integrand_b1_bs = -2 * K * mq1 * V12
-                integrand_b2_bs =  mq0 * chi
-                integrand_bs_bs =  mq0 * zeta
+                integrand_b2_bs = mq0 * chi
+                integrand_bs_bs = mq0 * zeta
 
                 # 3rd-order bias
                 integrand_b3    = -2 * K * mq1 * Ub3
@@ -529,9 +528,10 @@ class PowerSpectrum1LoopLPT:
 
     #     return 
 
-    def get_corrs(self, pk_data, k_IR=0.2):
+    def get_corrs(self, pk_data, k_IR=0.2, k_cut=10.0):
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_lin_lt = pk_lin * jnp.exp(-0.5 * (self._k / k_IR)**2)
+        pk_lin = pk_lin * jnp.exp(-(self._k / k_cut)**2)
+        pk_lin_lt = pk_lin * jnp.exp(-(self._k / k_IR)**2)
 
         # integrals of pk
         pk_int = get_pk_int(pk_data)
@@ -603,10 +603,6 @@ class PowerSpectrum1LoopLPT:
             xi_ln[3, -1],
         ], axis=0)
 
-        # def one(l, g):
-        #     return self.get_pk_ln(l, -1, g) * pk_lin
-        # pk_list = jax.vmap(one, in_axes=(0, 0))(ells, xis)  # (8, nk)
-
         pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m_q[ells]) * pk_lin
 
         pk_00, pk_20, pk_40, pk_11, pk_31, pk_22, pk_1m1, pk_3m1 = pk_list
@@ -632,21 +628,25 @@ class PowerSpectrum1LoopLPT:
         # X, Y for 1-loop A_{ij}
         xi_ln_22_0m2 = self.get_xi_ln(0, -2, 9/98 * Q1)
         xi_ln_22_2m2 = self.get_xi_ln(2, -2, 9/98 * Q1)
-        xi_ln_13_0m2 = self.get_xi_ln(0, -2, 5/21 * Q2)
-        xi_ln_13_2m2 = self.get_xi_ln(2, -2, 5/21 * Q2)
+        xi_ln_13_0m2 = self.get_xi_ln(0, -2, 5/21 * R1)
+        xi_ln_13_2m2 = self.get_xi_ln(2, -2, 5/21 * R1)
 
-        X22 = 2/3 * (xi_ln_22_0m2[0] - xi_ln_22_0m2 - xi_ln_22_2m2)
+        pk_data = jnp.stack([self._k, 9/98 * Q1], axis=0)
+        xi_ln_22_q0 = get_pk_int(pk_data)
+        # X22 = 2/3 * (xi_ln_22_0m2[0] - xi_ln_22_0m2 - xi_ln_22_2m2)
+        X22 = 2/3 * (xi_ln_22_q0 - xi_ln_22_0m2 - xi_ln_22_2m2)
         Y22 = 2 * xi_ln_22_2m2
 
-        X13 = 2/3 * (xi_ln_13_0m2[0] - xi_ln_13_0m2 - xi_ln_13_2m2)
+        pk_data = jnp.stack([self._k, 5/21 * R1], axis=0)
+        xi_ln_13_q0 = get_pk_int(pk_data)
+        # X13 = 2/3 * (xi_ln_13_0m2[0] - xi_ln_13_0m2 - xi_ln_13_2m2)
+        X13 = 2/3 * (xi_ln_13_q0 - xi_ln_13_0m2 - xi_ln_13_2m2)
         Y13 = 2 * xi_ln_13_2m2
 
         # V1, V3, T for W_{ijk}
-        T = self.get_xi_ln(3, -1, 3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
-        V1 = self.get_xi_ln(1, -1, -3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2))
-        V3 = self.get_xi_ln(1, -1, 3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2))
-        V1 = V1 - 1/5 * T
-        V3 = V3 - 1/5 * T
+        T = self.get_xi_ln(3, -3, 3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
+        V1 = self.get_xi_ln(1, -3, -3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2)) - 0.2 * T
+        V3 = self.get_xi_ln(1, -3, 3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2)) - 0.2 * T
 
         corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
         return corrs
