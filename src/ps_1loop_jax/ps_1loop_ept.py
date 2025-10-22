@@ -292,7 +292,7 @@ class PowerSpectrum1LoopEPT:
             pk_nw_data = ir_resum.get_pk_nw_data(pk_data, params.h, khmin=7e-5, khmax=7.0, 
                                                  kmin_interp=self._kmin, kmax_interp=self._kmax)
             pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
-            pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, pk_data, pk_nw_data, f, bias)
+            pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias)
 
             # counterterm
             pk = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
@@ -300,15 +300,15 @@ class PowerSpectrum1LoopEPT:
             pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk, f, bias, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
+            pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
             # tree + 1-loop
             pkmu_tree = self.get_pkmu_lin(self._k, self._mu, pk_data, f, bias)
-            pkmu_1loop = self.get_pkmu_1loop(pk_data, f, bias)
+            pkmu_1loop = self.get_pkmu_1loop(pk, f, bias)
             pkmu = pkmu_tree + pkmu_1loop
 
             # counterterm
-            pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk, f, bias, ctr)
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk[:, None], f, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk[:, None], f, bias, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         # NOTE: can be removed
@@ -413,7 +413,7 @@ class PowerSpectrum1LoopEPT:
 
         return pk_13
     
-    def get_pkmu_13_UV(self, pk_data, f, bias):
+    def get_pkmu_13_UV(self, pk, f, bias):
         k = self._k
         mu = self._mu
 
@@ -425,14 +425,13 @@ class PowerSpectrum1LoopEPT:
             + ((- 46./105.) * f**2 + (- 1./3.) * f**3) * mu**4
         Z1Z3_UV = Z1 * Z3_UV
 
-        pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_data = jnp.stack([k, pk], axis=0)
         pk_int = get_pk_int(pk_data)
         pkmu = jnp.outer(k**2 * pk * pk_int, Z1Z3_UV)
 
         return pkmu
     
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_22_pld(self, pkmu_terms, pk_data, f, bias):
+    def get_pkmu_22_pld(self, pkmu_terms, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
         powers = jnp.array([1.0, f, b1, b2, bG2, bGamma3])  # shape: (6,)
@@ -442,13 +441,13 @@ class PowerSpectrum1LoopEPT:
         pkmu = jnp.sum(coeffs[:, None, None] * pkmu_terms[:, :, None] * mu_powers[:, None, :], axis=0)
 
         # if not self.subtract_k0_limit:
+        #     pk_data = jnp.stack([self._k, pk], axis=0)
         #     pkmu_k0 = b2**2 / 2. * get_pk_int2(pk_data)
         #     pkmu = pkmu + pkmu_k0
 
         return pkmu  # shape: (nk, nmu)
     
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_13_pld(self, pkmu_terms, pk_data, f, bias):
+    def get_pkmu_13_pld(self, pkmu_terms, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
         powers = jnp.array([1.0, f, b1, b2, bG2, bGamma3])  # shape: (6,)
@@ -456,22 +455,21 @@ class PowerSpectrum1LoopEPT:
         mu_powers = self._mu[None, :] ** self.degrees_13[:, 0:1]
 
         pkmu = jnp.sum(coeffs[:, None, None] * pkmu_terms[:, :, None] * mu_powers[:, None, :], axis=0)
-        pkmu = pkmu + self.get_pkmu_13_UV(pk_data, f, bias)
+        pkmu = pkmu + self.get_pkmu_13_UV(pk, f, bias)
 
         return pkmu  # shape: (nk, nmu)
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_1loop_pld(self, pk_data, f, bias):
+    def get_pkmu_1loop_pld(self, pk, f, bias):
 
-        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         p_q_1, _, p_k0_1 = get_decomp_data(-0.3, self._k, pk)
         p_q_2, _, p_k0_2 = get_decomp_data(-1.6, self._k, pk)
 
         pkmu_terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2, p_k0_1, p_k0_2)
         pkmu_terms_13 = self.get_pkmu_terms_13(p_q_1, p_q_2, pk)
 
-        pkmu_22 = self.get_pkmu_22_pld(pkmu_terms_22, pk_data, f, bias)
-        pkmu_13 = self.get_pkmu_13_pld(pkmu_terms_13, pk_data, f, bias)
+        pkmu_22 = self.get_pkmu_22_pld(pkmu_terms_22, pk, f, bias)
+        pkmu_13 = self.get_pkmu_13_pld(pkmu_terms_13, pk, f, bias)
 
         return pkmu_22 + pkmu_13 # shape: (nk, nmu)
     
@@ -497,17 +495,16 @@ class PowerSpectrum1LoopEPT:
         return xi_ln
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_1loop_hankel(self, pk_data, f, bias):
+    def get_pkmu_1loop_hankel(self, pk, f, bias):
 
-        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
         xi_ln = self.get_xi_ln_array(pk)
         
-        pkmu_22 = self.get_pkmu_22_hankel(xi_ln, pk_data, f, bias)
-        pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk_data, f, bias)
+        pkmu_22 = self.get_pkmu_22_hankel(xi_ln, pk, f, bias)
+        pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk, f, bias)
 
         return pkmu_22 + pkmu_13
     
-    def get_pkmu_22_hankel(self, xi_ln, pk_data, f, bias):
+    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
         def compute_pk_ln1n2(term):
@@ -537,19 +534,19 @@ class PowerSpectrum1LoopEPT:
         pkmu = jnp.sum(pk_ln1n2[:, :, None] * coeff_matrix[:, None, :], axis=0)  # (nk, nmu)
 
         if self.subtract_k0_limit:
+            pk_data = jnp.stack([self._k, pk], axis=0)
             pkmu_k0 = b2**2 / 2. * get_pk_int2(pk_data)
             pkmu = pkmu - pkmu_k0
 
         return pkmu  # (nk, nmu)
     
-    def get_pkmu_13_hankel(self, xi_ln, pk_data, f, bias):
+    def get_pkmu_13_hankel(self, xi_ln, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
 
         def get_pk_ln_term(term):
             l, n, m = term
             pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
-            return (self._k ** m) * pk_lin * pk_ln
+            return (self._k ** m) * pk * pk_ln
 
         pk_lnm = jax.vmap(get_pk_ln_term)(self.lnm_list)  # (nterms, nk)
 
@@ -574,22 +571,22 @@ class PowerSpectrum1LoopEPT:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_1loop(self, pk_data, f, bias):
+    def get_pkmu_1loop(self, pk, f, bias):
         if self.use_hankel:
-            pkmu = self.get_pkmu_1loop_hankel(pk_data, f, bias)
+            pkmu = self.get_pkmu_1loop_hankel(pk, f, bias)
         else:
-            pkmu = self.get_pkmu_1loop_pld(pk_data, f, bias)
+            pkmu = self.get_pkmu_1loop_pld(pk, f, bias)
         return pkmu
     
-    def get_pkmu_irres_LO_NLO(self, pk_nw, pk_w, damp_fac, pk_data, pk_nw_data, f, bias):
+    def get_pkmu_irres_LO_NLO(self, pk_nw, pk_w, damp_fac, f, bias):
         # LO term
         b1 = bias[0]
         Z1 = b1 + f * self._mu**2
         pkmu_irres_tree = (Z1**2)[None, :] * (pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None] * (1 + damp_fac))
         
         # NLO term
-        pkmu_1loop = self.get_pkmu_1loop(pk_data, f, bias)
-        pkmu_1loop_nw = self.get_pkmu_1loop(pk_nw_data, f, bias)
+        pkmu_1loop = self.get_pkmu_1loop(pk_nw + pk_w, f, bias)
+        pkmu_1loop_nw = self.get_pkmu_1loop(pk_nw, f, bias)
         pkmu_1loop_w = pkmu_1loop - pkmu_1loop_nw
         pkmu_irres_1loop = pkmu_1loop_nw + jnp.exp(-damp_fac) * pkmu_1loop_w
 
