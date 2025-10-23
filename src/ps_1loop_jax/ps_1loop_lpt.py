@@ -257,8 +257,8 @@ class PowerSpectrum1LoopLPT:
                                             + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
                 integrand_A13  = -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
                                             + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
-                integrand_W112 = -k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
-                                        + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
+                integrand_W112 = -k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1 \
+                                        + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3 \
                                         + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
                 # LIMD bias
@@ -402,14 +402,14 @@ class PowerSpectrum1LoopLPT:
                 integrand_b1_b1 += -Ksq * mq2 * U_lin**2 # U_lin^2
 
                 integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20 # U20
-                integrand_b2 += -Ksq * mq2 * U_lin**2 # 
+                integrand_b2 += -Ksq * mq2 * U_lin**2 # U_lin^2
 
-                integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
-                integrand_b2_b2 = 0.5 * mq0 * xi_lin**2
+                integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin # xi_lin U_lin
+                integrand_b2_b2 = 0.5 * mq0 * xi_lin**2 # xi_lin^2
 
                 # 2nd-order shear bias
-                integrand_bs  = -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
-                integrand_bs += -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+                integrand_bs  = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+                integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
 
                 integrand_b1_bs = -2 * K * mq1 * V12
                 integrand_b2_bs = mq0 * chi
@@ -664,7 +664,8 @@ class PowerSpectrum1LoopLPT:
         
         # U10, U11, U20
         U3 = self.get_xi_ln(1, -1, -5/21 * R1) # 3rd-order part of U10
-        U11 = self.get_xi_ln(1, -1, 3/14 * (R1 + R2)) # U11
+        # U11 = self.get_xi_ln(1, -1, 3/14 * (R1 + R2)) # U11
+        U11 = self.get_xi_ln(1, -1, -6/7 * (R1 + R2)) # U11
         U20 = self.get_xi_ln(1, -1, -3/7 * Q8) # U20
         
         # A10
@@ -693,7 +694,8 @@ class PowerSpectrum1LoopLPT:
         else:
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
             V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
-            chi = 2 * (2/3 * xi_ln[0,0]**2 + xi_ln[2,0]**2) # chi based on s^2
+            # chi = 2 * (2/3 * xi_ln[0,0]**2 + xi_ln[2,0]**2) # chi based on s^2
+            chi = 4/3 * xi_ln[2,0]**2 # chi based on s^2
             zeta = 2 * (4/45 * xi_ln[0,0]**2 + 8/63 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on s^2
 
             # Upsilon based on s^2
