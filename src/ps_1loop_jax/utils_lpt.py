@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
-def _pow_table_vec(x, L: int):
-    x = jnp.asarray(x)
+def _pow_table_vec(x, L):
+    x = jnp.array(x)
     one = jnp.ones((1, x.shape[0]), dtype=x.dtype)  # (1,nq)
     if L == 1:
         return one
@@ -9,7 +9,6 @@ def _pow_table_vec(x, L: int):
     base = jnp.concatenate([one, xs], axis=0)      # (L,nq)
     return jnp.cumprod(base, axis=0)               # (L,nq)
 
-# @partial(jit, static_argnames=['lmax'])
 def get_G00s(B, s2, coeffs, lmax):
     L   = lmax + 1
     Bs2 = B * s2  # (nq,)
@@ -36,7 +35,6 @@ def get_G00s(B, s2, coeffs, lmax):
     G00 = S0 * jnp.exp(-Bs2)[None, :]  # (L,nq)
     return G00
 
-# @partial(jit, static_argnames=['lmax'])
 def get_dGs(A, B, C, c2, s2, coeffs, lmax):
     L = lmax + 1
 
@@ -166,10 +164,8 @@ def get_dGs(A, B, C, c2, s2, coeffs, lmax):
     return out
 
 def _shift_down(x, s, L):
-    # x: (L, nq) -> 上に s 行ゼロを足して長さ L に戻す
     return jnp.pad(x, ((s, 0), (0, 0)))[:L]
 
-# @partial(jit, static_argnames=['lmax'])
 def get_Gs(A, B, C, c2, s2, coeffs, lmax=10):
     L = lmax + 1
     
