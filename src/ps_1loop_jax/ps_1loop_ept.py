@@ -27,20 +27,20 @@ class PowerSpectrum1LoopEPT:
 
     def __init__(self, 
                  do_irres=True,
-                 rbao=110.,
-                 ks=0.2,
-                 cross=False,
+                 r_bao=110.,
+                 k_IR=0.2,
+                 irres_method='DST',
                  subtract_k0_limit=True,
+                 use_hankel=True,
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
-                 nfft=256,
-                 use_hankel=True,
+                 nfft=512,
                  ):
 
         self.do_irres = do_irres # flag to perform the IR resummation
-        self.rbao = rbao
-        self.ks = ks
-        self.cross = cross # flag to enable the calculation of cross power spectra
+        self.r_bao = r_bao
+        self.k_IR = k_IR
+        self.irres_method = irres_method
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
 
         self._kmin = kmin_fft
@@ -289,8 +289,7 @@ class PowerSpectrum1LoopEPT:
         
         if self.do_irres:
             # tree + 1-loop
-            pk_nw_data = ir_resum.get_pk_nw_data(pk_data, params.h, khmin=7e-5, khmax=7.0, 
-                                                 kmin_interp=self._kmin, kmax_interp=self._kmax)
+            pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
             pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
             pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias)
 
@@ -604,8 +603,8 @@ class PowerSpectrum1LoopEPT:
         pk_w = pk - pk_nw
 
         # BAO damping factor in redshift space
-        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.rbao, self.ks)
-        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.rbao, self.ks)
+        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.k_IR)
+        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.k_IR)
         Sigma2_tot = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
         damp_fac = jnp.outer(k**2, Sigma2_tot)
 
