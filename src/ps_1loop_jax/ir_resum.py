@@ -35,16 +35,15 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         n_min, n_max = 140, 200
 
         kh = jnp.linspace(khmin, khmax, num) # 1/Mpc
-        pk = jnp.exp(pk_spl(jnp.log(kh / h)))
+        k = kh / h
+        kmin, kmax = k[0], k[-1]
+        pk = jnp.exp(pk_spl(jnp.log(k)))
 
         # remove the BAO using DST
         pk_nw = _remove_wiggle_dst(kh, pk, n_min, n_max)
 
         # ad-hoc adjustment at high k for extrapolation
         pk_nw = pk_nw.at[-100:].set(pk[-100:])
-
-        k = kh / h
-        kmin, kmax = k[0], k[-1]
 
     elif method == 'SG':
         kmin, kmax, num = 1e-4, 1e1, 256
@@ -149,4 +148,3 @@ def _diff_mat(n, p):
     for _ in range(p):
         D = D[1:] - D[:-1]
     return D
-
