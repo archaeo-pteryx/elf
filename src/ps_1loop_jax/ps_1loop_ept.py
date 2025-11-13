@@ -9,7 +9,6 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 import quadax
-import interpax
 
 from .power_law_decomp import get_decomp_data
 from . import hankel
@@ -17,10 +16,11 @@ from . import hankel
 from . import pt_coeff
 from . import pt_matrix
 from . import utils_loop
-from .utils_loop import get_pk, get_pk_int, get_pk_int2, interp2d_separable_linear
+from .utils_loop import get_pk, get_pk_int, get_pk_int2
 from .utils_math import legendre
 
 from . import ir_resum
+from . import spline
 
 
 class PowerSpectrum1LoopEPT:
@@ -322,9 +322,15 @@ class PowerSpectrum1LoopEPT:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
-        pkmu_data = self.get_pkmu_grid(pk_data, params)
+        pkmu_grid = self.get_pkmu_grid(pk_data, params)
+
         # 2D interpolation
-        pkmu = interp2d_separable_linear(jnp.log(k), mu, jnp.log(self._k), self._mu, pkmu_data)
+        # pkmu = interp2d_separable_linear(jnp.log(k), mu, jnp.log(self._k), self._mu, pkmu_grid)
+        interp2d = spline.make_bicubic_spline2d(jnp.log(self._k), self._mu, pkmu_grid)
+        xq = jnp.log(k)[:, None]
+        yq = mu[None, :]
+        pkmu = interp2d(xq, yq)
+
         return pkmu
 
     @partial(jit, static_argnames=['self', 'num'])
@@ -351,13 +357,19 @@ class PowerSpectrum1LoopEPT:
 
         # 2D interpolation
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
-        mu_tile = jnp.tile(mu_true, (len(k), 1))
-        pkmu = interpax.interp2d(
-            jnp.ravel(jnp.log(k_true)), jnp.ravel(mu_tile), 
-            jnp.log(self._k), self._mu, pkmu_grid, 
-            method='linear', extrap=True
-        )
-        pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
+        
+        # mu_tile = jnp.tile(mu_true, (len(k), 1))
+        # pkmu = interpax.interp2d(
+        #     jnp.ravel(jnp.log(k_true)), jnp.ravel(mu_tile), 
+        #     jnp.log(self._k), self._mu, pkmu_grid, 
+        #     method='linear', extrap=True
+        # )
+        # pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
+
+        interp2d = spline.make_bicubic_spline2d(jnp.log(self._k), self._mu, pkmu_grid)
+        xq = jnp.log(k_true)
+        yq = mu_true[None, :]
+        pkmu = interp2d(xq, yq) / (alpha_perp**2 * alpha_para)
 
         return pkmu
 
