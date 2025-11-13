@@ -1,13 +1,9 @@
 import jax
-jax.config.update('jax_enable_x64', True)
-from jax import jit
-from functools import partial
-
 import jax.numpy as jnp
 import quadax
-import interpax
 from .utils_loop import get_log_extrap
 from .utils_math import spherical_jn
+from . import spline
 
 
 def get_Sigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
@@ -24,12 +20,10 @@ def get_dSigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
     return res
 
-@partial(jit, static_argnames='method')
 def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
 
-    k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin_ext, kmax_ext)
-    pk_spl = interpax.Interpolator1D(jnp.log(k_extrap), jnp.log(pk_extrap), method='cubic2')
-    
+    k_grid, pk_grid = get_log_extrap(pk_data[0], pk_data[1], kmin_ext, kmax_ext)
+
     if method == 'DST':
         khmin, khmax, num = 7e-5, 7.0, 2**16
         n_min, n_max = 140, 200
@@ -37,7 +31,7 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         kh = jnp.linspace(khmin, khmax, num) # 1/Mpc
         k = kh / h
         kmin, kmax = k[0], k[-1]
-        pk = jnp.exp(pk_spl(jnp.log(k)))
+        pk = spline.interp1d(jnp.log(k), jnp.log(k_grid), pk_grid)
 
         # remove the BAO using DST
         pk_nw = _remove_wiggle_dst(kh, pk, n_min, n_max)
@@ -51,7 +45,7 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         poly_degree = 3
 
         k = jnp.geomspace(kmin, kmax, num)
-        pk = jnp.exp(pk_spl(jnp.log(k)))
+        pk = spline.interp1d(jnp.log(k), jnp.log(k_grid), pk_grid)
 
         coeffs = _savgol_coeffs(window_length, poly_degree)
 
@@ -71,7 +65,7 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         lam, p = 1e3, 2
 
         k = jnp.geomspace(kmin, kmax, num)
-        pk = jnp.exp(pk_spl(jnp.log(k)))
+        pk = spline.interp1d(jnp.log(k), jnp.log(k_grid), pk_grid)
 
         # Whittaker-Henderson smoothing
         n = len(pk)
@@ -86,13 +80,13 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
 
     # redefine the intermediate k grids for a roughly equidistant logarithmic binning
     k_mid = jnp.geomspace(kmin, kmax, 500) # h/Mpc
-    pk_nw = jnp.exp(interpax.interp1d(jnp.log(k_mid), jnp.log(k), jnp.log(pk_nw), method='cubic2'))
+    pk_nw = jnp.exp(spline.interp1d(jnp.log(k_mid), jnp.log(k), jnp.log(pk_nw)))
 
     # extrapolation with the un-smoothed linear power spectrum
     k_low   = jnp.geomspace(kmin_ext, kmin, 100)[:-1]
     k_high  = jnp.geomspace(kmax, kmax_ext, 100)[1:]
-    pk_low  = jnp.exp(pk_spl(jnp.log(k_low)))
-    pk_high = jnp.exp(pk_spl(jnp.log(k_high)))
+    pk_low  = spline.interp1d(jnp.log(k_low), jnp.log(k_grid), pk_grid)
+    pk_high = spline.interp1d(jnp.log(k_high), jnp.log(k_grid), pk_grid)
 
     k_extrap     = jnp.concatenate([k_low, k_mid, k_high], axis=0) # h/Mpc
     pk_nw_extrap = jnp.concatenate([pk_low, pk_nw, pk_high], axis=0)
@@ -122,8 +116,8 @@ def _remove_wiggle_dst(kh, pk, n_min=140, n_max=200):
     harms_even_sd = jnp.concatenate([harms_even[:n_min], harms_even[n_max:]], axis=0)
 
     # spline interpolation
-    harms_odd_s  = interpax.interp1d(n, n_sd, harms_odd_sd, method='cubic2')
-    harms_even_s = interpax.interp1d(n, n_sd, harms_even_sd, method='cubic2')
+    harms_odd_s  = spline.interp1d(n, n_sd, harms_odd_sd)
+    harms_even_s = spline.interp1d(n, n_sd, harms_even_sd)
 
     i_rec   = jnp.argsort(jnp.concatenate([n_odd, n_even], axis=0))
     harms_s = jnp.concatenate([harms_odd_s, harms_even_s], axis=0)[i_rec]
