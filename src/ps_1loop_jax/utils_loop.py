@@ -108,8 +108,3 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
     return x_extrap, y_extrap
-
-def interp2d_separable_linear(x, y, x_grid, y_grid, values):
-    interp_y = jax.vmap(lambda row: jnp.interp(y, y_grid, row))(values)  # shape: (mx, ny)
-    interp_xy = jax.vmap(lambda col: jnp.interp(x, x_grid, col.T))(interp_y.T)  # shape: (ny, nx)
-    return interp_xy.T  # shape: (nx, ny)
