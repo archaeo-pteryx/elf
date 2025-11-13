@@ -8,14 +8,14 @@ from . import spline
 
 def get_Sigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, k_IR, num)
-    pk = jnp.exp(jnp.interp(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
+    pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * (1 - spherical_jn(0, r_bao * q) + 2 * spherical_jn(2, r_bao * q))
     res = quadax.simpson(integrand, x=q) / (6 * jnp.pi**2)
     return res
 
 def get_dSigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, k_IR, num)
-    pk = jnp.exp(jnp.interp(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
+    pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * spherical_jn(2, r_bao * q)
     res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
     return res
@@ -79,12 +79,12 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         pk_nw = pk_nw.at[-int(num/5):].set(pk[-int(num/5):])
 
     # redefine the intermediate k grids for a roughly equidistant logarithmic binning
-    k_mid = jnp.geomspace(kmin, kmax, 500) # h/Mpc
+    k_mid = jnp.geomspace(kmin, kmax, 200) # h/Mpc
     pk_nw = jnp.exp(spline.interp1d(jnp.log(k_mid), jnp.log(k), jnp.log(pk_nw)))
 
     # extrapolation with the un-smoothed linear power spectrum
-    k_low   = jnp.geomspace(kmin_ext, kmin, 100)[:-1]
-    k_high  = jnp.geomspace(kmax, kmax_ext, 100)[1:]
+    k_low   = jnp.geomspace(kmin_ext, kmin, 40)[:-1]
+    k_high  = jnp.geomspace(kmax, kmax_ext, 40)[1:]
     pk_low  = spline.interp1d(jnp.log(k_low), jnp.log(k_grid), pk_grid)
     pk_high = spline.interp1d(jnp.log(k_high), jnp.log(k_grid), pk_grid)
 
