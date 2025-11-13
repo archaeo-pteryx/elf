@@ -51,25 +51,11 @@ def _cubic_spline_eval(xq, x, y, h, m):
 
     return h00 * y0 + h10 * h_i * m0 + h01 * y1 + h11 * h_i * m1
 
-def cubic_conv1d_patch(p, t):
-    f_m1, f0, f1, f2 = p[0], p[1], p[2], p[3]
-
-    t2 = t * t
-    t3 = t2 * t
-
-    # Keys (a = -0.5) coefficients
-    a0 = (-0.5 * f_m1) + (1.5 * f0) - (1.5 * f1) + (0.5 * f2)
-    a1 = (f_m1)       - (2.5 * f0) + (2.0 * f1) - (0.5 * f2)
-    a2 = (-0.5 * f_m1) + (0.5 * f1)
-    a3 = f0
-
-    return a0 * t3 + a1 * t2 + a2 * t + a3
-
-def make_bicubic_spline2d(x, y, vals):
+def interp2d(xq, yq, x, y, vals):
     
-    x  = jnp.asarray(x)
-    y  = jnp.asarray(y)
-    vals = jnp.asarray(vals)
+    x = jnp.array(x)
+    y = jnp.array(y)
+    vals = jnp.array(vals)
 
     nx, ny = x.shape[0], y.shape[0]
     assert vals.shape[0] == nx and vals.shape[1] == ny
@@ -102,24 +88,36 @@ def make_bicubic_spline2d(x, y, vals):
         # cubic along x-axis
         def interp_along_x(col4):
             # col4: shape (4, *batch)
-            return cubic_conv1d_patch(col4, tx)  # (*batch,)
+            return _cubic_conv1d_patch(col4, tx)  # (*batch,)
         
         tmp = jax.vmap(interp_along_x, in_axes=1, out_axes=0)(patch)
 
         # cubic along y-axis
-        val = cubic_conv1d_patch(tmp, ty)       # (*batch,)
+        val = _cubic_conv1d_patch(tmp, ty)       # (*batch,)
         return val
+    
+    xq = jnp.array(xq)
+    yq = jnp.array(yq)
 
-    def interp(xq, yq):
-        xq = jnp.asarray(xq)
-        yq = jnp.asarray(yq)
+    xq_b, yq_b = jnp.broadcast_arrays(xq, yq)
+    flat_x = xq_b.ravel()
+    flat_y = yq_b.ravel()
 
-        xq_b, yq_b = jnp.broadcast_arrays(xq, yq)
-        flat_x = xq_b.ravel()
-        flat_y = yq_b.ravel()
+    vals_flat = jax.vmap(interp_single)(flat_x, flat_y)  # (N, *batch)
+    out = vals_flat.reshape(xq_b.shape + batch_shape)
 
-        vals_flat = jax.vmap(interp_single)(flat_x, flat_y)  # (N, *batch)
-        out = vals_flat.reshape(xq_b.shape + batch_shape)
-        return out
+    return out
 
-    return interp
+def _cubic_conv1d_patch(p, t):
+    f_m1, f0, f1, f2 = p[0], p[1], p[2], p[3]
+
+    t2 = t * t
+    t3 = t2 * t
+
+    # Keys (a = -0.5) coefficients
+    a0 = (-0.5 * f_m1) + (1.5 * f0) - (1.5 * f1) + (0.5 * f2)
+    a1 = (f_m1)       - (2.5 * f0) + (2.0 * f1) - (0.5 * f2)
+    a2 = (-0.5 * f_m1) + (0.5 * f1)
+    a3 = f0
+
+    return a0 * t3 + a1 * t2 + a2 * t + a3

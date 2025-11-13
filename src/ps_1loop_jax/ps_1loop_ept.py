@@ -325,11 +325,9 @@ class PowerSpectrum1LoopEPT:
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
 
         # 2D interpolation
-        # pkmu = interp2d_separable_linear(jnp.log(k), mu, jnp.log(self._k), self._mu, pkmu_grid)
-        interp2d = spline.make_bicubic_spline2d(jnp.log(self._k), self._mu, pkmu_grid)
         xq = jnp.log(k)[:, None]
         yq = mu[None, :]
-        pkmu = interp2d(xq, yq)
+        pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
 
         return pkmu
 
@@ -357,19 +355,10 @@ class PowerSpectrum1LoopEPT:
 
         # 2D interpolation
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
-        
-        # mu_tile = jnp.tile(mu_true, (len(k), 1))
-        # pkmu = interpax.interp2d(
-        #     jnp.ravel(jnp.log(k_true)), jnp.ravel(mu_tile), 
-        #     jnp.log(self._k), self._mu, pkmu_grid, 
-        #     method='linear', extrap=True
-        # )
-        # pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
-
-        interp2d = spline.make_bicubic_spline2d(jnp.log(self._k), self._mu, pkmu_grid)
         xq = jnp.log(k_true)
         yq = mu_true[None, :]
-        pkmu = interp2d(xq, yq) / (alpha_perp**2 * alpha_para)
+        pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
+        pkmu = pkmu / (alpha_perp**2 * alpha_para)
 
         return pkmu
 
