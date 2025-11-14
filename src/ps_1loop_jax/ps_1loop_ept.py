@@ -8,7 +8,6 @@ from functools import partial
 
 import jax.numpy as jnp
 import numpy as np
-import quadax
 
 from .power_law_decomp import get_decomp_data
 from . import hankel
@@ -17,7 +16,6 @@ from . import pt_coeff
 from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_pk, get_pk_int, get_pk_int2
-from .utils_math import legendre
 
 from . import ir_resum
 from . import spline
@@ -35,6 +33,7 @@ class PowerSpectrum1LoopEPT:
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=512,
+                 ngauss=4,
                  ):
 
         self.do_irres = do_irres # flag to perform the IR resummation
@@ -48,6 +47,14 @@ class PowerSpectrum1LoopEPT:
         self._nfft = nfft
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
+
+        # preparation for Gauss-Legendre quadrature
+        self._ngauss = ngauss
+        mu, self._ws = np.polynomial.legendre.leggauss(2 * self._ngauss)
+        self._mu_quad = mu[self._ngauss:]
+        self._leg0 = np.polynomial.legendre.Legendre((1))(mu)
+        self._leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
+        self._leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
 
         self._initialize_loop_coeff()
         self._initialize_loop_matrix()
@@ -330,18 +337,22 @@ class PowerSpectrum1LoopEPT:
         pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
 
         return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pk_ells(self, k, pk_data, params):
+        k = jnp.atleast_1d(k)
 
-    @partial(jit, static_argnames=['self', 'num'])
-    def get_pk_ell(self, k, l, pk_data, params, num=256):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.linspace(0., 1., num)
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params).T
+        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
 
-        pkmu = self.get_pkmu(k, mu, pk_data, params)
+        weights = jnp.stack([
+            0.5 * self._ws * self._leg0,   # (2*nmu,)
+            2.5 * self._ws * self._leg2,
+            4.5 * self._ws * self._leg4
+        ], axis=0)  # (3, 2*nmu)
 
-        leg = jnp.tile((2*l+1) * legendre(l, mu), (len(k), 1))
-        pk_ell = quadax.simpson(pkmu * leg, x=mu, axis=1)
-
-        return pk_ell
+        pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
+        return pk_ells
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params):
@@ -361,18 +372,22 @@ class PowerSpectrum1LoopEPT:
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
 
         return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params):
+        k = jnp.atleast_1d(k)
 
-    @partial(jit, static_argnames=['self', 'num'])
-    def get_pk_ell_ref(self, k, l, alpha_perp, alpha_para, pk_data, params, num=256):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.linspace(0., 1., num)
+        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params).T
+        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
 
-        pkmu = self.get_pkmu_ref(k, mu, alpha_perp, alpha_para, pk_data, params)
+        weights = jnp.stack([
+            0.5 * self._ws * self._leg0,   # (2*nmu,)
+            2.5 * self._ws * self._leg2,
+            4.5 * self._ws * self._leg4
+        ], axis=0)  # (3, 2*nmu)
 
-        leg = jnp.tile((2*l+1) * legendre(l, mu), (len(k), 1))
-        pk_ell = quadax.simpson(pkmu * leg, x=mu, axis=1)
-
-        return pk_ell
+        pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
+        return pk_ells
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_lin(self, k, mu, pk_data, f, bias):
