@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import quadax
 from .utils_loop import get_log_extrap
 from .utils_math import spherical_jn
 from . import spline
@@ -10,14 +9,14 @@ def get_Sigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, k_IR, num)
     pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * (1 - spherical_jn(0, r_bao * q) + 2 * spherical_jn(2, r_bao * q))
-    res = quadax.simpson(integrand, x=q) / (6 * jnp.pi**2)
+    res = jnp.trapezoid(integrand, x=q) / (6 * jnp.pi**2)
     return res
 
 def get_dSigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     q = jnp.linspace(kmin, k_IR, num)
     pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * spherical_jn(2, r_bao * q)
-    res = quadax.simpson(integrand, x=q) / (2 * jnp.pi**2)
+    res = jnp.trapezoid(integrand, x=q) / (2 * jnp.pi**2)
     return res
 
 def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
@@ -25,7 +24,7 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
     k_grid, pk_grid = get_log_extrap(pk_data[0], pk_data[1], kmin_ext, kmax_ext)
 
     if method == 'DST':
-        khmin, khmax, num = 7e-5, 7.0, 2**16
+        khmin, khmax, num = 7e-5, 7.0, 2**15
         n_min, n_max = 140, 200
 
         kh = jnp.linspace(khmin, khmax, num) # 1/Mpc
