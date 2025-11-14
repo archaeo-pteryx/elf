@@ -335,7 +335,7 @@ class PowerSpectrum1LoopLPT:
         L        = self.lmax + 1
         logk_fft = jnp.log(self._k)
 
-        def per_k(k_i):
+        def per_point(k_i, mu_j):
             inv     = -2.0 / (k_i * q)                                # (nq,)
             weights = jnp.power(inv[None, :], jnp.arange(L)[:, None]) # (L, nq)
 
@@ -345,105 +345,113 @@ class PowerSpectrum1LoopLPT:
             i0     = jnp.clip(i0, 0, logk_fft.size - 2)
             t      = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
 
-            def per_mu(mu_j):
-                Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
-                K    = k_i * Kfac
-                Ksq  = K**2
-                c    = (1 + f * mu_j**2) / Kfac
-                s    = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
+            Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
+            K    = k_i * Kfac
+            Ksq  = K**2
+            c    = (1 + f * mu_j**2) / Kfac
+            s    = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
 
-                A_mu = (1 + f) * mu_j / Kfac
-                B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
+            A_mu = (1 + f) * mu_j / Kfac
+            B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
 
-                A = k_i * q * c                         # (nq,)
-                B = -0.5 * Ksq * Y_lin_lt               # (nq,)
-                C = k_i * q * s                         # (nq,)
+            A = k_i * q * c                         # (nq,)
+            B = -0.5 * Ksq * Y_lin_lt               # (nq,)
+            C = k_i * q * s                         # (nq,)
 
-                base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
-                Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
+            base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
+            Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
 
-                mq0 =  Gs[0,0]          # (L, nq)
-                mq1 = -Gs[1,0]
-                mq2 = -Gs[2,0]
-                mq3 =  Gs[3,0]
-                mq4 =  Gs[4,0]
-                nq1 = -A_mu * Gs[1,0] + B_mu * Gs[0,1]
-                nq2 = -A_mu**2 * Gs[2,0] + 2*A_mu*B_mu*Gs[1,1] - B_mu**2 * Gs[0,2]
-                mq1_nq1 = -A_mu * Gs[2,0] + B_mu * Gs[1,1]
-                mq2_nq1 =  A_mu * Gs[3,0] - B_mu * Gs[2,1]
+            mq0 =  Gs[0,0]          # (L, nq)
+            mq1 = -Gs[1,0]
+            mq2 = -Gs[2,0]
+            mq3 =  Gs[3,0]
+            mq4 =  Gs[4,0]
+            nq1 = -A_mu * Gs[1,0] + B_mu * Gs[0,1]
+            nq2 = -A_mu**2 * Gs[2,0] + 2*A_mu*B_mu*Gs[1,1] - B_mu**2 * Gs[0,2]
+            mq1_nq1 = -A_mu * Gs[2,0] + B_mu * Gs[1,1]
+            mq2_nq1 =  A_mu * Gs[3,0] - B_mu * Gs[2,1]
 
-                # --- 13 integrands of (L, nq)---
-                # matter
-                integrand_1  = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-                integrand_1 += (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
-                integrand_1 += -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
-                                            + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
-                integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
-                                            + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
-                integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
-                                        + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
-                                        + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
+            # --- 13 integrands of (L, nq)---
+            # matter
+            integrand_1  = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+            integrand_1 += (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
+            integrand_1 += -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
+                                        + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
+            integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
+                                        + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
+            integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
+                                    + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
+                                    + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
-                # LIMD bias
-                integrand_b1  = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3) # U10
-                integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin) # A> U_lin
-                integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10) # A10
+            # LIMD bias
+            integrand_b1  = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3) # U10
+            integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin) # A> U_lin
+            integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10) # A10
 
-                integrand_b1_b1  = mq0 * xi_lin # xi_lin
-                integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin # A> xi_lin
-                integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11 # U11
-                integrand_b1_b1 += -Ksq * mq2 * U_lin**2 # U_lin^2
+            integrand_b1_b1  = mq0 * xi_lin # xi_lin
+            integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin # A> xi_lin
+            integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11 # U11
+            integrand_b1_b1 += -Ksq * mq2 * U_lin**2 # U_lin^2
 
-                integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20 # U20
-                integrand_b2 += -Ksq * mq2 * U_lin**2 # U_lin^2
+            integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20 # U20
+            integrand_b2 += -Ksq * mq2 * U_lin**2 # U_lin^2
 
-                integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin # xi_lin U_lin
-                integrand_b2_b2 = 0.5 * mq0 * xi_lin**2 # xi_lin^2
+            integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin # xi_lin U_lin
+            integrand_b2_b2 = 0.5 * mq0 * xi_lin**2 # xi_lin^2
 
-                # 2nd-order shear bias
-                integrand_bs  = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
-                integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
+            # 2nd-order shear bias
+            integrand_bs  = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+            integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
 
-                integrand_b1_bs = -2 * K * mq1 * V12
-                integrand_b2_bs = mq0 * chi
-                integrand_bs_bs = mq0 * zeta
+            integrand_b1_bs = -2 * K * mq1 * V12
+            integrand_b2_bs = mq0 * chi
+            integrand_bs_bs = mq0 * zeta
 
-                # 3rd-order bias
-                integrand_b3    = -2 * K * mq1 * Ub3
-                integrand_b1_b3 = 2 * mq0 * theta
+            # 3rd-order bias
+            integrand_b3    = -2 * K * mq1 * Ub3
+            integrand_b1_b3 = 2 * mq0 * theta
 
-                # counterterm
-                integrand_ctr = lax.select(
-                    self.use_Pzel,
-                    mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt),
-                    mq0 * xi_lin
-                )
+            # counterterm
+            integrand_ctr = lax.select(
+                self.use_Pzel,
+                mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt),
+                mq0 * xi_lin
+            )
 
-                integrands = jnp.stack([
-                    integrand_1, integrand_b1, integrand_b1_b1,
-                    integrand_b2, integrand_b1_b2, integrand_b2_b2,
-                    integrand_bs, integrand_b1_bs, integrand_b2_bs, integrand_bs_bs,
-                    integrand_b3, integrand_b1_b3, integrand_ctr
-                ], axis=0)   # (ncomp, L, nq)
+            integrands = jnp.stack([
+                integrand_1, integrand_b1, integrand_b1_b1,
+                integrand_b2, integrand_b1_b2, integrand_b2_b2,
+                integrand_bs, integrand_b1_bs, integrand_b2_bs, integrand_bs_bs,
+                integrand_b3, integrand_b1_b3, integrand_ctr
+            ], axis=0)   # (ncomp, L, nq)
 
-                g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
+            g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
 
-                # def per_l(l, g_l):
-                #     # pk_ffts = self.get_pk_ln_batched(l, -3, g_l)             # (ncomp, nfft)
-                #     pk_ffts = self.get_pk_batched(g_l, self._u_m_q[l])             # (ncomp, nfft)
-                #     return (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1] # (ncomp,)
-                    
-                # vals = jax.vmap(per_l, in_axes=(0, 1))(jnp.arange(L), g)  # (L, ncomp)
+            # def per_l(l, g_l):
+            #     # pk_ffts = self.get_pk_ln_batched(l, -3, g_l)             # (ncomp, nfft)
+            #     pk_ffts = self.get_pk_batched(g_l, self._u_m_q[l])             # (ncomp, nfft)
+            #     return (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1] # (ncomp,)
+                
+            # vals = jax.vmap(per_l, in_axes=(0, 1))(jnp.arange(L), g)  # (L, ncomp)
 
-                pk_ffts = self.get_pk_batched(g, self._u_m_q[None, :L, :]) # (ncomp, L, nfft)
-                vals = (1.0 - t) * pk_ffts[:, :, i0] + t * pk_ffts[:, :, i0+1] # (ncomp, L), linear interpolation
+            pk_ffts = self.get_pk_batched(g, self._u_m_q[None, :L, :]) # (ncomp, L, nfft)
+            vals = (1.0 - t) * pk_ffts[:, :, i0] + t * pk_ffts[:, :, i0+1] # (ncomp, L), linear interpolation
 
-                return jnp.sum(vals, axis=1)  # (ncomp,)
-            
-            return jax.vmap(per_mu)(mu)  # (nmu, ncomp)
+            return jnp.sum(vals, axis=1)  # (ncomp,)
 
-        pkmu_terms = jax.vmap(per_k)(k)                    # (nk, nmu, ncomp)
-        pkmu_terms = jnp.transpose(pkmu_terms, (2, 0, 1))  # (ncomp, nk, nmu)
+        pkmu_terms = jax.vmap(per_point)(k, mu).T  # (ncomp, n_kmu)
+        return pkmu_terms
+    
+    def get_pkmu_terms_on_grid(self, k, mu, pk_data, f, k_IR=0.2):
+        k_grid, mu_grid = jnp.meshgrid(k, mu, indexing='ij')  # (nk, nmu)
+        k_flat  = k_grid.reshape(-1)
+        mu_flat = mu_grid.reshape(-1)
+
+        pkmu_terms = self.get_pkmu_terms(k_flat, mu_flat, pk_data, f, k_IR)
+
+        nk, nmu = k_grid.shape
+        ncomp   = pkmu_terms.shape[0]
+        pkmu_terms = pkmu_terms.reshape(ncomp, nk, nmu)
 
         return pkmu_terms
 
@@ -472,7 +480,8 @@ class PowerSpectrum1LoopLPT:
             b1*b3          # b1*b3
         ])  # (12,)
 
-        pkmu_terms = self.get_pkmu_terms(k, mu, pk_data, f, k_IR)
+        pkmu_terms = self.get_pkmu_terms_on_grid(k, mu, pk_data, f, k_IR)
+
         pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
 
         # counterterm
@@ -497,12 +506,55 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
+
+        f = params.f
+        b1, b2, bs, b3 = params.bias
+        alpha0, alpha2, alpha4, alpha6 = params.ctr
+        R_h3, sigma2, sigma4 = params.stoch
+
+        bias_facs = jnp.array([
+            1.,            # 1
+            b1,            # b1
+            b1**2,         # b1^2
+            b2,            # b2
+            b1*b2,         # b1*b2
+            b2**2,         # b2^2
+            bs,            # bs
+            b1*bs,         # b1*bs
+            b2*bs,         # b2*bs
+            bs**2,         # bs^2
+            b3,            # b3
+            b1*b3          # b1*b3
+        ])  # (12,)
+
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
+        mu_true = jnp.broadcast_to(mu_true, k_true.shape)  # (nk, nmu)
 
-        pkmu = self.get_pkmu(k_true, mu_true, pk_data, params, k_IR)
+        k_flat  = k_true.reshape(-1)
+        mu_flat = mu_true.reshape(-1)
+        pkmu_terms = self.get_pkmu_terms(k_flat, mu_flat, pk_data, f, k_IR)
+
+        nk, nmu = k_true.shape
+        ncomp   = pkmu_terms.shape[0]
+        pkmu_terms = pkmu_terms.reshape(ncomp, nk, nmu)
+
+        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
+
+        # counterterm
+        ctr_mu = alpha0 + alpha2 * mu_true**2 + alpha4 * mu_true**4 + alpha6 * mu_true**6   # (nmu,)
+        pkmu_ctr = k_true**2 * ctr_mu * pkmu_terms[-1]   # (nk, nmu)
+        pkmu = pkmu + pkmu_ctr
+
+        # stochasticity
+        kmu2 = (k_true * mu_true)**2
+        kmu4 = kmu2**2
+        pkmu_stoch = R_h3 * (1 + sigma2 * kmu2 + sigma4 * kmu4)
+        pkmu = pkmu + pkmu_stoch
+
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
-
         return pkmu
     
     @partial(jit, static_argnames=['self'])
