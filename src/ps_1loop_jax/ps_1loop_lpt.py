@@ -257,7 +257,7 @@ class PowerSpectrum1LoopLPT:
                                             + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
                 integrand_A13  = -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
                                             + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
-                integrand_W112 = -k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1 \
+                integrand_W112 = 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1 \
                                         + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3 \
                                         + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
@@ -387,7 +387,7 @@ class PowerSpectrum1LoopLPT:
                                             + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
                 integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
                                             + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
-                integrand_1 += -k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
+                integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
                                         + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
                                         + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
@@ -508,25 +508,6 @@ class PowerSpectrum1LoopLPT:
 
         pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
         return pk_ells
-    
-    # @partial(jit, static_argnames=['self'])
-    # def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
-        
-    #     # mapping of (k, mu)
-    #     fac = jnp.sqrt(1 + mu**2 * ((alpha_perp / alpha_para)**2 - 1))
-    #     mu_true = mu * (alpha_perp / alpha_para) / fac
-    #     k_true = jnp.outer(k, fac) / alpha_perp
-
-    #     pkmu_grid = self.get_pkmu(k, mu, pk_data, params, k_IR=k_IR)
-    #     mu_tile = jnp.tile(mu_true, (len(k), 1))
-    #     pkmu = interpax.interp2d(
-    #         jnp.ravel(jnp.log(k_true)), jnp.ravel(mu_tile), 
-    #         jnp.log(self._k), self._mu, pkmu_grid, 
-    #         method='linear', extrap=True
-    #     )
-    #     pkmu = pkmu.reshape(len(k), len(mu)) / (alpha_perp**2 * alpha_para)
-
-    #     return 
 
     def get_corrs(self, pk_data, k_IR=0.2, k_cut=10.0):
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -644,9 +625,9 @@ class PowerSpectrum1LoopLPT:
         Y13 = 2 * xi_ln_13_2m2
 
         # V1, V3, T for W_{ijk}
-        T = self.get_xi_ln(3, -3, 3/14 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
-        V1 = self.get_xi_ln(1, -3, -3/70 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2)) - 0.2 * T
-        V3 = self.get_xi_ln(1, -3, 3/70 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2)) - 0.2 * T
+        T = self.get_xi_ln(3, -3, -3/7 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2))
+        V1 = self.get_xi_ln(1, -3, 3/35 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2)) - 0.2 * T
+        V3 = self.get_xi_ln(1, -3, -3/35 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2)) - 0.2 * T
 
         corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
         return corrs
