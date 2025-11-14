@@ -664,7 +664,6 @@ class PowerSpectrum1LoopLPT:
         
         # U10, U11, U20
         U3 = self.get_xi_ln(1, -1, -5/21 * R1) # 3rd-order part of U10
-        # U11 = self.get_xi_ln(1, -1, 3/14 * (R1 + R2)) # U11
         U11 = self.get_xi_ln(1, -1, -6/7 * (R1 + R2)) # U11
         U20 = self.get_xi_ln(1, -1, -3/7 * Q8) # U20
         
