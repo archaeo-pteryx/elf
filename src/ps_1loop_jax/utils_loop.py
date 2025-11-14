@@ -1,7 +1,6 @@
 import jax
 # jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
-import quadax
 import re
 
 from . import spline
@@ -51,12 +50,14 @@ def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
 
 def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
-    res = quadax.simpson(q * get_pk(q, pk_data, kmin * 0.1, kmax * 10.), x=jnp.log(q)) / (2 * jnp.pi**2)
+    integrand = q * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)
+    res = jnp.trapezoid(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
 def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     q = jnp.geomspace(kmin, kmax, num)
-    res = quadax.simpson(q**3 * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)**2, x=jnp.log(q)) / (2 * jnp.pi**2)
+    integrand = q**3 * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)**2
+    res = jnp.trapezoid(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
     return res
 
 def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
