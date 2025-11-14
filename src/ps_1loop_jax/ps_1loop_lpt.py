@@ -17,7 +17,6 @@ from .utils_lpt import get_G00s, get_Gs
 class PowerSpectrum1LoopLPT:
 
     def __init__(self, 
-                 cross=False,
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=256,
@@ -27,7 +26,6 @@ class PowerSpectrum1LoopLPT:
                  use_Pzel=True
                  ):
         
-        self.cross = cross # flag to enable the calculation of cross power spectra
         self.lmax = lmax
         self.use_galileon = use_galileon
         self.use_Pzel = use_Pzel
