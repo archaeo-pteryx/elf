@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 from .utils_loop import get_log_extrap
-from .utils_math import spherical_jn
 from . import spline
 
 
@@ -17,6 +16,15 @@ def get_dSigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
     pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * spherical_jn(2, r_bao * q)
     res = jnp.trapezoid(integrand, x=q) / (2 * jnp.pi**2)
+    return res
+
+def spherical_jn(n, x):
+    x = jnp.atleast_1d(x)
+    res = jax.lax.cond(n == 0, 
+                       lambda: jnp.sin(x) / x, 
+                       lambda: jax.lax.cond(n == 1, 
+                                            lambda: (jnp.sin(x) - x * jnp.cos(x)) / x**2, 
+                                            lambda: ((3 - x**2) * jnp.sin(x) - 3 * x * jnp.cos(x)) / x**3))
     return res
 
 def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
