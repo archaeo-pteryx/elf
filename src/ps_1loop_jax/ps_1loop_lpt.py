@@ -6,12 +6,12 @@ from functools import partial
 from jax import lax
 
 import jax.numpy as jnp
-import numpy as np
 
 from . import hankel
 
 from .utils_loop import get_pk, get_pk_int
 from .utils_lpt import get_G00s, get_Gs
+from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 
 
 class PowerSpectrum1LoopLPT:
@@ -31,12 +31,7 @@ class PowerSpectrum1LoopLPT:
         self.use_Pzel = use_Pzel
 
         # preparation for Gauss-Legendre quadrature
-        self._ngauss = ngauss
-        mu, self._ws = np.polynomial.legendre.leggauss(2 * self._ngauss)
-        self._mu_quad = mu[self._ngauss:]
-        self._leg0 = np.polynomial.legendre.Legendre((1))(mu)
-        self._leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
-        self._leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
+        self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss)
 
         # preparation for FFT
         self._kmin = kmin_fft
@@ -495,16 +490,28 @@ class PowerSpectrum1LoopLPT:
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k)
 
-        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, k_IR).T
-        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, k_IR)
+        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
 
-        weights = jnp.stack([
-            0.5 * self._ws * self._leg0,   # (2*nmu,)
-            2.5 * self._ws * self._leg2,
-            4.5 * self._ws * self._leg4
-        ], axis=0)  # (3, 2*nmu)
+        return pk_ells
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
+        # mapping of (k, mu)
+        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
 
-        pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
+        pkmu = self.get_pkmu(k_true, mu_true, pk_data, params, k_IR)
+        pkmu = pkmu / (alpha_perp**2 * alpha_para)
+
+        return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
+        k = jnp.atleast_1d(k)
+
+        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params, k_IR=k_IR)
+        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
+
         return pk_ells
 
     def get_corrs(self, pk_data, k_IR=0.2, k_cut=10.0):

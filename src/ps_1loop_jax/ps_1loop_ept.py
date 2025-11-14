@@ -7,7 +7,6 @@ from jax import jit
 from functools import partial
 
 import jax.numpy as jnp
-import numpy as np
 
 from .power_law_decomp import get_decomp_data
 from . import hankel
@@ -16,6 +15,7 @@ from . import pt_coeff
 from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_pk, get_pk_int, get_pk_int2
+from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 
 from . import ir_resum
 from . import spline
@@ -42,19 +42,15 @@ class PowerSpectrum1LoopEPT:
         self.irres_method = irres_method
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
 
+        # preparation for Gauss-Legendre quadrature
+        self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss)
+
+        # preparation for FFT
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
-
-        # preparation for Gauss-Legendre quadrature
-        self._ngauss = ngauss
-        mu, self._ws = np.polynomial.legendre.leggauss(2 * self._ngauss)
-        self._mu_quad = mu[self._ngauss:]
-        self._leg0 = np.polynomial.legendre.Legendre((1))(mu)
-        self._leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
-        self._leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
 
         self._initialize_loop_coeff()
         self._initialize_loop_matrix()
@@ -110,7 +106,7 @@ class PowerSpectrum1LoopEPT:
         self._set_hankel(lmax)
 
     def _set_hankel(self, lmax):
-        l_list = np.arange(lmax + 1)
+        l_list = jnp.arange(lmax + 1)
 
         self._q = 1 / self._k[::-1]
         self._nu_hankel = 1.1
@@ -342,16 +338,9 @@ class PowerSpectrum1LoopEPT:
     def get_pk_ells(self, k, pk_data, params):
         k = jnp.atleast_1d(k)
 
-        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params).T
-        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params)
+        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
 
-        weights = jnp.stack([
-            0.5 * self._ws * self._leg0,   # (2*nmu,)
-            2.5 * self._ws * self._leg2,
-            4.5 * self._ws * self._leg4
-        ], axis=0)  # (3, 2*nmu)
-
-        pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
         return pk_ells
 
     @partial(jit, static_argnames=['self'])
@@ -359,13 +348,12 @@ class PowerSpectrum1LoopEPT:
         k = jnp.atleast_1d(k).astype(float)
         mu = jnp.atleast_1d(mu).astype(float)
 
+        pkmu_grid = self.get_pkmu_grid(pk_data, params)
+
         # mapping of (k, mu)
-        fac = jnp.sqrt(1 + mu**2 * ((alpha_perp / alpha_para)**2 - 1))
-        mu_true = mu * (alpha_perp / alpha_para) / fac
-        k_true = jnp.outer(k, fac) / alpha_perp
+        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
 
         # 2D interpolation
-        pkmu_grid = self.get_pkmu_grid(pk_data, params)
         xq = jnp.log(k_true)
         yq = mu_true[None, :]
         pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
@@ -377,16 +365,9 @@ class PowerSpectrum1LoopEPT:
     def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params):
         k = jnp.atleast_1d(k)
 
-        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params).T
-        pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
+        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params)
+        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
 
-        weights = jnp.stack([
-            0.5 * self._ws * self._leg0,   # (2*nmu,)
-            2.5 * self._ws * self._leg2,
-            4.5 * self._ws * self._leg4
-        ], axis=0)  # (3, 2*nmu)
-
-        pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
         return pk_ells
 
     @partial(jit, static_argnames=['self'])
