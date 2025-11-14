@@ -35,7 +35,7 @@ class PowerSpectrum1LoopLPT:
         # preparation for Gauss-Legendre quadrature
         self._ngauss = ngauss
         mu, self._ws = np.polynomial.legendre.leggauss(2 * self._ngauss)
-        self._mu = mu[self._ngauss:]
+        self._mu_quad = mu[self._ngauss:]
         self._leg0 = np.polynomial.legendre.Legendre((1))(mu)
         self._leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
         self._leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
@@ -497,7 +497,7 @@ class PowerSpectrum1LoopLPT:
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
         k = jnp.atleast_1d(k)
 
-        pkmu = self.get_pkmu(k, self._mu, pk_data, params, k_IR).T
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, k_IR).T
         pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
 
         weights = jnp.stack([
