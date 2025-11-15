@@ -44,8 +44,7 @@ def get_degree_dict(name):
 
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
     k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
-    pk  = spline.interp1d(jnp.log(k), jnp.log(k_extrap), pk_extrap)
-    # pk = jnp.interp(jnp.log(k), jnp.log(k_extrap), pk_extrap)
+    pk = spline.interp1d(jnp.log(k), jnp.log(k_extrap), pk_extrap)
     return pk
 
 def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):

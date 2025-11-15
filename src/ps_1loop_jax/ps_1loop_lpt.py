@@ -101,11 +101,6 @@ class PowerSpectrum1LoopLPT:
         pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
         return pk_ln
     
-    # def get_pk_ln_batched(self, l, n, arrays):
-    #     fx = arrays * self._q[None, :]**(n + 3)
-    #     pk_lns = hankel.get_hankel_batched(self._nu_hankel, fx, self._q_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
-    #     return pk_lns
-    
     def get_pk_batched(self, arrays, u_m_q):
         pks = hankel.get_hankel_batched(self._nu_hankel, arrays, self._q_padded, self._y_q, u_m_q, self._npad, self._q_high, self._w_m_q)
         return pks
@@ -163,12 +158,6 @@ class PowerSpectrum1LoopLPT:
 
                 g = (weights * G00s) * base[None, :]    # (L, nq)
 
-                # def per_l(l, g_l):
-                #     pk_fft = self.get_pk_ln(l, -3, g_l)
-                #     return (1.0 - t) * pk_fft[i0] + t * pk_fft[i0+1] # linear interpolation
-                    
-                # vals = jax.vmap(per_l, in_axes=(0, 0))(jnp.arange(L), g)  # (L,)
-
                 pk_ffts = self.get_pk_batched(g, self._u_m_q[:L]) # (L, nfft)
                 vals = (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1] # linear interpolation
 
@@ -209,11 +198,11 @@ class PowerSpectrum1LoopLPT:
             inv     = -2.0 / (k_i * q)                                # (nq,)
             weights = jnp.power(inv[None, :], jnp.arange(L)[:, None]) # (L, nq)
 
-            logk   = jnp.log(k_i)
+            logk = jnp.log(k_i)
             # preparation for linear interpolation
-            i0     = jnp.searchsorted(logk_fft, logk, side='right') - 1
-            i0     = jnp.clip(i0, 0, logk_fft.size - 2)
-            t      = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
+            i0   = jnp.searchsorted(logk_fft, logk, side='right') - 1
+            i0   = jnp.clip(i0, 0, logk_fft.size - 2)
+            t    = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
 
             def per_mu(mu_j):
                 Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
@@ -339,11 +328,11 @@ class PowerSpectrum1LoopLPT:
             inv     = -2.0 / (k_i * q)                                # (nq,)
             weights = jnp.power(inv[None, :], jnp.arange(L)[:, None]) # (L, nq)
 
-            logk   = jnp.log(k_i)
+            logk = jnp.log(k_i)
             # preparation for linear interpolation
-            i0     = jnp.searchsorted(logk_fft, logk, side='right') - 1
-            i0     = jnp.clip(i0, 0, logk_fft.size - 2)
-            t      = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
+            i0   = jnp.searchsorted(logk_fft, logk, side='right') - 1
+            i0   = jnp.clip(i0, 0, logk_fft.size - 2)
+            t    = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
 
             Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
             K    = k_i * Kfac
@@ -426,14 +415,7 @@ class PowerSpectrum1LoopLPT:
             ], axis=0)   # (ncomp, L, nq)
 
             g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
-
-            # def per_l(l, g_l):
-            #     # pk_ffts = self.get_pk_ln_batched(l, -3, g_l)             # (ncomp, nfft)
-            #     pk_ffts = self.get_pk_batched(g_l, self._u_m_q[l])             # (ncomp, nfft)
-            #     return (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1] # (ncomp,)
-                
-            # vals = jax.vmap(per_l, in_axes=(0, 1))(jnp.arange(L), g)  # (L, ncomp)
-
+            
             pk_ffts = self.get_pk_batched(g, self._u_m_q[None, :L, :]) # (ncomp, L, nfft)
             vals = (1.0 - t) * pk_ffts[:, :, i0] + t * pk_ffts[:, :, i0+1] # (ncomp, L), linear interpolation
 
