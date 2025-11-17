@@ -611,7 +611,7 @@ class PowerSpectrum1LoopLPT:
         return Qs
     
     def get_Rs(self, xi_ln, pk_lin):
-        ells = jnp.array([0, 2, 4, 1, 3, 2, 1, 3], dtype=jnp.int32)
+        ells = jnp.array([0, 2, 4, 1, 3, 2], dtype=jnp.int32)
         xis = jnp.stack([
             xi_ln[0,  0],
             xi_ln[2,  0],
@@ -619,21 +619,18 @@ class PowerSpectrum1LoopLPT:
             xi_ln[1,  1],
             xi_ln[3,  1],
             xi_ln[2,  2],
-            xi_ln[1, -1],
-            xi_ln[3, -1],
         ], axis=0)
 
         pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m_q[ells]) * pk_lin
 
-        pk_00, pk_20, pk_40, pk_11, pk_31, pk_22, pk_1m1, pk_3m1 = pk_list
+        pk_00, pk_20, pk_40, pk_11, pk_31, pk_22 = pk_list
 
         k = self._k
         R1 = k**2 * (8/15 * pk_00 - 16/21 * pk_20 + 8/35 * pk_40)
         R3 = 2/3 * k**2 * (pk_00 - pk_20) - 2/5 * k * (pk_11 - pk_31)
         R2 = R3 - R1
 
-        F_G2 = k**2 * (-72/35 * pk_00 + 88/49 * pk_20 + 64/245 * pk_40) \
-            + k * 4/5 * (pk_11 - pk_31) + k**3 * 4/5 * (pk_1m1 - pk_3m1)
+        F_G2 = k**2 * (-32/21 * pk_00 + 320/147 * pk_20 - 32/49 * pk_40)
         Rb3  = k**2 * (32/105 * pk_00 - 80/441 * pk_20 + 32/245 * pk_40) \
             - k * (64/315 * pk_11 + 32/105 * pk_31) + 16/63 * pk_22
 
@@ -708,8 +705,8 @@ class PowerSpectrum1LoopLPT:
             zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
 
             # 3rd-order bias
-            Ub3 = self.get_xi_ln(1, -1, -6/5 * F_G2) # Ub3 based on Gamma3
-            theta = self.get_xi_ln(0, 0, 6/5 * F_G2) # theta based on Gamma3
+            Ub3 = self.get_xi_ln(1, -1, -2/5 * F_G2) # Ub3 based on Gamma3
+            theta = self.get_xi_ln(0, 0, 2/5 * F_G2) # theta based on Gamma3
         else:
             # Upsilon based on s^2
             J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
