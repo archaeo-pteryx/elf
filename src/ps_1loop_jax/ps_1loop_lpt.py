@@ -696,32 +696,32 @@ class PowerSpectrum1LoopLPT:
         Y10 = 3 * xi_ln_A10_2m2
 
         if self.use_galileon:
+            # Upsilon based on G2
+            Up1 = - self.get_xi_ln(0, 0, Q_G2)
+            Up2 = - self.get_xi_ln(0, -2, Q1 - Q2) - self.get_xi_ln(2, -2, Q1 + 2 * Q2)
+            X_Upsilon = 1/3 * Up1 - Up2
+            Y_Upsilon = Up2 - Up1
+
             V10 = self.get_xi_ln(1, -1, 3/7 * Q1) # V10 based on G2
             V12 = self.get_xi_ln(1, -1, 2 * Q5) # V12 based on G2
             chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2) # chi based on G2
             zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
 
-            # Upsilon based on G2
-            Up1 = self.get_xi_ln(0, 0, Q_G2)
-            Up2 = self.get_xi_ln(0, -2, Q1 - Q2) + self.get_xi_ln(2, -2, Q1 + 2 * Q2)
-            X_Upsilon = 1/3 * Up1 - Up2
-            Y_Upsilon = Up2 - Up1
-
             # 3rd-order bias
             Ub3 = self.get_xi_ln(1, -1, -6/5 * F_G2) # Ub3 based on Gamma3
             theta = self.get_xi_ln(0, 0, 6/5 * F_G2) # theta based on Gamma3
         else:
-            V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
-            V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
-            chi = 4/3 * xi_ln[2,0]**2 # chi based on s^2
-            zeta = 2 * (4/45 * xi_ln[0,0]**2 + 8/63 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on s^2
-
             # Upsilon based on s^2
             J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
             J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
             J4 = xi_ln[3,-1]
             X_Upsilon = 4 * J3**2
             Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
+
+            V10 = self.get_xi_ln(1, -1, 3/7 * Q1 - 2/7 * Q8) # V10 based on s^2
+            V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
+            chi = 4/3 * xi_ln[2,0]**2 # chi based on s^2
+            zeta = 2 * (4/45 * xi_ln[0,0]**2 + 8/63 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on s^2
             
             # 3rd-order bias
             Ub3 = self.get_xi_ln(1, -1, -Rb3)
