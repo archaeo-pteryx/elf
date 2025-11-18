@@ -247,7 +247,7 @@ class PowerSpectrum1LoopEPT:
 
     @partial(jit, static_argnames=["self"])
     def get_pk_real(self, k, pk_data, params):
-        k = jnp.atleast_1d(k).astype(float)
+        k = jnp.atleast_1d(k)
 
         b1, b2, bG2, bGamma3 = params.bias
         c0, c2, c4, cfog = params.ctr
@@ -322,8 +322,8 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
 
@@ -336,17 +336,14 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params):
-        k = jnp.atleast_1d(k)
-
         pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-
         return pk_ells
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         pkmu_grid = self.get_pkmu_grid(pk_data, params)
 
@@ -363,17 +360,14 @@ class PowerSpectrum1LoopEPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params):
-        k = jnp.atleast_1d(k)
-
         pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-
         return pk_ells
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_lin(self, k, mu, pk_data, f, bias):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         b1 = bias[0]
         Z1 = b1 + f * mu**2
@@ -633,8 +627,8 @@ class PowerSpectrum1LoopEPT:
 
     # NOTE: can be removed
     def get_pkmu_stoch(self, k, mu, params):
-        k = jnp.atleast_1d(k).astype(float)
-        mu = jnp.atleast_1d(mu).astype(float)
+        k  = jnp.atleast_1d(k)
+        mu = jnp.atleast_1d(mu)
 
         P_shot, a0, a2 = params.stoch
         k_nl = params.k_nl

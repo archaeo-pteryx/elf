@@ -479,11 +479,8 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
-        k = jnp.atleast_1d(k)
-
         pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, k_IR)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-
         return pk_ells
     
     @partial(jit, static_argnames=['self'])
@@ -541,11 +538,8 @@ class PowerSpectrum1LoopLPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
-        k = jnp.atleast_1d(k)
-
         pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params, k_IR=k_IR)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-
         return pk_ells
 
     def get_corrs(self, pk_data, k_IR=0.2, k_cut=10.0):
