@@ -714,11 +714,3 @@ class PowerSpectrum1LoopLPT:
 
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
-
-    def get_xi_ells(self, r, pk_data, params, k_IR=0.2):
-        r = jnp.atleast_1d(r)
-
-        pk_ells = self.get_pk_ells(self._k, pk_data, params, k_IR=k_IR)
-        xi_ells = hankel.get_hankel_batched(self._nu_hankel, pk_ells, self._k_padded, self._y_k, u_m_q, self._npad, self._q_high, self._w_m_q)
-
-        return xi_ells
