@@ -437,54 +437,48 @@ class PowerSpectrum1LoopLPT:
 
         return pkmu_terms
 
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
-        k  = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
+    # @partial(jit, static_argnames=['self'])
+    # def get_pkmu(self, k, mu, pk_data, params, k_IR=0.2):
+    #     k  = jnp.atleast_1d(k)
+    #     mu = jnp.atleast_1d(mu)
 
-        f = params.f
-        b1, b2, bs, b3 = params.bias
-        alpha0, alpha2, alpha4, alpha6 = params.ctr
-        R_h3, sigma2, sigma4 = params.stoch
+    #     f = params.f
+    #     b1, b2, bs, b3 = params.bias
+    #     alpha0, alpha2, alpha4, alpha6 = params.ctr
+    #     R_h3, sigma2, sigma4 = params.stoch
 
-        bias_facs = jnp.array([
-            1.,            # 1
-            b1,            # b1
-            b1**2,         # b1^2
-            b2,            # b2
-            b1*b2,         # b1*b2
-            b2**2,         # b2^2
-            bs,            # bs
-            b1*bs,         # b1*bs
-            b2*bs,         # b2*bs
-            bs**2,         # bs^2
-            b3,            # b3
-            b1*b3          # b1*b3
-        ])  # (12,)
+    #     bias_facs = jnp.array([
+    #         1.,            # 1
+    #         b1,            # b1
+    #         b1**2,         # b1^2
+    #         b2,            # b2
+    #         b1*b2,         # b1*b2
+    #         b2**2,         # b2^2
+    #         bs,            # bs
+    #         b1*bs,         # b1*bs
+    #         b2*bs,         # b2*bs
+    #         bs**2,         # bs^2
+    #         b3,            # b3
+    #         b1*b3          # b1*b3
+    #     ])  # (12,)
 
-        pkmu_terms = self.get_pkmu_terms_on_grid(k, mu, pk_data, f, k_IR)
+    #     pkmu_terms = self.get_pkmu_terms_on_grid(k, mu, pk_data, f, k_IR)
 
-        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
+    #     pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
 
-        # counterterm
-        ctr_mu = alpha0 + alpha2 * mu**2 + alpha4 * mu**4 + alpha6 * mu**6   # (nmu,)
-        pkmu_ctr = jnp.outer(k**2, ctr_mu) * pkmu_terms[-1]   # (nk, nmu)
-        pkmu = pkmu + pkmu_ctr
+    #     # counterterm
+    #     ctr_mu = alpha0 + alpha2 * mu**2 + alpha4 * mu**4 + alpha6 * mu**6   # (nmu,)
+    #     pkmu_ctr = jnp.outer(k**2, ctr_mu) * pkmu_terms[-1]   # (nk, nmu)
+    #     pkmu = pkmu + pkmu_ctr
 
-        # stochasticity
-        pkmu_stoch = R_h3 * (1 + sigma2 * jnp.outer(k**2, mu**2) + sigma4 * jnp.outer(k**4, mu**4))
-        pkmu = pkmu + pkmu_stoch
+    #     # stochasticity
+    #     pkmu_stoch = R_h3 * (1 + sigma2 * jnp.outer(k**2, mu**2) + sigma4 * jnp.outer(k**4, mu**4))
+    #     pkmu = pkmu + pkmu_stoch
 
-        return pkmu  # (nk, nmu)
+    #     return pkmu  # (nk, nmu)
     
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells(self, k, pk_data, params, k_IR=0.2):
-        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, k_IR)
-        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-        return pk_ells
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
+    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
@@ -537,8 +531,8 @@ class PowerSpectrum1LoopLPT:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params, k_IR=0.2):
-        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params, k_IR=k_IR)
+    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, alpha_perp, alpha_para, k_IR=k_IR)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
         return pk_ells
 
@@ -720,3 +714,11 @@ class PowerSpectrum1LoopLPT:
 
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
+
+    def get_xi_ells(self, r, pk_data, params, k_IR=0.2):
+        r = jnp.atleast_1d(r)
+
+        pk_ells = self.get_pk_ells(self._k, pk_data, params, k_IR=k_IR)
+        xi_ells = hankel.get_hankel_batched(self._nu_hankel, pk_ells, self._k_padded, self._y_k, u_m_q, self._npad, self._q_high, self._w_m_q)
+
+        return xi_ells

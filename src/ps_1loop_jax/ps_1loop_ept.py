@@ -319,29 +319,9 @@ class PowerSpectrum1LoopEPT:
         pkmu = pkmu + pkmu_stoch
         
         return pkmu
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, params):
-        k  = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
-
-        pkmu_grid = self.get_pkmu_grid(pk_data, params)
-
-        # 2D interpolation
-        xq = jnp.log(k)[:, None]
-        yq = mu[None, :]
-        pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
-
-        return pkmu
-    
-    @partial(jit, static_argnames=['self'])
-    def get_pk_ells(self, k, pk_data, params):
-        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params)
-        pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
-        return pk_ells
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_ref(self, k, mu, alpha_perp, alpha_para, pk_data, params):
+    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
@@ -359,8 +339,8 @@ class PowerSpectrum1LoopEPT:
         return pkmu
     
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells_ref(self, k, alpha_perp, alpha_para, pk_data, params):
-        pkmu = self.get_pkmu_ref(k, self._mu_quad, alpha_perp, alpha_para, pk_data, params)
+    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, alpha_perp, alpha_para)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
         return pk_ells
 
