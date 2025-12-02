@@ -6,28 +6,59 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.special import gamma
 
+def get_log_extrap(array_x, num_low, num_high):
+    ratio = array_x[1] / array_x[0]
+    exp   = jnp.arange(-num_low, 0)
+    _array_x = array_x[0] * (ratio ** exp)
+    ratio    = array_x[-1] / array_x[-2]
+    exp      = jnp.arange(1, num_high + 1)
+    array_x_ = array_x[-1] * (ratio ** exp)
+    return jnp.concatenate([_array_x, array_x, array_x_], axis=0)
 
-def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
-    # zero padding
-    fx = jnp.pad(fx, (npad, npad))
+def pad(array_y, n_pad, mode='power-law'):
+    if mode == 'power-law':
+        return get_log_extrap(array_y, n_pad, n_pad)
+    elif mode == 'zero-pad':
+        _array_y = jnp.zeros(n_pad)
+        array_y_ = jnp.zeros(n_pad)
+        return jnp.concatenate([_array_y, array_y, array_y_], axis=0)
+
+def func_window(x: jnp.ndarray) -> jnp.ndarray:
+    return x - jnp.sin(2.0*jnp.pi*x)/(2.0*jnp.pi)
+
+def get_window(n_window, array_x) -> jnp.ndarray:
+    len = array_x.shape[0]
+    window = jnp.ones_like(array_x)
+    i_left = jnp.arange(n_window, dtype=jnp.float64)
+    x_left = (i_left + 1) / (n_window + 1)
+    window = window.at[:n_window].set( func_window(x_left) )
+
+    i_right = jnp.arange(n_window, dtype=jnp.float64)
+    x_right = (i_right + 1) / (n_window + 1)
+    window = window.at[-n_window:].set( func_window(x_right[::-1]) )
+    return window
+
+#def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
+def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
+    ### extrapolate fx. Note that x is already extrapolated.
+    fx_pad = pad(fx, n_pad, mode='zero-pad')
 
     # damp high-x end
-    fx = fx * jnp.exp(-(x / x_high)**2)
+    fx_pad = fx_pad * jnp.exp(-(x / x_high)**4)
 
     # FFT on biased data
-    c_m = jnp.fft.rfft(fx * x**(-nu))
+    c_m = jnp.fft.rfft(fx_pad * x**(-nu) * window)
 
-    # apply the smoothing window on Fourier components
-    c_m = c_m * w_m
+    c_m = c_m * window_freq
 
     # Inverse FFT to get the Hankel transform
     res = jnp.fft.irfft(jnp.conj(c_m * u_m))
     res = res * y**(-nu) * jnp.sqrt(jnp.pi) / 4.
 
     # unpad
-    res = res[npad:len(fx)-npad]
+    res = res[n_pad:-n_pad]
     
-    return res
+    return res    
 
 def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
     *batch, _ = fx.shape
@@ -54,28 +85,10 @@ def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
     
     return res
 
-def get_g_l(l, z):
-    return 2.**z * get_g_base(l+0.5, z-1.5)
-
-def get_g_base(mu, x):
-    g_base = np.zeros(x.size, dtype=complex)
-    
-    cut = 200
-    
-    # normal formula
-    sel = (np.abs(np.imag(x)) + np.abs(mu) <= cut) & (x != mu + 1 + 0.0j)
-    g_base[sel] = gamma((mu + 1 + x[sel]) / 2.) / gamma((mu + 1 - x[sel]) / 2.)
-    
-    # asymptotic formula
-    sel = np.abs(np.imag(x)) + np.abs(mu) > cut
-    asym_plus = (mu + 1 + x[sel]) / 2.
-    asym_minus = (mu + 1 - x[sel]) / 2.
-    g_base[sel] = np.exp((asym_plus - 0.5) * np.log(asym_plus) - (asym_minus - 0.5) * np.log(asym_minus) - x[sel] \
-        + 1./12. * (1./asym_plus - 1./asym_minus) + 1./360. * (1./asym_minus**3 - 1./asym_plus**3) + 1./1260 * (1./asym_plus**5 - 1./asym_minus**5))
-    
-    g_base[np.where(x == mu + 1 + 0.0j)[0]] = 0. + 0.0j
-    
-    return g_base
+def get_g_l(ell, z, eps=1e-15):
+    z = np.asarray(z, dtype=np.complex128)
+    z = np.where(np.abs(z.imag) < eps, z + 1j*eps, z)
+    return 2.**(z) * gamma((ell+z)*0.5)/gamma((3+ell-z)*0.5)
 
 def c_window(n, n_cut):
     n_right = n[-1] - n_cut
@@ -84,9 +97,3 @@ def c_window(n, n_cut):
     W = jnp.ones(n.size)
     W = W.at[n[:] > n_right].set(theta_right - 1 / (2 * jnp.pi) * jnp.sin(2 * jnp.pi * theta_right))
     return W
-
-def get_log_extrap(x, num_low, num_high):
-    dlnx = jnp.log(x[1] / x[0])
-    x_low = x[0] * jnp.exp(dlnx * jnp.arange(-num_low, 0))
-    x_high = x[-1] * jnp.exp(dlnx * jnp.arange(1, num_high+1))
-    return jnp.concatenate([x_low, x, x_high], axis=0)
