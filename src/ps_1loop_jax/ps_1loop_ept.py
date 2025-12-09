@@ -108,10 +108,7 @@ class PowerSpectrum1LoopEPT:
     def _set_hankel(self, lmax):
         l_list = jnp.arange(lmax + 1)
 
-        #self._q = 1 / self._k[::-1]
         self._nu_hankel = 1.1
-        #self._nu_hanlel = {}
-        #self._nu_hanlel[(0, 0)] = -1.5
 
         self._npad = self._nfft // 2
         self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
@@ -119,32 +116,24 @@ class PowerSpectrum1LoopEPT:
         n_window = self._nfft // 4
         self._w_m = hankel.get_window(n_window, self._k_padded)
 
-        nfft_k = len(self._k_padded)
+        nfft = len(self._k_padded)
         dln = jnp.log(self._k_padded[1] / self._k_padded[0])
-        #eta_m_k = 2 * jnp.pi / (nfft_k * dlnx) * jnp.arange(nfft_k//2+1)
-        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft_k, d=1.0) / dln # eta_m_k and eta_m_q must be the same.
-        
-        #nfft_q = len(self._q_padded)
-        #dlnx = jnp.log(self._q_padded[1] / self._q_padded[0])
-        #eta_m_q = 2 * jnp.pi / (nfft_q * dlnx) * jnp.arange(nfft_q//2+1)
+        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
 
         g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
 
         ### setup the "correct" q_array for each ell
-        lnxy  = jnp.array([dln * jnp.angle(hankel.get_g_l(l, self._nu_hankel + 1j*jnp.pi/dln) ) / jnp.pi for l in l_list])
+        lnxy = jnp.array([dln * jnp.angle( hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln) ) / jnp.pi for l in l_list])
         self._q_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
         self._q = jnp.array([self._q_padded[l][self._npad:-self._npad] for l in l_list])
 
-        self._u_m = jnp.array([(jnp.exp(lnxy[l])**(1j*eta_m)) * g_l[l] for l in l_list])
+        self._u_m = jnp.array([jnp.exp(lnxy[l])**(-1j*eta_m) * g_l[l] for l in l_list])
 
-        #g_l_q = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])   ### I think this is the same as g_l_k
-        #self._u_m_q = jnp.array([(self._q_padded[0] * self._y_q[0])**(-1j * eta_m_q) * g_l_q[l] for l in l_list])
-
-        self._k_high = self._kmax 
-        self._q_high = jnp.array([self._q[l][-1] for l in l_list])
+        self._k_high = self._kmax
+        self._q_high = jnp.array([self._q[l][-1] for l in l_list]) / 100
         
         c_window_width = 0.25
-        self._w_m_freq = hankel.c_window(jnp.arange(nfft_k//2+1), int(c_window_width * (nfft_k//2+1)))
+        self._w_m_freq = hankel.c_window(jnp.arange(nfft//2+1), int(c_window_width * (nfft//2+1)))
 
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -489,7 +478,9 @@ class PowerSpectrum1LoopEPT:
             l, n1, n2 = term
             xi1 = xi_ln[l, n1]
             xi2 = xi_ln[l, n2]
-            pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * xi1 * xi2)
+
+            array = get_pk(self._q[0], jnp.stack([self._q[l], xi1 * xi2], axis=0), kmin=self._q[0,0], kmax=self._q[0,-1])
+            pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * array)
             return pk_ln1n2 # (nk,)
 
         pk_ln1n2 = jax.vmap(compute_pk_ln1n2)(self.ln1n2_list)  # (nterms, nk)
