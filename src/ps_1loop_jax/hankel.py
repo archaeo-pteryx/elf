@@ -27,7 +27,6 @@ def func_window(x: jnp.ndarray) -> jnp.ndarray:
     return x - jnp.sin(2.0*jnp.pi*x)/(2.0*jnp.pi)
 
 def get_window(n_window, array_x) -> jnp.ndarray:
-    len = array_x.shape[0]
     window = jnp.ones_like(array_x)
     i_left = jnp.arange(n_window, dtype=jnp.float64)
     x_left = (i_left + 1) / (n_window + 1)
@@ -52,8 +51,7 @@ def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
     c_m = c_m * window_freq
 
     # Inverse FFT to get the Hankel transform
-    res = jnp.fft.irfft(jnp.conj(c_m * u_m))
-    res = res * y**(-nu) * jnp.sqrt(jnp.pi) / 4.
+    res = jnp.fft.irfft(jnp.conj(c_m * u_m)) * y**(-nu)
 
     # unpad
     res = res[n_pad:-n_pad]
@@ -77,18 +75,19 @@ def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
     c_m = c_m * w_m
 
     # Inverse FFT to get the Hankel transform
-    res = jnp.fft.irfft(jnp.conj(c_m * u_m))
-    res = res * (y**(-nu)) * jnp.sqrt(jnp.pi) / 4.
+    res = jnp.fft.irfft(jnp.conj(c_m * u_m)) * y**(-nu)
 
     # unpad
-    res = res[..., npad:fx.shape[1]-npad]
+    res = res[..., npad:-npad]
     
     return res
 
+# Mellin transform of spherical Bessel function
 def get_g_l(ell, z, eps=1e-15):
     z = np.asarray(z, dtype=np.complex128)
     z = np.where(np.abs(z.imag) < eps, z + 1j*eps, z)
-    return 2.**(z) * gamma((ell+z)*0.5)/gamma((3+ell-z)*0.5)
+    g_l = jnp.sqrt(jnp.pi) * 2.**(z-2) * gamma((ell+z)*0.5) / gamma((3+ell-z)*0.5)
+    return g_l
 
 def c_window(n, n_cut):
     n_right = n[-1] - n_cut
