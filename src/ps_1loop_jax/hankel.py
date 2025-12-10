@@ -4,7 +4,7 @@
 
 import jax.numpy as jnp
 import numpy as np
-from scipy.special import gamma
+from scipy.special import loggamma
 
 def get_log_extrap(array_x, num_low, num_high):
     ratio = array_x[1] / array_x[0]
@@ -58,27 +58,27 @@ def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
     
     return res    
 
-def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
+def get_hankel_batched(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
     *batch, _ = fx.shape
     ndim = len(batch)
 
     # zero padding
-    fx = jnp.pad(fx, [(0, 0) for _ in range(ndim)] + [(npad, npad)])
+    fx = jnp.pad(fx, [(0, 0) for _ in range(ndim)] + [(n_pad, n_pad)])
 
     # damp high-x end
-    fx = fx * jnp.exp(-(x / x_high)**2)
+    fx = fx * jnp.exp(-(x / x_high)**4)
 
     # FFT on biased data
-    c_m = jnp.fft.rfft(fx * (x**(-nu)))
+    c_m = jnp.fft.rfft(fx * (x**(-nu)) * window)
 
     # apply the smoothing window on Fourier components
-    c_m = c_m * w_m
+    c_m = c_m * window_freq
 
     # Inverse FFT to get the Hankel transform
     res = jnp.fft.irfft(jnp.conj(c_m * u_m)) * y**(-nu)
 
     # unpad
-    res = res[..., npad:-npad]
+    res = res[..., n_pad:-n_pad]
     
     return res
 
@@ -86,7 +86,7 @@ def get_hankel_batched(nu, fx, x, y, u_m, npad, x_high, w_m):
 def get_g_l(ell, z, eps=1e-15):
     z = np.asarray(z, dtype=np.complex128)
     z = np.where(np.abs(z.imag) < eps, z + 1j*eps, z)
-    g_l = jnp.sqrt(jnp.pi) * 2.**(z-2) * gamma((ell+z)*0.5) / gamma((3+ell-z)*0.5)
+    g_l = np.sqrt(np.pi) * np.exp( np.log(2.0) * (z-2) + loggamma(0.5*(ell+z)) - loggamma(0.5*(3+ell-z)) )
     return g_l
 
 def c_window(n, n_cut):
