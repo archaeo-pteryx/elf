@@ -59,50 +59,42 @@ class PowerSpectrum1LoopLPT:
     def _set_hankel(self, lmax):
         l_list = jnp.arange(lmax + 1)
 
-        self._q = 1 / self._k[::-1]
         self._nu_hankel = 1.1
+        self._q = 1 / self._k[::-1]
 
         self._npad = self._nfft // 2
+        self._npad = int(jnp.ceil(self._nfft / 3))
         self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
-        self._y_k = 1 / self._k_padded[::-1]
-        self._q_padded = hankel.get_log_extrap(self._q, self._npad, self._npad)
-        self._y_q = 1 / self._q_padded[::-1]
+        self._q_padded = 1 / self._k_padded[::-1]
 
-        nfft_k = len(self._k_padded)
-        dlnx = jnp.log(self._k_padded[1] / self._k_padded[0])
-        eta_m_k = 2 * jnp.pi / (nfft_k * dlnx) * jnp.arange(nfft_k//2+1)
-        
-        nfft_q = len(self._q_padded)
-        dlnx = jnp.log(self._q_padded[1] / self._q_padded[0])
-        eta_m_q = 2 * jnp.pi / (nfft_q * dlnx) * jnp.arange(nfft_q//2+1)
-        
-        g_l_k = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_k) for l in l_list])
-        self._u_m_k = jnp.array([(self._k_padded[0] * self._y_k[0])**(-1j * eta_m_k) * g_l_k[l] for l in l_list])
+        n_window = self._nfft // 4
+        self._w_m = hankel.get_window(n_window, self._k_padded)
 
-        g_l_q = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m_q) for l in l_list])
-        self._u_m_q = jnp.array([(self._q_padded[0] * self._y_q[0])**(-1j * eta_m_q) * g_l_q[l] for l in l_list])
-
-        # self._k_high = self._kmax / 10
-        # self._q_high = jnp.max(self._q) / 10
-        self._k_high = 1e10
-        self._q_high = jnp.max(self._q) / 10
+        nfft = len(self._k_padded)
+        dln = jnp.log(self._k_padded[1] / self._k_padded[0])
+        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
         
-        c_window_width = 0.2
-        self._w_m_k = hankel.c_window(jnp.arange(nfft_k//2+1), int(c_window_width * (nfft_k//2+1)))
-        self._w_m_q = hankel.c_window(jnp.arange(nfft_q//2+1), int(c_window_width * (nfft_q//2+1)))
+        g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
+        self._u_m = jnp.array([(self._k_padded[0] * self._q_padded[0])**(-1j * eta_m) * g_l[l] for l in l_list])
+
+        self._k_high = self._kmax
+        self._q_high = jnp.max(self._q)
+        
+        c_window_width = 0.25
+        self._w_m_freq = hankel.c_window(jnp.arange(nfft//2+1), int(c_window_width * (nfft//2+1)))
 
     def get_xi_ln(self, l, n, array):
         fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._y_k, self._u_m_k[l], self._npad, self._k_high, self._w_m_k)
+        xi_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._q_padded, self._u_m[l], self._npad, self._k_high, self._w_m, self._w_m_freq)
         return xi_ln
     
     def get_pk_ln(self, l, n, array):
         fx = array * self._q**(n + 3)
-        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._y_q, self._u_m_q[l], self._npad, self._q_high, self._w_m_q)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._k_padded, self._u_m[l], self._npad, self._q_high, self._w_m, self._w_m_freq)
         return pk_ln
     
-    def get_pk_batched(self, arrays, u_m_q):
-        pks = hankel.get_hankel_batched(self._nu_hankel, arrays, self._q_padded, self._y_q, u_m_q, self._npad, self._q_high, self._w_m_q)
+    def get_pk_batched(self, arrays, u_m):
+        pks = hankel.get_hankel_batched(self._nu_hankel, arrays, self._q_padded, self._k_padded, u_m, self._npad, self._q_high, self._w_m, self._w_m_freq)
         return pks
     
     def get_xi_ln_array(self, array):
@@ -129,6 +121,7 @@ class PowerSpectrum1LoopLPT:
         # X_lin  = 2/3 * (xi_0m2[0] - xi_0m2 - xi_2m2)   # (nq,)
         X_lin  = 2/3 * (pk_int - xi_0m2 - xi_2m2)      # (nq,)
         Y_lin  = 2 * xi_2m2                            # (nq,)
+
         L      = self.lmax + 1
         logk_fft = jnp.log(self._k)
 
@@ -153,15 +146,17 @@ class PowerSpectrum1LoopLPT:
                 B = -0.5 * Ksq * Y_lin                  # (nq,)
                 C = k_i * q * s                         # (nq,)
 
-                base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin + Y_lin))  # (nq,)
+                base = jnp.exp(-0.5 * Ksq * (X_lin + Y_lin))  # (nq,)
                 G00s = get_G00s(B, s**2, self.G00_coeffs, self.lmax)  # (L, nq)
 
-                g = (weights * G00s) * base[None, :]    # (L, nq)
+                g = weights * G00s * base[None, :]    # (L, nq)
+                g = g.at[0,:].subtract(g[0,-1])
+                g = (4 * jnp.pi * q**3)[None, :] * g
 
-                pk_ffts = self.get_pk_batched(g, self._u_m_q[:L]) # (L, nfft)
+                pk_ffts = self.get_pk_batched(g, self._u_m[:L]) # (L, nfft)
                 vals = (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1] # linear interpolation
 
-                return jnp.sum(vals)   # P(k_i, μ_j)
+                return jnp.sum(vals)  # P(k_i, μ_j)
             
             return jax.vmap(per_mu)(mu)  # (nmu,)
         
@@ -218,7 +213,7 @@ class PowerSpectrum1LoopLPT:
                 B = -0.5 * Ksq * Y_lin_lt               # (nq,)
                 C = k_i * q * s                         # (nq,)
 
-                base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
+                base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
                 Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
 
                 mq0 =  Gs[0,0]          # (L, nq)
@@ -286,8 +281,10 @@ class PowerSpectrum1LoopLPT:
                 ], axis=0)   # (ncomp, L, nq)
 
                 g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
+                g = g.at[:,0,:].subtract(g[:,0,-1][:,None])
+                g = (4 * jnp.pi * q**3)[None, None, :] * g
 
-                pk_ffts = self.get_pk_batched(g, self._u_m_q[None, :L, :]) # (ncomp, L, nfft)
+                pk_ffts = self.get_pk_batched(g, self._u_m[None, :L, :]) # (ncomp, L, nfft)
                 vals = (1.0 - t) * pk_ffts[:, :, i0] + t * pk_ffts[:, :, i0+1] # (ncomp, L), linear interpolation
 
                 return jnp.sum(vals, axis=1)  # (ncomp,)
@@ -347,7 +344,7 @@ class PowerSpectrum1LoopLPT:
             B = -0.5 * Ksq * Y_lin_lt               # (nq,)
             C = k_i * q * s                         # (nq,)
 
-            base = 4 * jnp.pi * q**3 * jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
+            base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))  # (nq,)
             Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
 
             mq0 =  Gs[0,0]          # (L, nq)
@@ -415,8 +412,10 @@ class PowerSpectrum1LoopLPT:
             ], axis=0)   # (ncomp, L, nq)
 
             g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
+            g = g.at[:,0,:].subtract(g[:,0,-1][:,None])
+            g = (4 * jnp.pi * q**3)[None, None, :] * g
             
-            pk_ffts = self.get_pk_batched(g, self._u_m_q[None, :L, :]) # (ncomp, L, nfft)
+            pk_ffts = self.get_pk_batched(g, self._u_m[None, :L, :]) # (ncomp, L, nfft)
             vals = (1.0 - t) * pk_ffts[:, :, i0] + t * pk_ffts[:, :, i0+1] # (ncomp, L), linear interpolation
 
             return jnp.sum(vals, axis=1)  # (ncomp,)
@@ -590,7 +589,7 @@ class PowerSpectrum1LoopLPT:
         integrand_Q_G2 = 2/5 * xi_ln[1,-1]**2 - 2/5 * xi_ln[3,-1]**2
 
         integrand_Qs = jnp.stack([integrand_Q1, integrand_Q5, integrand_Q8, integrand_Q_G2], axis=0)
-        Qs = self.get_pk_batched(4 * jnp.pi * self._q**3 * integrand_Qs, self._u_m_q[0])
+        Qs = self.get_pk_batched(4 * jnp.pi * self._q**3 * integrand_Qs, self._u_m[0])
         Q1, Q5, Q8, Q_G2 = Qs[0], Qs[1], Qs[2], Qs[3]
 
         Q2 = 2 * Q5 - Q1
@@ -609,7 +608,7 @@ class PowerSpectrum1LoopLPT:
             xi_ln[2,  2],
         ], axis=0)
 
-        pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m_q[ells]) * pk_lin
+        pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m[ells]) * pk_lin
 
         pk_00, pk_20, pk_40, pk_11, pk_31, pk_22 = pk_list
 
