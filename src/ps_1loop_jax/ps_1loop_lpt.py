@@ -8,6 +8,7 @@ from jax import lax
 import jax.numpy as jnp
 
 from . import hankel
+from . import spline
 
 from .utils_loop import get_pk, get_pk_int
 from .utils_lpt import get_G00s, get_Gs
@@ -63,7 +64,6 @@ class PowerSpectrum1LoopLPT:
         self._q = 1 / self._k[::-1]
 
         self._npad = self._nfft // 2
-        self._npad = int(jnp.ceil(self._nfft / 3))
         self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
         self._q_padded = 1 / self._k_padded[::-1]
 
@@ -713,3 +713,21 @@ class PowerSpectrum1LoopLPT:
 
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
+
+    @partial(jit, static_argnames=['self'])
+    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+        r = jnp.atleast_1d(r)
+
+        k = jnp.geomspace(1e-3, 1, 128) # ad-hoc down-sampling of k
+        pk_ells = self.get_pk_ells(k, pk_data, params, alpha_perp, alpha_para, k_IR)
+
+        pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
+        pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
+        pk4 = get_pk(self._k, jnp.stack([k, pk_ells[2]], axis=0), kmin=self._kmin, kmax=self._kmax)
+
+        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(0, 0, pk0))
+        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q), -self.get_xi_ln(2, 0, pk2))
+        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(4, 0, pk4))
+
+        xi_ells = jnp.stack([xi0, xi2, xi4], axis=0)
+        return xi_ells
