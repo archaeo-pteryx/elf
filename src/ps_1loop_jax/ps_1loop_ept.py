@@ -122,11 +122,12 @@ class PowerSpectrum1LoopEPT:
 
         g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
 
-        ### setup the "correct" q_array for each ell
+        # self._q_padded = jnp.array([1.0 / self._k_padded[::-1] for l in l_list])
         lnxy = jnp.array([dln * jnp.angle( hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln) ) / jnp.pi for l in l_list])
         self._q_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
         self._q = jnp.array([self._q_padded[l][self._npad:-self._npad] for l in l_list])
 
+        # self._u_m = jnp.array([(self._k_padded[0] * self._q_padded[0,0])**(-1j * eta_m) * g_l[l] for l in l_list])
         self._u_m = jnp.array([jnp.exp(lnxy[l])**(-1j*eta_m) * g_l[l] for l in l_list])
 
         self._k_high = self._kmax / 100.
@@ -479,6 +480,7 @@ class PowerSpectrum1LoopEPT:
             xi1 = xi_ln[l, n1]
             xi2 = xi_ln[l, n2]
 
+            # array = xi1 * xi2
             array = get_pk(self._q[0], jnp.stack([self._q[l], xi1 * xi2], axis=0), kmin=self._q[0,0], kmax=self._q[0,-1])
             pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * array)
             return pk_ln1n2 # (nk,)
@@ -486,12 +488,12 @@ class PowerSpectrum1LoopEPT:
         pk_ln1n2 = jax.vmap(compute_pk_ln1n2)(self.ln1n2_list)  # (nterms, nk)
 
         def compute_coeffs(entry):
-            mu_pow     = entry[:, 0]
-            f_pow      = entry[:, 1]
-            b1_pow     = entry[:, 2]
-            b2_pow     = entry[:, 3]
-            bG2_pow    = entry[:, 4]
-            coeff      = entry[:, 6]
+            mu_pow  = entry[:, 0]
+            f_pow   = entry[:, 1]
+            b1_pow  = entry[:, 2]
+            b2_pow  = entry[:, 3]
+            bG2_pow = entry[:, 4]
+            coeff   = entry[:, 6]
 
             coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)  # (max_len,)
 
@@ -619,3 +621,21 @@ class PowerSpectrum1LoopEPT:
         pkmu = (1. / ndens) * pkmu
 
         return pkmu
+    
+    @partial(jit, static_argnames=['self'])
+    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
+        r = jnp.atleast_1d(r)
+
+        k = jnp.geomspace(1e-3, 1, 128) # ad-hoc down-sampling of k
+        pk_ells = self.get_pk_ells(k, pk_data, params, alpha_perp, alpha_para)
+
+        pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
+        pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
+        pk4 = get_pk(self._k, jnp.stack([k, pk_ells[2]], axis=0), kmin=self._kmin, kmax=self._kmax)
+
+        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q[0]), self.get_xi_ln(0, 0, pk0))
+        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q[2]), -self.get_xi_ln(2, 0, pk2))
+        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q[4]), self.get_xi_ln(4, 0, pk4))
+
+        xi_ells = jnp.stack([xi0, xi2, xi4], axis=0)
+        return xi_ells
