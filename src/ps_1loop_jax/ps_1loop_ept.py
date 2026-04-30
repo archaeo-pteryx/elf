@@ -23,24 +23,38 @@ from . import spline
 
 class PowerSpectrum1LoopEPT:
 
-    def __init__(self, 
+    def __init__(self,
                  do_irres=True,
                  r_bao=110.,
                  k_IR=0.2,
                  irres_method='DST',
                  subtract_k0_limit=True,
-                 use_hankel=True,
+                 method='hybrid',
                  kmin_fft=1e-5,
                  kmax_fft=1e3,
                  nfft=512,
+                 hankel_nu=1.1,
+                 hankel_k_damp=50.0,
+                 hankel_q_damp=0.5,
+                 hankel_c_window_width=0.70,
+                 hankel_npad_factor=0.5,
+                 hankel_pad_mode='zero-pad',
+                 hankel_p22_richardson=False,
+                 hankel_p22_richardson_factor=2,
+                 hankel_p22_richardson_levels=1,
+                 hankel_p22_richardson_order=4.0,
                  ngauss=4,
                  ):
+
+        if method not in ('matrix', 'hankel', 'hybrid'):
+            raise ValueError(f"method must be 'matrix', 'hankel', or 'hybrid', got {method!r}")
 
         self.do_irres = do_irres # flag to perform the IR resummation
         self.r_bao = r_bao
         self.k_IR = k_IR
         self.irres_method = irres_method
         self.subtract_k0_limit = subtract_k0_limit # flag to subtract k -> 0 limit from 2-2 terms
+        self.method = method
 
         # preparation for Gauss-Legendre quadrature
         self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss)
@@ -49,13 +63,52 @@ class PowerSpectrum1LoopEPT:
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
+        self._nu_hankel = hankel_nu
+        self._hankel_k_damp = hankel_k_damp
+        self._hankel_q_damp = hankel_q_damp
+        self._hankel_c_window_width = hankel_c_window_width
+        self._hankel_npad_factor = hankel_npad_factor
+        self._hankel_pad_mode = hankel_pad_mode
+        self._hankel_p22_richardson = hankel_p22_richardson
+        self._hankel_p22_richardson_factor = hankel_p22_richardson_factor
+        self._hankel_p22_richardson_levels = hankel_p22_richardson_levels
+        self._hankel_p22_richardson_order = hankel_p22_richardson_order
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
 
         self._initialize_loop_coeff()
         self._initialize_loop_matrix()
 
-        self.use_hankel = use_hankel
+        self._hankel_p22_richardson_models = []
+        self._hankel_p22_richardson_model = None
+        if method in ('hankel', 'hybrid') and hankel_p22_richardson:
+            for level in range(1, hankel_p22_richardson_levels + 1):
+                factor = hankel_p22_richardson_factor ** level
+                self._hankel_p22_richardson_models.append(
+                    PowerSpectrum1LoopEPT(
+                        do_irres=do_irres,
+                        r_bao=r_bao,
+                        k_IR=k_IR,
+                        irres_method=irres_method,
+                        subtract_k0_limit=subtract_k0_limit,
+                        method=method,
+                        kmin_fft=kmin_fft,
+                        kmax_fft=kmax_fft,
+                        nfft=factor * nfft,
+                        hankel_nu=hankel_nu,
+                        hankel_k_damp=hankel_k_damp,
+                        hankel_q_damp=hankel_q_damp,
+                        hankel_c_window_width=hankel_c_window_width,
+                        hankel_npad_factor=hankel_npad_factor,
+                        hankel_pad_mode=hankel_pad_mode,
+                        hankel_p22_richardson=False,
+                        hankel_p22_richardson_factor=hankel_p22_richardson_factor,
+                        hankel_p22_richardson_levels=hankel_p22_richardson_levels,
+                        hankel_p22_richardson_order=hankel_p22_richardson_order,
+                        ngauss=ngauss,
+                    )
+                )
+            self._hankel_p22_richardson_model = self._hankel_p22_richardson_models[0]
     
     def _initialize_loop_coeff(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -108,9 +161,11 @@ class PowerSpectrum1LoopEPT:
     def _set_hankel(self, lmax):
         l_list = jnp.arange(lmax + 1)
 
-        self._nu_hankel = 1.1
+        # Mellin argument for the low-ringing condition and u_m. The k^n factor
+        # is absorbed into fx, so nu does not change with n.
+        _mellin_arg = self._nu_hankel
 
-        self._npad = self._nfft // 2
+        self._npad = max(1, int(self._hankel_npad_factor * self._nfft))
         self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
 
         n_window = self._nfft // 4
@@ -120,20 +175,18 @@ class PowerSpectrum1LoopEPT:
         dln = jnp.log(self._k_padded[1] / self._k_padded[0])
         eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
 
-        g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
+        g_l = jnp.array([hankel.get_g_l(l, _mellin_arg + 1j * eta_m) for l in l_list])
 
-        # self._q_padded = jnp.array([1.0 / self._k_padded[::-1] for l in l_list])
-        lnxy = jnp.array([dln * jnp.angle( hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln) ) / jnp.pi for l in l_list])
+        lnxy = jnp.array([dln * jnp.angle(hankel.get_g_l(l, _mellin_arg + 1j * jnp.pi / dln)) / jnp.pi for l in l_list])
         self._q_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
         self._q = jnp.array([self._q_padded[l][self._npad:-self._npad] for l in l_list])
 
-        # self._u_m = jnp.array([(self._k_padded[0] * self._q_padded[0,0])**(-1j * eta_m) * g_l[l] for l in l_list])
         self._u_m = jnp.array([jnp.exp(lnxy[l])**(-1j*eta_m) * g_l[l] for l in l_list])
 
-        self._k_high = self._kmax / 100.
-        self._q_high = jnp.array([self._q[l][-1] for l in l_list])
+        self._k_high = self._kmax / self._hankel_k_damp
+        self._q_high = jnp.array([self._q[l][-1] * self._hankel_q_damp for l in l_list])
         
-        c_window_width = 0.25
+        c_window_width = self._hankel_c_window_width
         self._w_m_freq = hankel.c_window(jnp.arange(nfft//2+1), int(c_window_width * (nfft//2+1)))
 
     def _initialize_loop_matrix(self):
@@ -443,12 +496,12 @@ class PowerSpectrum1LoopEPT:
     
     def get_xi_ln(self, l, n, array):
         fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._q_padded[l], self._u_m[l], self._npad, self._k_high, self._w_m, self._w_m_freq)
+        xi_ln = hankel.get_hankel(self._nu_hankel, fx, self._k_padded, self._q_padded[l], self._u_m[l], self._npad, self._k_high, self._w_m, self._w_m_freq, self._hankel_pad_mode)
         return xi_ln
-    
+
     def get_pk_ln(self, l, n, array):
         fx = array * self._q[l]**(n + 3)
-        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded[l], self._k_padded, self._u_m[l], self._npad, self._q_high[l], self._w_m, self._w_m_freq)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded[l], self._k_padded, self._u_m[l], self._npad, self._q_high[l], self._w_m, self._w_m_freq, self._hankel_pad_mode)
         return pk_ln
     
     def get_xi_ln_array(self, array):
@@ -466,13 +519,22 @@ class PowerSpectrum1LoopEPT:
     def get_pkmu_1loop_hankel(self, pk, f, bias):
 
         xi_ln = self.get_xi_ln_array(pk)
-        
+
         pkmu_22 = self.get_pkmu_22_hankel(xi_ln, pk, f, bias)
-        pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk, f, bias)
+
+        if self.method == 'hankel':
+            pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk, f, bias)
+        else:
+            # hybrid: PLD for P13 — avoids catastrophic cancellation in UV-sensitive terms
+            p_q_1, _, _ = get_decomp_data(-0.3, self._k, pk)
+            p_q_2, _, _ = get_decomp_data(-1.6, self._k, pk)
+            pkmu_13 = self.get_pkmu_13_pld(
+                self.get_pkmu_terms_13(p_q_1, p_q_2, pk), pk, f, bias
+            )
 
         return pkmu_22 + pkmu_13
     
-    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
+    def _get_pkmu_22_hankel_raw(self, xi_ln, pk, f, bias, subtract_k0=True):
         b1, b2, bG2, bGamma3 = bias
 
         def compute_pk_ln1n2(term):
@@ -480,8 +542,8 @@ class PowerSpectrum1LoopEPT:
             xi1 = xi_ln[l, n1]
             xi2 = xi_ln[l, n2]
 
-            # array = xi1 * xi2
-            array = get_pk(self._q[0], jnp.stack([self._q[l], xi1 * xi2], axis=0), kmin=self._q[0,0], kmax=self._q[0,-1])
+            # q[l] shares log-spacing with q[0] but is shifted; use spline to resample onto q[0].
+            array = spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[l]), xi1 * xi2)
             pk_ln1n2 = self.get_pk_ln(0, 0, (-1)**l * 4 * jnp.pi * array)
             return pk_ln1n2 # (nk,)
 
@@ -502,12 +564,60 @@ class PowerSpectrum1LoopEPT:
 
         coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)  # (nterms, nmu)
 
-        pkmu = jnp.sum(pk_ln1n2[:, :, None] * coeff_matrix[:, None, :], axis=0)  # (nk, nmu)
+        terms = pk_ln1n2[:, :, None] * coeff_matrix[:, None, :]
+        order = jnp.argsort(jnp.abs(terms), axis=0)
+        pkmu = jnp.sum(jnp.take_along_axis(terms, order, axis=0), axis=0)  # (nk, nmu)
 
-        if self.subtract_k0_limit:
+        if subtract_k0 and self.subtract_k0_limit:
             pk_data = jnp.stack([self._k, pk], axis=0)
             pkmu_k0 = b2**2 / 2. * get_pk_int2(pk_data)
             pkmu = pkmu - pkmu_k0
+
+        return pkmu  # (nk, nmu)
+
+    def _interp_pkmu_to_self_grid(self, model, pkmu):
+        log_k = jnp.log(model._k)
+        log_k_self = jnp.log(self._k)
+        return jax.vmap(
+            lambda y: spline.interp1d(log_k_self, log_k, y),
+            in_axes=1,
+            out_axes=1,
+        )(pkmu)
+
+    def _get_pkmu_22_k0_limit(self, pk, bias):
+        b2 = bias[1]
+        pk_data = jnp.stack([self._k, pk], axis=0)
+        return b2**2 / 2. * get_pk_int2(pk_data)
+
+    def _get_pkmu_22_hankel_on_model(self, model, pk, f, bias):
+        pk_model = spline.interp1d(jnp.log(model._k), jnp.log(self._k), pk)
+        xi_ln_model = model.get_xi_ln_array(pk_model)
+        pkmu_model = model._get_pkmu_22_hankel_raw(
+            xi_ln_model, pk_model, f, bias, subtract_k0=False
+        )
+        return self._interp_pkmu_to_self_grid(model, pkmu_model)
+
+    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
+        pkmu = self._get_pkmu_22_hankel_raw(xi_ln, pk, f, bias, subtract_k0=False)
+
+        if self._hankel_p22_richardson_models:
+            ratio = self._hankel_p22_richardson_factor ** self._hankel_p22_richardson_order
+            if len(self._hankel_p22_richardson_models) == 1:
+                pkmu_fine = self._get_pkmu_22_hankel_on_model(
+                    self._hankel_p22_richardson_models[0], pk, f, bias
+                )
+                pkmu = pkmu_fine + (pkmu_fine - pkmu) / (ratio - 1.0)
+            else:
+                pkmu_fine = self._get_pkmu_22_hankel_on_model(
+                    self._hankel_p22_richardson_models[-2], pk, f, bias
+                )
+                pkmu_finer = self._get_pkmu_22_hankel_on_model(
+                    self._hankel_p22_richardson_models[-1], pk, f, bias
+                )
+                pkmu = pkmu_finer + (pkmu_finer - pkmu_fine) / (ratio - 1.0)
+
+        if self.subtract_k0_limit:
+            pkmu = pkmu - self._get_pkmu_22_k0_limit(pk, bias)
 
         return pkmu  # (nk, nmu)
     
@@ -537,16 +647,18 @@ class PowerSpectrum1LoopEPT:
 
         coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_13)  # (nterms, nmu)
 
-        pkmu = jnp.sum(pk_lnm[:, :, None] * coeff_matrix[:, None, :], axis=0)  # (nk, nmu)
+        terms = pk_lnm[:, :, None] * coeff_matrix[:, None, :]
+        order = jnp.argsort(jnp.abs(terms), axis=0)
+        pkmu = jnp.sum(jnp.take_along_axis(terms, order, axis=0), axis=0)  # (nk, nmu)
 
         return pkmu
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop(self, pk, f, bias):
-        if self.use_hankel:
-            pkmu = self.get_pkmu_1loop_hankel(pk, f, bias)
-        else:
+        if self.method == 'matrix':
             pkmu = self.get_pkmu_1loop_pld(pk, f, bias)
+        else:
+            pkmu = self.get_pkmu_1loop_hankel(pk, f, bias)
         return pkmu
     
     def get_pkmu_irres_LO_NLO(self, pk_nw, pk_w, damp_fac, f, bias):

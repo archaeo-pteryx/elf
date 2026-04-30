@@ -38,12 +38,12 @@ def get_window(n_window, array_x) -> jnp.ndarray:
     return window
 
 #def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
-def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
+def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad'):
     ### extrapolate fx. Note that x is already extrapolated.
-    fx_pad = pad(fx, n_pad, mode='zero-pad')
+    fx_pad = pad(fx, n_pad, mode=pad_mode)
 
     # damp high-x end
-    fx_pad = fx_pad * jnp.exp(-(x / x_high)**4)
+    fx_pad = fx_pad * jnp.exp(-(x / x_high)**6)
 
     # FFT on biased data
     c_m = jnp.fft.rfft(fx_pad * x**(-nu) * window)
@@ -58,15 +58,17 @@ def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
     
     return res    
 
-def get_hankel_batched(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq):
+def get_hankel_batched(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad'):
     *batch, _ = fx.shape
     ndim = len(batch)
 
-    # zero padding
-    fx = jnp.pad(fx, [(0, 0) for _ in range(ndim)] + [(n_pad, n_pad)])
+    if pad_mode == 'power-law':
+        fx = pad(fx, n_pad, mode='power-law')
+    else:
+        fx = jnp.pad(fx, [(0, 0) for _ in range(ndim)] + [(n_pad, n_pad)])
 
     # damp high-x end
-    fx = fx * jnp.exp(-(x / x_high)**4)
+    fx = fx * jnp.exp(-(x / x_high)**6)
 
     # FFT on biased data
     c_m = jnp.fft.rfft(fx * (x**(-nu)) * window)
