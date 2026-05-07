@@ -17,16 +17,39 @@ def get_log_extrap(array_x, num_low, num_high):
 
 def pad(array_y, n_pad, mode='power-law'):
     if mode == 'power-law':
-        return get_log_extrap(array_y, n_pad, n_pad)
+        tiny = jnp.finfo(array_y.dtype).tiny
+        ratio_low = jnp.where(jnp.abs(array_y[..., 0]) > tiny, array_y[..., 1] / array_y[..., 0], 1.0)
+        ratio_high = jnp.where(jnp.abs(array_y[..., -2]) > tiny, array_y[..., -1] / array_y[..., -2], 1.0)
+
+        exp_low = jnp.arange(-n_pad, 0)
+        exp_high = jnp.arange(1, n_pad + 1)
+        expand = (None,) * (array_y.ndim - 1)
+        array_low = array_y[..., :1] * ratio_low[..., None] ** exp_low[expand]
+        array_high = array_y[..., -1:] * ratio_high[..., None] ** exp_high[expand]
+        return jnp.concatenate([array_low, array_y, array_high], axis=-1)
     elif mode == 'zero-pad':
-        _array_y = jnp.zeros(n_pad)
-        array_y_ = jnp.zeros(n_pad)
-        return jnp.concatenate([_array_y, array_y, array_y_], axis=0)
+        pad_width = [(0, 0)] * (array_y.ndim - 1) + [(n_pad, n_pad)]
+        return jnp.pad(array_y, pad_width)
+    elif mode == 'edge-pad':
+        array_low = jnp.broadcast_to(array_y[..., :1], array_y.shape[:-1] + (n_pad,))
+        array_high = jnp.broadcast_to(array_y[..., -1:], array_y.shape[:-1] + (n_pad,))
+        return jnp.concatenate([array_low, array_y, array_high], axis=-1)
+    elif mode == 'smooth-zero-pad':
+        x = (jnp.arange(n_pad, dtype=array_y.dtype) + 1.0) / (n_pad + 1.0)
+        taper = func_window(x)
+        expand = (None,) * (array_y.ndim - 1)
+        array_low = array_y[..., :1] * taper[expand]
+        array_high = array_y[..., -1:] * taper[::-1][expand]
+        return jnp.concatenate([array_low, array_y, array_high], axis=-1)
+    else:
+        raise ValueError(f"unknown pad mode: {mode!r}")
 
 def func_window(x: jnp.ndarray) -> jnp.ndarray:
     return x - jnp.sin(2.0*jnp.pi*x)/(2.0*jnp.pi)
 
 def get_window(n_window, array_x) -> jnp.ndarray:
+    if n_window <= 0:
+        return jnp.ones_like(array_x)
     window = jnp.ones_like(array_x)
     i_left = jnp.arange(n_window, dtype=jnp.float64)
     x_left = (i_left + 1) / (n_window + 1)
@@ -37,13 +60,25 @@ def get_window(n_window, array_x) -> jnp.ndarray:
     window = window.at[-n_window:].set( func_window(x_right[::-1]) )
     return window
 
+def get_high_x_damp(x, x_high, kind='exp', power=6.0):
+    if kind == 'none':
+        return jnp.ones_like(x)
+    if kind == 'exp':
+        return jnp.exp(-(x / x_high)**power)
+    if kind == 'cosine':
+        tiny = jnp.finfo(x.dtype).tiny
+        denom = jnp.maximum(jnp.log(x[-1]) - jnp.log(x_high), tiny)
+        t = jnp.clip((jnp.log(x) - jnp.log(x_high)) / denom, 0.0, 1.0)
+        return 0.5 * (1.0 + jnp.cos(jnp.pi * t))
+    raise ValueError(f"unknown high-x damping kind: {kind!r}")
+
 #def get_hankel(nu, fx, x, y, u_m, npad, x_high, w_m):
-def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad'):
+def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad', damp_kind='exp', damp_power=6.0):
     ### extrapolate fx. Note that x is already extrapolated.
     fx_pad = pad(fx, n_pad, mode=pad_mode)
 
     # damp high-x end
-    fx_pad = fx_pad * jnp.exp(-(x / x_high)**6)
+    fx_pad = fx_pad * get_high_x_damp(x, x_high, damp_kind, damp_power)
 
     # FFT on biased data
     c_m = jnp.fft.rfft(fx_pad * x**(-nu) * window)
@@ -58,17 +93,14 @@ def get_hankel(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='
     
     return res    
 
-def get_hankel_batched(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad'):
+def get_hankel_batched(nu, fx, x, y, u_m, n_pad, x_high, window, window_freq, pad_mode='zero-pad', damp_kind='exp', damp_power=6.0):
     *batch, _ = fx.shape
     ndim = len(batch)
 
-    if pad_mode == 'power-law':
-        fx = pad(fx, n_pad, mode='power-law')
-    else:
-        fx = jnp.pad(fx, [(0, 0) for _ in range(ndim)] + [(n_pad, n_pad)])
+    fx = pad(fx, n_pad, mode=pad_mode)
 
     # damp high-x end
-    fx = fx * jnp.exp(-(x / x_high)**6)
+    fx = fx * get_high_x_damp(x, x_high, damp_kind, damp_power)
 
     # FFT on biased data
     c_m = jnp.fft.rfft(fx * (x**(-nu)) * window)
@@ -92,6 +124,11 @@ def get_g_l(ell, z, eps=1e-15):
     return g_l
 
 def c_window(n, n_cut):
+    if n_cut <= 0:
+        return jnp.ones(n.size)
+    if n_cut == 1:
+        W = jnp.ones(n.size)
+        return W.at[-1].set(0.0)
     n_right = n[-1] - n_cut
     n_r = n[n[:] > n_right]
     theta_right = (n[-1] - n_r) / (n[-1] - n_right - 1)
