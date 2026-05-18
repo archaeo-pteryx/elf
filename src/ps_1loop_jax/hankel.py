@@ -123,6 +123,32 @@ def get_g_l(ell, z, eps=1e-15):
     g_l = np.sqrt(np.pi) * np.exp( np.log(2.0) * (z-2) + loggamma(0.5*(ell+z)) - loggamma(0.5*(3+ell-z)) )
     return g_l
 
+def get_hankel_pld_backward(nu_back, fx, x, y, u_m_pld, n_pad, x_high, window, window_freq,
+                             pad_mode='zero-pad', damp_kind='exp', damp_power=6.0):
+    """Backward Hankel (l=0) with PLD decomposition of the integrand F(q).
+
+    Decomposes F(q) in power-law modes q^{\nu_back+i*\eta}; the q^3 integration-measure
+    factor is absorbed analytically into u_m_pld = exp(lnxy)^{-i*\eta} * g_0(\nu_back+3+i*\eta).
+    Convergence strip: -3 < \nu_back < -1.
+    """
+    fx_pad = pad(fx, n_pad, mode=pad_mode)
+    fx_pad = fx_pad * get_high_x_damp(x, x_high, damp_kind, damp_power)
+    d_m = jnp.fft.rfft(fx_pad * x**(-nu_back) * window)
+    d_m = d_m * window_freq
+    res = jnp.fft.irfft(jnp.conj(d_m * u_m_pld)) * y**(-(nu_back + 3))
+    return res[n_pad:-n_pad]
+
+def get_hankel_pld_backward_batched(nu_back, fx, x, y, u_m_pld, n_pad, x_high, window, window_freq,
+                                     pad_mode='zero-pad', damp_kind='exp', damp_power=6.0):
+    """Batched version of get_hankel_pld_backward.  fx has shape (*batch, nfft); all batch
+    elements share the same x, y, u_m_pld, window — only the input data fx differs."""
+    fx = pad(fx, n_pad, mode=pad_mode)
+    fx = fx * get_high_x_damp(x, x_high, damp_kind, damp_power)
+    d_m = jnp.fft.rfft(fx * x**(-nu_back) * window)
+    d_m = d_m * window_freq
+    res = jnp.fft.irfft(jnp.conj(d_m * u_m_pld)) * y**(-(nu_back + 3))
+    return res[..., n_pad:-n_pad]
+
 def c_window(n, n_cut):
     if n_cut <= 0:
         return jnp.ones(n.size)

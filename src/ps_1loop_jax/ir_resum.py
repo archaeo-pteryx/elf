@@ -108,26 +108,26 @@ def _remove_wiggle_dst(kh, pk, n_min=140, n_max=200):
     signs = (-1)**jnp.arange(0, len(pk))
     harms = jax.scipy.fft.dct(jnp.log(kh * pk) * signs, norm='ortho')[::-1]
 
-    n = jnp.arange(1, len(harms)+1)
-    i_odd = jnp.arange(0, len(harms)-1, 2)
-    i_even = jnp.arange(1, len(harms), 2)
+    n_half = int(len(harms) / 2)
+    n = jnp.arange(1, n_half + 1)
+    harms_odd = harms[0::2]
+    harms_even = harms[1::2]
 
-    n_odd = n[i_odd]
-    n_even = n[i_even]
-    harms_odd = harms[i_odd]
-    harms_even = harms[i_even]
-
-    n = n[:int(len(harms)/2)]
     n_sd = jnp.concatenate([n[:n_min], n[n_max:]], axis=0)
     harms_odd_sd  = jnp.concatenate([harms_odd[:n_min], harms_odd[n_max:]], axis=0)
     harms_even_sd = jnp.concatenate([harms_even[:n_min], harms_even[n_max:]], axis=0)
 
-    # spline interpolation
-    harms_odd_s  = spline.interp1d(n, n_sd, harms_odd_sd)
-    harms_even_s = spline.interp1d(n, n_sd, harms_even_sd)
+    # Only the removed BAO band needs interpolation; outside it, evaluating the
+    # spline on original knots would reproduce the original coefficients.
+    n_gap = n[n_min:n_max]
+    harms_odd_gap = spline.interp1d(n_gap, n_sd, harms_odd_sd)
+    harms_even_gap = spline.interp1d(n_gap, n_sd, harms_even_sd)
+    harms_odd_s = harms_odd.at[n_min:n_max].set(harms_odd_gap)
+    harms_even_s = harms_even.at[n_min:n_max].set(harms_even_gap)
 
-    i_rec   = jnp.argsort(jnp.concatenate([n_odd, n_even], axis=0))
-    harms_s = jnp.concatenate([harms_odd_s, harms_even_s], axis=0)[i_rec]
+    harms_s = jnp.empty_like(harms)
+    harms_s = harms_s.at[0::2].set(harms_odd_s)
+    harms_s = harms_s.at[1::2].set(harms_even_s)
 
     pk_nw = jnp.exp(jax.scipy.fft.idct(harms_s[::-1], norm='ortho') * signs) / kh
     return pk_nw

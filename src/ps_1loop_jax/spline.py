@@ -121,3 +121,13 @@ def _cubic_conv1d_patch(p, t):
     a3 = f0
 
     return a0 * t3 + a1 * t2 + a2 * t + a3
+
+
+def cubic_interp_patch(p, t):
+    """Interpolate one uniform-grid interval from a four-point patch.
+
+    ``p`` is ordered as ``[f_{i-1}, f_i, f_{i+1}, f_{i+2}]`` and may carry
+    arbitrary trailing batch dimensions. This is the same JAX-native Keys
+    cubic kernel used by :func:`interp2d`.
+    """
+    return _cubic_conv1d_patch(p, t)
