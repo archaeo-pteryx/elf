@@ -1,7 +1,3 @@
-####
-## This code is based on FFTLog-and-Beyond developed by Xiao Fang
-####
-
 import jax.numpy as jnp
 import numpy as np
 from scipy.special import loggamma
