@@ -32,7 +32,7 @@ class PowerSpectrum1LoopEPT:
                  k_IR=0.2,
                  irres_method='DST',
                  subtract_k0_limit=True,
-                 method='hybrid',
+                 method='hankel',
                  kmin_fft=1e-5,
                  kmax_fft=1e2,
                  nfft=512,
@@ -142,24 +142,6 @@ class PowerSpectrum1LoopEPT:
         c_m = jnp.fft.rfft(fx * self._k**(-nu), norm='forward')
         c_m = self._k[0]**(-eta_m * 1j) * jnp.concatenate([c_m[::-1][:-1].conj(), c_m[:-1]], axis=0)
         return c_m[:, None] * xpow
-
-    def _get_pld_coefficients(self, nu, fx):
-        dln = jnp.log(self._k[1] / self._k[0])
-        eta_m = 2 * jnp.pi / (self._nfft * dln) * (jnp.arange(self._nfft) - self._nfft // 2)
-        alpha_m = nu + eta_m * 1j
-        c_rfft = jnp.fft.rfft(fx * self._k**(-nu), norm='forward')
-        c_m = self._k[0]**(-eta_m * 1j) * jnp.concatenate([c_rfft[::-1][:-1].conj(), c_rfft[:-1]], axis=0)
-        return c_m, alpha_m
-
-    def _get_raw_c(self, nu, pk):
-        """Two-sided PLD spectrum without the k0^{-i*\eta} phase factor.
-
-        From get_decomp_data: c_m = k0^{-i*\eta_m} * raw_c[m].
-        Equivalently, raw_c = f_x0 * k0^{-nu} where f_x0 is the third return value
-        of get_decomp_data.  Used as input to the FFT-optimized P13/P22 sums.
-        """
-        c_rfft = jnp.fft.rfft(pk * self._k**(-nu), norm='forward')
-        return jnp.concatenate([c_rfft[::-1][:-1].conj(), c_rfft[:-1]], axis=0)
     
     def _initialize_loop_coeff(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -167,12 +149,13 @@ class PowerSpectrum1LoopEPT:
         self.pkmu_coeff_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/13*.txt')
         self.pkmu_coeff_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        ln1n2_list = []
+
+        lnm_list = []
         coeff_info = []
         for name in self.pkmu_coeff_names_22:
             str_list = re.split('_', name)
-            l, n1, n2 = int(str_list[1]), int(str_list[2]), int(str_list[3])
-            ln1n2_list.append([l, n1, n2])
+            l, n, m = int(str_list[1]), int(str_list[2]), int(str_list[3])
+            lnm_list.append([l, n, m])
             coeff_file = glob.glob(os.path.dirname(__file__)+'/pt_coeff/%s.txt' % (name))[0]
             coeff_info.append(pt_coeff.get_coeff_info(coeff_file))
 
@@ -182,32 +165,17 @@ class PowerSpectrum1LoopEPT:
             padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
             padded_coeff_info.append(padded)
         
-        self.ln1n2_list = jnp.array(ln1n2_list)
-        self._ln1n2_list_py = tuple((int(l), int(n1), int(n2)) for l, n1, n2 in ln1n2_list)
+        self._lnm_list_22 = jnp.array(lnm_list)
         self.coeff_info_22 = jnp.array(padded_coeff_info)
-        self._p22_uvsafe_rewrite = self._build_p22_uvsafe_rewrite(ln1n2_list)
 
-        # Precompute static key lists for batched backward transforms in uvsafe mode.
-        _basis_keys = sorted({
-            (ell, n)
-            for rewrite in self._p22_uvsafe_rewrite
-            for ell, n, _, _ in rewrite
-        })
-        self._uvsafe_n0_keys_py  = tuple((ell, n) for ell, n in _basis_keys if n == 0)
-        self._uvsafe_nn0_keys_py = tuple((ell, n) for ell, n in _basis_keys if n != 0)
-
-        coeff_info_13_by_key = {}
+        lnm_list = []
+        coeff_info = []
         for name in self.pkmu_coeff_names_13:
             str_list = re.split('_', name)
             l, n, m = int(str_list[1]), int(str_list[2]), int(str_list[3])
+            lnm_list.append([l, n, m])
             coeff_file = glob.glob(os.path.dirname(__file__)+'/pt_coeff/%s.txt' % (name))[0]
-            coeff_info_13_by_key[(l, n, m)] = pt_coeff.get_coeff_info(coeff_file)
-
-        coeff_info_13_by_key = self._reduce_p13_hankel_basis(coeff_info_13_by_key)
-
-        lnm_list = [list(key) for key in sorted(coeff_info_13_by_key)]
-        coeff_info = [coeff_info_13_by_key[tuple(key)] for key in lnm_list]
-        self.pkmu_coeff_names_13 = [f"13_{l}_{n}_{m}" for l, n, m in lnm_list]
+            coeff_info.append(pt_coeff.get_coeff_info(coeff_file))
 
         max_len = max(len(lst) for lst in coeff_info)
         padded_coeff_info = []
@@ -215,145 +183,13 @@ class PowerSpectrum1LoopEPT:
             padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
             padded_coeff_info.append(padded)
         
-        self.lnm_list = jnp.array(lnm_list)
-        self._lnm_list_py = tuple((int(l), int(n), int(m)) for l, n, m in lnm_list)
+        self._lnm_list_13 = jnp.array(lnm_list)
         self.coeff_info_13 = jnp.array(padded_coeff_info)
 
-        # Precompute P13 term indices grouped by l for batched backward transforms.
-        _lnm_by_l = {}
-        for i, (l, n, m) in enumerate(self._lnm_list_py):
-            _lnm_by_l.setdefault(l, []).append(i)
-        self._lnm_by_l_py = {l: tuple(idxs) for l, idxs in sorted(_lnm_by_l.items())}
-
         # set the Hankel transforms
-        self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [1,-3], [1,3], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
-        self._ln_list_py = tuple((int(l), int(n)) for l, n in self.ln_list.tolist())
-        lmax = jnp.max(self.ln_list[:, 0])
+        self._ln_list = jnp.array([[0,0], [0,-2], [1,-1], [2,0], [2,-2], [3,-1], [4,0]])
+        lmax = jnp.max(self._ln_list[:, 0])
         self._set_hankel(lmax)
-
-    def _legendre_u_coeffs(self, ell):
-        out = [(ell + 1, (ell + 1) / (2 * ell + 1))]
-        if ell > 0:
-            out.append((ell - 1, ell / (2 * ell + 1)))
-        return out
-
-    def _legendre_u2_coeffs(self, ell):
-        out = {}
-        for ell_mid, fac_mid in self._legendre_u_coeffs(ell):
-            for ell_out, fac_out in self._legendre_u_coeffs(ell_mid):
-                out[ell_out] = out.get(ell_out, 0.0) + fac_mid * fac_out
-        return sorted(out.items())
-
-    def _build_p22_uvsafe_rewrite(self, ln1n2_list):
-        """Rewrite symmetric P22 blocks so no positive radial power is needed.
-
-        The convolution integral is symmetric under p <-> q, so blocks with
-        (-1, 1) and (-2, 2) can be replaced by exact symmetrized identities:
-
-          1/2 (q/p + p/q) P_l
-            = k^2/(2 p q) P_l - u P_l,
-
-          1/2 (q^2/p^2 + p^2/q^2) P_l
-            = k^4/(2 p^2 q^2) P_l
-              - 2 k^2 u/(p q) P_l
-              + (2 u^2 - 1) P_l.
-
-        Legendre recurrences then express u P_l and u^2 P_l using only
-        P_l's with equal non-positive powers on p and q.
-        """
-        rewrites = []
-        for ell, n1, n2 in ln1n2_list:
-            if (n1, n2) == (-1, 1):
-                terms = [(ell, -1, 2, 0.5)]
-                terms.extend((ell_out, 0, 0, -fac) for ell_out, fac in self._legendre_u_coeffs(ell))
-            elif (n1, n2) == (-2, 2):
-                terms = [(ell, -2, 4, 0.5)]
-                terms.extend((ell_out, -1, 2, -2.0 * fac) for ell_out, fac in self._legendre_u_coeffs(ell))
-                terms.append((ell, 0, 0, -1.0))
-                terms.extend((ell_out, 0, 0, 2.0 * fac) for ell_out, fac in self._legendre_u2_coeffs(ell))
-            else:
-                if n1 != n2:
-                    raise ValueError(f"unsupported P22 UV-safe rewrite block {(ell, n1, n2)}")
-                terms = [(ell, n1, 0, 1.0)]
-            rewrites.append(tuple(terms))
-        return tuple(rewrites)
-
-    def _combine_coeff_rows(self, rows, tol=1e-14):
-        combined = {}
-        for row in rows:
-            key = tuple(int(v) for v in row[:6])
-            combined[key] = combined.get(key, 0.0) + float(row[6])
-        out = [
-            [*key, coeff]
-            for key, coeff in sorted(combined.items())
-            if abs(coeff) > tol
-        ]
-        return out
-
-    def _add_p13_coeff_rows(self, coeff_by_key, key, rows, factor):
-        if abs(factor) == 0.0 or len(rows) == 0:
-            return
-        coeff_by_key.setdefault(key, [])
-        coeff_by_key[key].extend([[*row[:6], float(row[6]) * factor] for row in rows])
-        coeff_by_key[key] = self._combine_coeff_rows(coeff_by_key[key])
-
-    def _reduce_p13_hankel_basis(self, coeff_by_key):
-        # Use p^2/|k-p|^2 = 1 - k^2/|k-p|^2 + 2kp u/|k-p|^2
-        # and the Legendre recurrence for u P_l to lower positive-n P13 blocks.
-        # Any denominator-free l=0 piece is tracked as a contact term; for the
-        # current RSD coefficient tables these contact terms cancel exactly.
-        coeff_by_key = {
-            key: self._combine_coeff_rows(rows)
-            for key, rows in coeff_by_key.items()
-        }
-        contact_by_key = {}
-
-        while True:
-            positive_keys = [
-                key for key, rows in coeff_by_key.items()
-                if key[1] >= 1 and len(rows) > 0
-            ]
-            if not positive_keys:
-                break
-
-            ell, n, m = sorted(positive_keys, key=lambda key: (-key[1], key[0], key[2]))[0]
-            rows = coeff_by_key[(ell, n, m)]
-            coeff_by_key[(ell, n, m)] = []
-
-            if ell == 0:
-                self._add_p13_coeff_rows(contact_by_key, (n - 2, m), rows, 1.0)
-
-            self._add_p13_coeff_rows(coeff_by_key, (ell, n - 2, m + 2), rows, -1.0)
-            self._add_p13_coeff_rows(
-                coeff_by_key,
-                (ell + 1, n - 1, m + 1),
-                rows,
-                2.0 * (ell + 1) / (2 * ell + 1),
-            )
-            if ell > 0:
-                self._add_p13_coeff_rows(
-                    coeff_by_key,
-                    (ell - 1, n - 1, m + 1),
-                    rows,
-                    2.0 * ell / (2 * ell + 1),
-                )
-
-        contact_by_key = {
-            key: self._combine_coeff_rows(rows)
-            for key, rows in contact_by_key.items()
-            if len(self._combine_coeff_rows(rows)) > 0
-        }
-        if contact_by_key:
-            raise ValueError(
-                "P13 reduced Hankel basis produced non-canceling contact terms; "
-                "kernel-level contact implementation is required."
-            )
-
-        return {
-            key: rows
-            for key, rows in coeff_by_key.items()
-            if len(rows) > 0
-        }
 
     def _set_hankel(self, lmax):
         l_list = jnp.arange(lmax + 1)
@@ -410,7 +246,7 @@ class PowerSpectrum1LoopEPT:
 
         def _build_pld_arrays(nu):
             u_ms, q_factors = [], []
-            for l, n in self.ln_list:
+            for l, n in self._ln_list:
                 l_int, n_int = int(l), int(n)
                 nu_eff = nu + n_int + 3
                 g_l = jnp.asarray(hankel.get_g_l(l_int, nu_eff + 1j * eta_m))
@@ -426,7 +262,7 @@ class PowerSpectrum1LoopEPT:
             self._xi_pld_u_m, self._xi_pld_q_factor = _build_pld_arrays(self._nu_hankel_forward_pld)
             self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0 = _build_pld_arrays(self._nu_hankel_forward_pld_n0)
             self._xi_pld_n0_mask = jnp.array(
-                [int(n) == 0 for _, n in self.ln_list], dtype=bool
+                [int(n) == 0 for _, n in self._ln_list], dtype=bool
             )
         else:
             self._xi_pld_u_m, self._xi_pld_q_factor = _build_pld_arrays(self._nu_hankel_forward_pld)
@@ -460,7 +296,7 @@ class PowerSpectrum1LoopEPT:
     def _make_hankel_p22_backward_pld(self, nu_back):
         """Build PLD backward Hankel kernels (l=0).
 
-        The effective Mellin arg is nu_eff = \nu_back+3; u_m uses g_0(nu_eff+i*\eta).
+        The effective Mellin arg is nu_eff = \nu_back+3; u_m uses g_0(nu_eff+i*eta).
         Convergence strip: -3 < \nu_back < -1.
         """
         nfft = len(self._k_padded)
@@ -486,22 +322,16 @@ class PowerSpectrum1LoopEPT:
         q = q_padded[self._npad:-self._npad]
         u_m = jnp.exp(lnxy)**(-1j * eta_m) * g_0
         return q_padded, q, u_m, jnp.inf
-
-
+    
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        self.pk_term_names = ['22_dd', '13_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2', 'F_G2']
-
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/22*.txt')
         self.pkmu_term_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/13*.txt')
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         # precompute the PT matrices
-        matrix = self._set_matrix(self.pk_term_names + self.pkmu_term_names_22 + self.pkmu_term_names_13)
-
-        self.matrices_22_real = jnp.array([matrix[name] for name in ['22_dd', 'I_d2', 'I_G2', 'I_d2_d2', 'I_G2_G2', 'I_d2_G2']])
-        self.matrices_13_real = jnp.array([matrix[name] for name in ['13_dd', 'F_G2']])
+        matrix = self._set_matrix(self.pkmu_term_names_22 + self.pkmu_term_names_13)
 
         ## create arrays of matrices and degrees for 22 and 13, according to the degrees of \mu
         nus_22 = [utils_loop.get_nu_from_name(name) for name in self.pkmu_term_names_22]
@@ -598,88 +428,6 @@ class PowerSpectrum1LoopEPT:
         return matrix
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_terms(self, pk_data):
-        k3 = self._k**3
-        k2 = self._k**2
-
-        # tree
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_terms = [pk_lin]
-
-        # 1-loop matter
-        p_q1, p_k1, p_k0_1 = get_decomp_data(-0.3, self._k, pk_lin)
-
-        def compute_pk_22(matrix):
-            pk = k3 * jnp.real(jnp.diag(p_q1.T @ matrix @ p_q1))
-            if self.subtract_k0_limit:
-                pk = pk - self._kmin**3 * jnp.real(p_k0_1 @ matrix @ p_k0_1)
-            return pk
-
-        def compute_pk_13(matrix):
-            return k3 * p_k1 * jnp.real(matrix @ p_q1)
-
-        pk_22 = compute_pk_22(self.matrices_22_real[0])
-        pk_13 = compute_pk_13(self.matrices_13_real[0])
-        pk_lin_int = get_pk_int(pk_data)
-        pk_13 -= (61. / 315.) * k2 * p_k1 * pk_lin_int
-
-        pk_terms += [pk_22, pk_13]
-
-        # 1-loop bias
-        p_q2, p_k2, p_k0_2 = get_decomp_data(-1.6, self._k, pk_lin)
-
-        def compute_pk_bias(matrix):
-            pk = k3 * jnp.real(jnp.diag(p_q2.T @ matrix @ p_q2))
-            if self.subtract_k0_limit:
-                pk -= self._kmin**3 * jnp.real(p_k0_2 @ matrix @ p_k0_2)
-            return pk
-
-        pk_bias_terms = jax.vmap(compute_pk_bias)(self.matrices_22_real[1:])
-
-        pk_F_bias = k3 * p_k2 * jnp.real(self.matrices_13_real[1] @ p_q2)
-
-        pk_terms += [*pk_bias_terms, pk_F_bias]
-        return jnp.stack(pk_terms, axis=0)  # shape = (n_terms, nk)
-
-    @partial(jit, static_argnames=["self"])
-    def get_pk_real(self, k, pk_data, params):
-        k = jnp.atleast_1d(k)
-
-        b1, b2, bG2, bGamma3 = params.bias
-        c0, c2, c4, cfog = params.ctr
-        P_shot, a0, a2 = params.stoch
-        k_nl = params.k_nl
-        ndens = params.ndens
-
-        coeffs = jnp.array([
-            b1**2,                              # tree
-            b1**2,                              # 22_dd
-            b1**2,                              # 13_dd
-            b1 * b2,                            # I_d2
-            2 * b1 * bG2,                       # I_G2
-            b2**2 / 4,                          # I_d2_d2
-            bG2**2,                             # I_G2_G2
-            b2 * bG2,                           # I_d2_G2
-            2 * b1 * bG2 + (4/5) * b1 * bGamma3 # F_G2
-        ])
-
-        pk_terms = self.get_pk_terms(pk_data)
-
-        # tree + 1-loop
-        pk_sum = jnp.tensordot(coeffs, pk_terms, axes=1)  # shape: (nk,)
-
-        # counterterm
-        pk_ctr = -2.0 * self._k**2 * c0 * pk_terms[0]
-
-        # interpolation
-        pk_interp = jnp.interp(jnp.log(k), jnp.log(self._k), pk_sum + pk_ctr)
-
-        # stochasticity
-        pk_stoch = (P_shot + a0 * (k / k_nl)**2) / ndens
-
-        return pk_interp + pk_stoch
-
-    @partial(jit, static_argnames=['self'])
     def get_pkmu_grid(self, pk_data, params):
         """Compute P(k, mu) on the internal (k, mu) grid including IR resummation and counterterms."""
         f = params.f
@@ -773,6 +521,7 @@ class PowerSpectrum1LoopEPT:
         diag22 = diag22.at[self._idx_22_nu1].set(diag22_1)
         diag22 = diag22.at[self._idx_22_nu2].set(diag22_2)
         diag22 = diag22.at[self._idx_22_nu3].set(diag22_3)
+
         return (k**3)[None, :] * jnp.real(diag22)
     
     def get_pkmu_terms_13(self, p_q_1, p_q_2, pk):
@@ -824,8 +573,7 @@ class PowerSpectrum1LoopEPT:
         # the full I_{d2d2}(k).  The contribution to P22 is b2^2/4 * I_{d2d2}(0)
         # = b2^2/4 * 2·k0_pk = b2^2/2 * k0_pk.
         if not self.subtract_k0_limit:
-            k0_pk = get_pk_int2(jnp.stack([self._k, pk], axis=0))
-            pkmu = pkmu + b2**2 / 2 * k0_pk
+            pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias)
 
         return pkmu  # shape: (nk, nmu)
     
@@ -878,11 +626,6 @@ class PowerSpectrum1LoopEPT:
         return xi_ln
 
     def get_xi_ln(self, l, n, array):
-        if self._hankel_forward_mode == 'pld':
-            return self._get_xi_ln_array_pld(array)[l, n]
-        return self._get_xi_ln_with_k_high(l, n, array, self._k_high)
-
-    def get_xi_ln_p13(self, l, n, array):
         if self._hankel_forward_mode == 'pld':
             return self._get_xi_ln_array_pld(array)[l, n]
         return self._get_xi_ln_with_k_high(l, n, array, self._k_high)
@@ -950,18 +693,18 @@ class PowerSpectrum1LoopEPT:
             l, n = ln
             return self._get_xi_ln_with_k_high(l, n, array, k_high)
 
-        xis = jax.vmap(compute_ln)(self.ln_list)  # (n_ln, nq)
-        xi_ln = jnp.zeros((5, 5, len(self._q[0])))
-        ls = self.ln_list[:, 0]
-        ns = self.ln_list[:, 1]
+        xis = jax.vmap(compute_ln)(self._ln_list)  # (n_ln, nq)
+        xi_ln = jnp.zeros((5, 3, len(self._q[0])))
+        ls = self._ln_list[:, 0]
+        ns = self._ln_list[:, 1]
         xi_ln = xi_ln.at[ls, ns].set(xis)
         return xi_ln
 
     def _get_forward_pld_rfft(self, nu, array):
-        """Padded rfft for PLD: rfft(array/(2\pi^2) * k_padded^{-\nu} * window) with damping."""
+        """Padded rfft for PLD: rfft(array/(2 pi^2) * k_padded^{-nu} * window) with damping."""
         fx_pad = hankel.pad(array / (2 * jnp.pi**2), self._npad, mode=self._hankel_forward_pad_mode)
         fx_pad = fx_pad * hankel.get_high_x_damp(self._k_padded, self._k_high,
-                                                   self._hankel_damp_kind, self._hankel_damp_power)
+                                                 self._hankel_damp_kind, self._hankel_damp_power)
         c_m = jnp.fft.rfft(fx_pad * self._k_padded**(-nu) * self._w_m)
         return c_m * self._w_m_freq
 
@@ -978,17 +721,12 @@ class PowerSpectrum1LoopEPT:
             xis_n0 = self._apply_pld_batch(c_m_n0, self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0)
             mask = self._xi_pld_n0_mask[:, None]
             xis = jnp.where(mask, xis_n0, xis)
-        xi_ln = jnp.zeros((5, 5, self._nfft))
-        ls = self.ln_list[:, 0]
-        ns = self.ln_list[:, 1]
+        xi_ln = jnp.zeros((5, 3, self._nfft))
+        ls = self._ln_list[:, 0]
+        ns = self._ln_list[:, 1]
         return xi_ln.at[ls, ns].set(xis)
 
     def get_xi_ln_array(self, array):
-        if self._hankel_forward_mode == 'pld':
-            return self._get_xi_ln_array_pld(array)
-        return self._get_xi_ln_array_with_k_high(array, self._k_high)
-
-    def get_xi_ln_array_p13(self, array):
         if self._hankel_forward_mode == 'pld':
             return self._get_xi_ln_array_pld(array)
         return self._get_xi_ln_array_with_k_high(array, self._k_high)
@@ -1010,43 +748,30 @@ class PowerSpectrum1LoopEPT:
             )
 
         return pkmu_22 + pkmu_13
-    
-    def _get_pkmu_22_hankel_raw(self, xi_ln, pk, f, bias):
+
+    def _get_pkmu_22_k0_limit(self, pk, bias):
+        b2 = bias[1]
+        pk_data = jnp.stack([self._k, pk], axis=0)
+        return b2**2 / 2. * get_pk_int2(pk_data)
+
+    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
-        # All blocks share _NU_P22_RESIDUAL and _q_p22_residual -> batch in one call.
-        arrays = []
-        for l, n1, n2 in self._ln1n2_list_py:
-            xi1 = xi_ln[l, n1]
-            xi2 = xi_ln[l, n2]
-            array = spline.interp1d(
-                jnp.log(self._q_p22_residual),
-                jnp.log(self._q[l]),
-                xi1 * xi2,
-            )
-            arrays.append((-1) ** l * 4.0 * jnp.pi * array)
-        fx_batch = jnp.stack(arrays, axis=0) * self._q_p22_residual**3  # (nterms, nq)
-        pk_ln1n2 = hankel.get_hankel_batched(
-            self._NU_P22_RESIDUAL,
-            fx_batch,
-            self._q_p22_residual_padded,
-            self._k_padded,
-            self._u_m_p22_residual,
-            self._npad,
-            self._q_high_p22_residual,
-            self._w_m,
-            self._w_m_freq,
-            self._hankel_backward_pad_mode,
-            self._hankel_damp_kind,
-            self._hankel_damp_power,
-        )  # (nterms, nk)
+        def get_pk_lnm_22(term):
+            l, n, m = term
+            xi = xi_ln[l, n]
+            array = spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[l]), xi * xi)
+            pk_ln = self.get_pk_ln(0, 0, 4 * jnp.pi * array)
+            return (self._k ** m) * pk_ln # (nk,)
+
+        pk_lnm = jax.vmap(get_pk_lnm_22)(self._lnm_list_22)  # (nterms, nk)
 
         def compute_coeffs(entry):
-            mu_pow  = entry[:, 0]
-            f_pow   = entry[:, 1]
-            b1_pow  = entry[:, 2]
-            b2_pow  = entry[:, 3]
-            bG2_pow = entry[:, 4]
+            mu_pow  = entry[:, 0].astype(jnp.int32)
+            f_pow   = entry[:, 1].astype(jnp.int32)
+            b1_pow  = entry[:, 2].astype(jnp.int32)
+            b2_pow  = entry[:, 3].astype(jnp.int32)
+            bG2_pow = entry[:, 4].astype(jnp.int32)
             coeff   = entry[:, 6]
 
             coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)  # (max_len,)
@@ -1056,191 +781,31 @@ class PowerSpectrum1LoopEPT:
 
         coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)  # (nterms, nmu)
 
-        terms = pk_ln1n2[:, :, None] * coeff_matrix[:, None, :]
+        terms = pk_lnm[:, :, None] * coeff_matrix[:, None, :]
         pkmu = jnp.sum(terms, axis=0)  # (nk, nmu)
 
-        return pkmu  # (nk, nmu)
-
-    def _get_pkmu_22_k0_limit(self, pk, bias):
-        b2 = bias[1]
-        pk_data = jnp.stack([self._k, pk], axis=0)
-        return b2**2 / 2. * get_pk_int2(pk_data)
-
-    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
-        if self._hankel_p22_basis == 'uv-safe':
-            return self._get_pkmu_22_hankel_uvsafe(xi_ln, pk, f, bias)
-
-        # _get_pkmu_22_hankel_raw always uses the residual (j0-1) kernel -> returns P22(k)-P22(0).
-        pkmu = self._get_pkmu_22_hankel_raw(xi_ln, pk, f, bias)
+        # Hankel method computes only terms after subtraction of k->0 limit
         if not self.subtract_k0_limit:
             pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias)
         return pkmu  # (nk, nmu)
-
-    def _get_pkmu_22_hankel_uvsafe(self, xi_ln, pk, f, bias):
-        """Evaluate the AC P22 residual in a basis without positive radial powers.
-
-        Backward transforms are batched by nu group for efficiency:
-          n=0 blocks  -> one batched call with nu=_NU_P22_RESIDUAL (j0-1 residual kernel)
-          n≠0 blocks  -> one batched call with nu=_nu_hankel (standard) or nu_back (pld)
-
-        subtract_k0_limit=True : n=0 blocks give B(k)-B(0) via the j0-1 kernel;
-          returned directly (no DC addition).
-        subtract_k0_limit=False: same blocks give B(k)-B(0); the DC term b2^2/2*I(0)
-          (evaluated by 1D integration, not FFTLog) is then added to recover full P22(k).
-        """
-        b1, b2, bG2, bGamma3 = bias
-
-        block_by_key = {}
-
-        # --- n=0 blocks: all share _NU_P22_RESIDUAL and _q_p22_residual ---
-        if self._uvsafe_n0_keys_py:
-            n0_arrays = []
-            for ell, n in self._uvsafe_n0_keys_py:
-                xi = xi_ln[ell, n]
-                array = spline.interp1d(
-                    jnp.log(self._q_p22_residual),
-                    jnp.log(self._q[ell]),
-                    xi * xi,
-                )
-                n0_arrays.append((-1) ** ell * 4.0 * jnp.pi * array)
-            # Absorb q^3 factor and batch: shape (n_n0, nq)
-            fx_n0 = jnp.stack(n0_arrays, axis=0) * self._q_p22_residual**3
-            blocks_n0 = hankel.get_hankel_batched(
-                self._NU_P22_RESIDUAL,
-                fx_n0,
-                self._q_p22_residual_padded,
-                self._k_padded,
-                self._u_m_p22_residual,
-                self._npad,
-                self._q_high_p22_residual,
-                self._w_m,
-                self._w_m_freq,
-                self._hankel_backward_pad_mode,
-                self._hankel_damp_kind,
-                self._hankel_damp_power,
-            )
-            for i, (ell, n) in enumerate(self._uvsafe_n0_keys_py):
-                block_by_key[(ell, n)] = blocks_n0[i]
-
-        # --- n≠0 blocks: all use l=0 standard Hankel or pld backward ---
-        if self._uvsafe_nn0_keys_py:
-            nn0_arrays = []
-            for ell, n in self._uvsafe_nn0_keys_py:
-                xi = xi_ln[ell, n]
-                if self._hankel_p22_backward_mode == 'pld':
-                    array = spline.interp1d(
-                        jnp.log(self._q_back_pld), jnp.log(self._q[ell]), xi * xi
-                    )
-                    nn0_arrays.append((-1) ** ell * 4.0 * jnp.pi * array)
-                else:
-                    array = spline.interp1d(
-                        jnp.log(self._q[0]), jnp.log(self._q[ell]), xi * xi
-                    )
-                    nn0_arrays.append((-1) ** ell * 4.0 * jnp.pi * array * self._q[0] ** 3)
-
-            if self._hankel_p22_backward_mode == 'pld':
-                fx_nn0 = jnp.stack(nn0_arrays, axis=0)
-                blocks_nn0 = hankel.get_hankel_pld_backward_batched(
-                    self._nu_p22_backward,
-                    fx_nn0,
-                    self._q_padded_back_pld,
-                    self._k_padded,
-                    self._u_m_back_pld,
-                    self._npad,
-                    self._q_high_back_pld,
-                    self._w_m,
-                    self._w_m_freq,
-                    self._hankel_backward_pad_mode,
-                    self._hankel_damp_kind,
-                    self._hankel_damp_power,
-                )
-            else:
-                fx_nn0 = jnp.stack(nn0_arrays, axis=0)
-                blocks_nn0 = hankel.get_hankel_batched(
-                    self._nu_hankel,
-                    fx_nn0,
-                    self._q_padded[0],
-                    self._k_padded,
-                    self._u_m[0],
-                    self._npad,
-                    self._q_high[0],
-                    self._w_m,
-                    self._w_m_freq,
-                    self._hankel_backward_pad_mode,
-                    self._hankel_damp_kind,
-                    self._hankel_damp_power,
-                )
-            for i, (ell, n) in enumerate(self._uvsafe_nn0_keys_py):
-                block_by_key[(ell, n)] = blocks_nn0[i]
-
-        rewritten_blocks = []
-        for rewrite in self._p22_uvsafe_rewrite:
-            block = jnp.zeros_like(self._k)
-            for ell, n, kpow, fac in rewrite:
-                block = block + fac * (self._k ** kpow) * block_by_key[(ell, n)]
-            rewritten_blocks.append(block)
-        rewritten_blocks = jnp.stack(rewritten_blocks, axis=0)
-
-        def compute_coeffs(entry):
-            mu_pow = entry[:, 0]
-            f_pow = entry[:, 1]
-            b1_pow = entry[:, 2]
-            b2_pow = entry[:, 3]
-            bG2_pow = entry[:, 4]
-            coeff = entry[:, 6]
-            coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)
-            mu_terms = self._mu[None, :] ** mu_pow[:, None]
-            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)
-
-        coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)
-        pkmu = jnp.sum(rewritten_blocks[:, :, None] * coeff_matrix[:, None, :], axis=0)
-
-        if not self.subtract_k0_limit:
-            pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias)
-        return pkmu
     
     def get_pkmu_13_hankel(self, xi_ln, pk, f, bias):
         b1, b2, bG2, bGamma3 = bias
 
-        # Group by l: all terms sharing the same l also share q_padded[l] and u_m[l],
-        # enabling a single batched backward Hankel call per l group.
-        pk_lnm_parts = {}
-        for l, group_idxs in self._lnm_by_l_py.items():
-            # fx = xi_ln[l,n] * q[l]^2  (n=-1 in get_pk_ln -> n+3=2)
-            fxs = jnp.stack(
-                [xi_ln[l, self._lnm_list_py[i][1]] * self._q[l] ** 2
-                 for i in group_idxs],
-                axis=0,
-            )
-            blocks = hankel.get_hankel_batched(
-                self._nu_hankel,
-                fxs,
-                self._q_padded[l],
-                self._k_padded,
-                self._u_m[l],
-                self._npad,
-                self._q_high[l],
-                self._w_m,
-                self._w_m_freq,
-                self._hankel_backward_pad_mode,
-                self._hankel_damp_kind,
-                self._hankel_damp_power,
-            )  # (n_group, nk)
-            for j, i in enumerate(group_idxs):
-                m = self._lnm_list_py[i][2]
-                pk_lnm_parts[i] = (self._k ** m) * pk * blocks[j]
+        def get_pk_lnm_13(term):
+            l, n, m = term
+            pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
+            return (self._k ** m) * pk * pk_ln
 
-        pk_lnm = jnp.stack(
-            [pk_lnm_parts[i] for i in range(len(self._lnm_list_py))], axis=0
-        )  # (nterms, nk)
+        pk_lnm = jax.vmap(get_pk_lnm_13)(self._lnm_list_13)  # (nterms, nk)
 
         def compute_coeffs(entry):
-            mu_pow = entry[:, 0]
-            f_pow = entry[:, 1]
-            b1_pow = entry[:, 2]
-            b2_pow = entry[:, 3]
-            bG2_pow = entry[:, 4]
-            bGamma3_pow = entry[:, 5]
+            mu_pow = entry[:, 0].astype(jnp.int32)
+            f_pow = entry[:, 1].astype(jnp.int32)
+            b1_pow = entry[:, 2].astype(jnp.int32)
+            b2_pow = entry[:, 3].astype(jnp.int32)
+            bG2_pow = entry[:, 4].astype(jnp.int32)
+            bGamma3_pow = entry[:, 5].astype(jnp.int32)
             coeff = entry[:, 6]
 
             coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow) * (bGamma3 ** bGamma3_pow)  # (max_len,)
@@ -1292,8 +857,8 @@ class PowerSpectrum1LoopEPT:
         # BAO damping factor in redshift space
         Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.k_IR)
         dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.k_IR)
-        Sigma2_tot = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
-        damp_fac = jnp.outer(k**2, Sigma2_tot)
+        Sigma2_s = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
+        damp_fac = jnp.outer(k**2, Sigma2_s)
 
         return pk_nw, pk_w, damp_fac
     
