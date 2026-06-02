@@ -22,9 +22,9 @@ class PowerSpectrum1LoopLPT:
                  kmax_fft=1e3,
                  nfft=512,
                  hankel_nu=1.1,
-                 hankel_k_damp=50.0,
+                 hankel_k_damp=None,
                  hankel_q_damp=0.5,
-                 hankel_c_window_width=0.70,
+                 hankel_c_window_width=0.0,
                  hankel_npad_factor=0.5,
                  hankel_pad_mode='zero-pad',
                  lmax=5,
@@ -64,8 +64,8 @@ class PowerSpectrum1LoopLPT:
         self.G00_coeffs = coeffs_pad
 
         # (l, n) for which xi_ln's are computed
-        self.ln_list = jnp.array([[0,0], [0,-2], [0,2], [1,-1], [1,1], [2,0], [2,-2], [2,2], [3,-1], [3,1], [4,0]])
-        lmax = max(jnp.max(self.ln_list[:, 0]), self.lmax)
+        self._ln_list = jnp.array([[0,0], [0,-2], [1,-1], [2,0], [2,-2], [3,-1], [4,0]])
+        lmax = max(jnp.max(self._ln_list[:, 0]), self.lmax)
         self._set_hankel(lmax)
 
     def _set_hankel(self, lmax):
@@ -83,20 +83,15 @@ class PowerSpectrum1LoopLPT:
 
         # Compute each xi_l^n on its own low-ringing output grid, then
         # resample to the common q grid before LPT combines different ell.
-        lnxy = jnp.array([
-            dln * jnp.angle(hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln)) / jnp.pi
-            for l in l_list
-        ])
-        self._q_xi_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
-        self._q_xi = jnp.array([self._q_xi_padded[l][self._npad:-self._npad] for l in l_list])
-        self._q_padded = self._q_xi_padded[0]
-        self._q = self._q_xi[0]
+        lnxy = jnp.array([dln * jnp.angle(hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln)) / jnp.pi for l in l_list])
+        self._q_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
+        self._q = jnp.array([self._q_padded[l][self._npad:-self._npad] for l in l_list])
         
         g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
-        self._u_m_xi = jnp.array([jnp.exp(lnxy[l])**(-1j * eta_m) * g_l[l] for l in l_list])
-        self._u_m = jnp.array([jnp.exp(lnxy[0])**(-1j * eta_m) * g_l[l] for l in l_list])
+        self._u_m = jnp.array([jnp.exp(lnxy[l])**(-1j * eta_m) * g_l[l] for l in l_list])
 
-        self._k_high = self._kmax / self._hankel_k_damp
+        # Forward damping: Gaussian exp(-(k/k_high)^2). k_high=inf -> no damping.
+        self._k_high = self._hankel_k_damp if self._hankel_k_damp is not None else jnp.inf
         self._q_high = jnp.max(self._q) * self._hankel_q_damp
         
         c_window_width = self._hankel_c_window_width
@@ -108,15 +103,15 @@ class PowerSpectrum1LoopLPT:
             self._nu_hankel,
             fx,
             self._k_padded,
-            self._q_xi_padded[l],
-            self._u_m_xi[l],
+            self._q_padded[l],
+            self._u_m[l],
             self._npad,
             self._k_high,
             self._w_m,
             self._w_m_freq,
             self._hankel_pad_mode,
         )
-        xi_ln = spline.interp1d(jnp.log(self._q), jnp.log(self._q_xi[l]), xi_ln)
+        xi_ln = spline.interp1d(jnp.log(self._q), jnp.log(self._q[l]), xi_ln)
         return xi_ln
 
     def get_xi_ln_batched(self, ells, ns, arrays):
@@ -129,37 +124,34 @@ class PowerSpectrum1LoopLPT:
             self._nu_hankel,
             fx,
             self._k_padded,
-            self._q_xi_padded[ells],
-            self._u_m_xi[ells],
+            self._q_padded[ells],
+            self._u_m[ells],
             self._npad,
             self._k_high,
             self._w_m,
             self._w_m_freq,
             self._hankel_pad_mode,
         )
-
-        log_q = jnp.log(self._q)
-
         def interp_to_common_q(ell, xi):
-            return spline.interp1d(log_q, jnp.log(self._q_xi[ell]), xi)
-
+            return spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[ell]), xi)
+        
         return jax.vmap(interp_to_common_q)(ells, xi_ln)
     
     def get_pk_ln(self, l, n, array):
         fx = array * self._q**(n + 3)
-        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded, self._k_padded, self._u_m[l], self._npad, self._q_high, self._w_m, self._w_m_freq, self._hankel_pad_mode)
+        pk_ln = hankel.get_hankel(self._nu_hankel, fx, self._q_padded[l], self._k_padded, self._u_m[l], self._npad, self._q_high, self._w_m, self._w_m_freq, self._hankel_pad_mode)
         return pk_ln
     
-    def get_pk_batched(self, arrays, u_m):
-        pks = hankel.get_hankel_batched(self._nu_hankel, arrays, self._q_padded, self._k_padded, u_m, self._npad, self._q_high, self._w_m, self._w_m_freq, self._hankel_pad_mode)
+    def get_pk_batched(self, arrays, q_padded, u_m):
+        pks = hankel.get_hankel_batched(self._nu_hankel, arrays, q_padded, self._k_padded, u_m, self._npad, self._q_high, self._w_m, self._w_m_freq, self._hankel_pad_mode)
         return pks
     
     def get_xi_ln_array(self, array):
-        ls = self.ln_list[:, 0]
-        ns = self.ln_list[:, 1]
-        arrays = jnp.broadcast_to(array, (self.ln_list.shape[0], array.shape[0]))
+        ls = self._ln_list[:, 0]
+        ns = self._ln_list[:, 1]
+        arrays = jnp.broadcast_to(array, (self._ln_list.shape[0], array.shape[0]))
         xis = self.get_xi_ln_batched(ls, ns, arrays)
-        xi_ln = jnp.zeros((5, 5, len(self._q)))
+        xi_ln = jnp.zeros((5, 3, self._nfft))
         xi_ln = xi_ln.at[ls, ns].set(xis)
         return xi_ln
     
@@ -487,16 +479,131 @@ class PowerSpectrum1LoopLPT:
     def get_pkmu_terms_on_grid_from_corrs(self, k, mu, corrs, f, alpha_perp=1.0, alpha_para=1.0):
         k = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
+        q = self._q
+
+        corrs_tree, corrs_matter_1loop, corrs_bias = corrs[:8], corrs[8:15], corrs[15:]
+
+        X_lin_lt, Y_lin_lt = corrs_tree[2], corrs_tree[3]
+        X_lin_gt, Y_lin_gt = corrs_tree[4], corrs_tree[5]
+        X22, Y22, X13, Y13, V1, V3, T = corrs_matter_1loop
+        xi_lin, U_lin = corrs_tree[6], corrs_tree[7]
+        U3, U11, U20, X10, Y10 = corrs_bias[0:5]
+        V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta = corrs_bias[5:]
+
+        L = self.lmax + 1
+        logk_fft = jnp.log(self._k)
+
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
-        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
+        mu_true = jnp.broadcast_to(mu_true, k_true.shape)  # (nk, nmu)
 
-        k_flat = k_true.reshape(-1)
-        mu_flat = mu_true.reshape(-1)
-        pkmu_terms = self.get_pkmu_terms_from_corrs(k_flat, mu_flat, corrs, f)
+        def per_k(k_true_row, mu_true_row):
+            # k_true_row: (nmu,), mu_true_row: (nmu,)
 
-        nk, nmu = k_true.shape
-        ncomp = pkmu_terms.shape[0]
-        return pkmu_terms.reshape(ncomp, nk, nmu)
+            def per_mu(k_i, mu_j):
+                inv = -2.0 / (k_i * q)
+                weights = jnp.power(inv[None, :], jnp.arange(L)[:, None])
+
+                logk = jnp.log(k_i)
+                i0 = jnp.searchsorted(logk_fft, logk, side='right') - 1
+                i0 = jnp.clip(i0, 0, logk_fft.size - 2)
+                t = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
+
+                Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
+                K = k_i * Kfac
+                Ksq = K**2
+                c = (1 + f * mu_j**2) / Kfac
+                s = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
+
+                A_mu = (1 + f) * mu_j / Kfac
+                B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
+
+                A = k_i * q * c
+                B = -0.5 * Ksq * Y_lin_lt
+                C = k_i * q * s
+
+                base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))
+                Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
+
+                mq0 =  Gs[0,0]
+                mq1 = -Gs[1,0]
+                mq2 = -Gs[2,0]
+                mq3 =  Gs[3,0]
+                mq4 =  Gs[4,0]
+                nq1 = -A_mu * Gs[1,0] + B_mu * Gs[0,1]
+                nq2 = -A_mu**2 * Gs[2,0] + 2*A_mu*B_mu*Gs[1,1] - B_mu**2 * Gs[0,2]
+                mq1_nq1 = -A_mu * Gs[2,0] + B_mu * Gs[1,1]
+                mq2_nq1 =  A_mu * Gs[3,0] - B_mu * Gs[2,1]
+
+                integrand_1  = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+                integrand_1 += (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
+                integrand_1 += -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
+                                            + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
+                integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
+                                            + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
+                integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
+                                        + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
+                                        + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
+
+                integrand_b1  = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3)
+                integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
+                integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10)
+
+                integrand_b1_b1  = mq0 * xi_lin
+                integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
+                integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11
+                integrand_b1_b1 += -Ksq * mq2 * U_lin**2
+
+                integrand_b2  = -(K * mq1 + f * k_i * mu_j * nq1) * U20
+                integrand_b2 += -Ksq * mq2 * U_lin**2
+
+                integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
+                integrand_b2_b2 = 0.5 * mq0 * xi_lin**2
+
+                integrand_bs  = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+                integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
+
+                integrand_b1_bs = -2 * K * mq1 * V12
+                integrand_b2_bs = mq0 * chi
+                integrand_bs_bs = mq0 * zeta
+
+                integrand_b3    = -2 * K * mq1 * Ub3
+                integrand_b1_b3 = 2 * mq0 * theta
+
+                integrand_ctr = lax.select(
+                    self.use_Pzel,
+                    mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt),
+                    mq0 * xi_lin
+                )
+
+                integrands = jnp.stack([
+                    integrand_1, integrand_b1, integrand_b1_b1,
+                    integrand_b2, integrand_b1_b2, integrand_b2_b2,
+                    integrand_bs, integrand_b1_bs, integrand_b2_bs, integrand_bs_bs,
+                    integrand_b3, integrand_b1_b3, integrand_ctr
+                ], axis=0)   # (ncomp, L, nq)
+
+                g = integrands * (base[None, None, :] * weights[None, :, :])
+                g = g.at[:, 0, :].subtract(g[:, 0, -1][:, None])
+                g = (4 * jnp.pi * q**3)[None, None, :] * g
+                return g, i0, t
+
+            # g: (nmu, ncomp, L, nq); one batched Hankel over all mu×comp at once
+            gs, i0s, ts = jax.vmap(per_mu)(k_true_row, mu_true_row)
+            nmu = gs.shape[0]
+            ncomp = gs.shape[1]
+            pk_ffts = self.get_pk_batched(
+                gs.reshape(nmu * ncomp, L, -1),
+                self._u_m[None, :L, :]
+            ).reshape(nmu, ncomp, L, -1)  # (nmu, ncomp, L, nfft)
+
+            def interp_mu(pk_fft, i0, t):
+                vals = (1.0 - t) * pk_fft[:, :, i0] + t * pk_fft[:, :, i0+1]  # (ncomp, L)
+                return jnp.sum(vals, axis=1)  # (ncomp,)
+
+            return jax.vmap(interp_mu)(pk_ffts, i0s, ts)  # (nmu, ncomp)
+
+        pkmu_terms = jax.vmap(per_k)(k_true, mu_true)           # (nk, nmu, ncomp)
+        return jnp.transpose(pkmu_terms, (2, 0, 1))             # (ncomp, nk, nmu)
 
     def get_pkmu_terms_on_grid(self, k, mu, pk_data, f, k_IR=0.2):
         corrs = self.get_corrs(pk_data, k_IR)
@@ -633,120 +740,123 @@ class PowerSpectrum1LoopLPT:
         logk_fft = jnp.log(self._k)
 
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
-        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
-        k_flat = k_true.reshape(-1)
-        mu_flat = mu_true.reshape(-1)
+        mu_true = jnp.broadcast_to(mu_true, k_true.shape)  # (nk, nmu)
 
-        def per_point(k_i, mu_j):
-            inv = -2.0 / (k_i * q)
-            weights = jnp.power(inv[None, :], jnp.arange(L)[:, None])
+        def per_k(k_true_row, mu_true_row):
+            # k_true_row: (nmu,), mu_true_row: (nmu,)
+            # Compute per-mu integrands, then do a single batched Hankel over all mu.
 
-            logk = jnp.log(k_i)
-            i0 = jnp.searchsorted(logk_fft, logk, side='right') - 1
-            i0 = jnp.clip(i0, 0, logk_fft.size - 2)
-            t = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
+            def per_mu(k_i, mu_j):
+                inv = -2.0 / (k_i * q)
+                weights = jnp.power(inv[None, :], jnp.arange(L)[:, None])
 
-            Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
-            K = k_i * Kfac
-            Ksq = K**2
-            c = (1 + f * mu_j**2) / Kfac
-            s = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
+                logk = jnp.log(k_i)
+                i0 = jnp.searchsorted(logk_fft, logk, side='right') - 1
+                i0 = jnp.clip(i0, 0, logk_fft.size - 2)
+                t = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
 
-            A_mu = (1 + f) * mu_j / Kfac
-            B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
+                Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
+                K = k_i * Kfac
+                Ksq = K**2
+                c = (1 + f * mu_j**2) / Kfac
+                s = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
 
-            A = k_i * q * c
-            B = -0.5 * Ksq * Y_lin_lt
-            C = k_i * q * s
+                A_mu = (1 + f) * mu_j / Kfac
+                B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
 
-            base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))
-            Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
+                A = k_i * q * c
+                B = -0.5 * Ksq * Y_lin_lt
+                C = k_i * q * s
 
-            mq0 = Gs[0, 0]
-            mq1 = -Gs[1, 0]
-            mq2 = -Gs[2, 0]
-            mq3 = Gs[3, 0]
-            mq4 = Gs[4, 0]
-            nq1 = -A_mu * Gs[1, 0] + B_mu * Gs[0, 1]
-            nq2 = -A_mu**2 * Gs[2, 0] + 2*A_mu*B_mu*Gs[1, 1] - B_mu**2 * Gs[0, 2]
-            mq1_nq1 = -A_mu * Gs[2, 0] + B_mu * Gs[1, 1]
-            mq2_nq1 = A_mu * Gs[3, 0] - B_mu * Gs[2, 1]
+                base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))
+                Gs = get_Gs(A, B, C, c**2, s**2, self.G00_coeffs, self.lmax)
 
-            # The component integrands are linearly combined before the
-            # Hankel transform. This keeps the same algebra as
-            # get_pkmu_terms_from_corrs but avoids doing 13 transforms when
-            # only the final P(k, mu) is needed.
-            integrand_1 = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-            integrand_1 += (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
-            integrand_1 += -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
-                                        + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
-            integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
-                                        + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
-            integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
-                                    + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
-                                    + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
+                mq0 = Gs[0, 0]
+                mq1 = -Gs[1, 0]
+                mq2 = -Gs[2, 0]
+                mq3 = Gs[3, 0]
+                mq4 = Gs[4, 0]
+                nq1 = -A_mu * Gs[1, 0] + B_mu * Gs[0, 1]
+                nq2 = -A_mu**2 * Gs[2, 0] + 2*A_mu*B_mu*Gs[1, 1] - B_mu**2 * Gs[0, 2]
+                mq1_nq1 = -A_mu * Gs[2, 0] + B_mu * Gs[1, 1]
+                mq2_nq1 = A_mu * Gs[3, 0] - B_mu * Gs[2, 1]
 
-            integrand_b1 = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3)
-            integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
-            integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10)
+                integrand_1 = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+                integrand_1 += (Ksq**2) / 8.0 * (mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2)
+                integrand_1 += -0.5 * k_i**2 * ((Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
+                                            + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22)
+                integrand_1 += -0.5 * k_i**2 * (2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
+                                            + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13)
+                integrand_1 += 0.5 * k_i**3 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
+                                        + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
+                                        + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T)
 
-            integrand_b1_b1 = mq0 * xi_lin
-            integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
-            integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11
-            integrand_b1_b1 += -Ksq * mq2 * U_lin**2
+                integrand_b1 = -2 * (K * mq1 * (U_lin + U3) + (2 * f * k_i * mu_j * nq1) * U3)
+                integrand_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
+                integrand_b1 += -Ksq * (X10 * mq0 + Y10 * mq2) - f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10)
 
-            integrand_b2 = -(K * mq1 + f * k_i * mu_j * nq1) * U20
-            integrand_b2 += -Ksq * mq2 * U_lin**2
+                integrand_b1_b1 = mq0 * xi_lin
+                integrand_b1_b1 += -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
+                integrand_b1_b1 += -(K * mq1 + f * k_i * mu_j * nq1) * U11
+                integrand_b1_b1 += -Ksq * mq2 * U_lin**2
 
-            integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
-            integrand_b2_b2 = 0.5 * mq0 * xi_lin**2
+                integrand_b2 = -(K * mq1 + f * k_i * mu_j * nq1) * U20
+                integrand_b2 += -Ksq * mq2 * U_lin**2
 
-            integrand_bs = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
-            integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
+                integrand_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
+                integrand_b2_b2 = 0.5 * mq0 * xi_lin**2
 
-            integrand_b1_bs = -2 * K * mq1 * V12
-            integrand_b2_bs = mq0 * chi
-            integrand_bs_bs = mq0 * zeta
+                integrand_bs = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
+                integrand_bs += -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
 
-            integrand_b3 = -2 * K * mq1 * Ub3
-            integrand_b1_b3 = 2 * mq0 * theta
+                integrand_b1_bs = -2 * K * mq1 * V12
+                integrand_b2_bs = mq0 * chi
+                integrand_bs_bs = mq0 * zeta
 
-            integrand_ctr = lax.select(
-                self.use_Pzel,
-                mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt),
-                mq0 * xi_lin
-            )
+                integrand_b3 = -2 * K * mq1 * Ub3
+                integrand_b1_b3 = 2 * mq0 * theta
 
-            ctr_mu = alpha0 + alpha2 * mu_j**2 + alpha4 * mu_j**4 + alpha6 * mu_j**6
-            integrand = (
-                bias_facs[0] * integrand_1
-                + bias_facs[1] * integrand_b1
-                + bias_facs[2] * integrand_b1_b1
-                + bias_facs[3] * integrand_b2
-                + bias_facs[4] * integrand_b1_b2
-                + bias_facs[5] * integrand_b2_b2
-                + bias_facs[6] * integrand_bs
-                + bias_facs[7] * integrand_b1_bs
-                + bias_facs[8] * integrand_b2_bs
-                + bias_facs[9] * integrand_bs_bs
-                + bias_facs[10] * integrand_b3
-                + bias_facs[11] * integrand_b1_b3
-            )
-            integrand = integrand + k_i**2 * ctr_mu * integrand_ctr
+                integrand_ctr = lax.select(
+                    self.use_Pzel,
+                    mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt),
+                    mq0 * xi_lin
+                )
 
-            g = integrand * (base[None, :] * weights)
-            g = g.at[0, :].subtract(g[0, -1])
-            g = (4 * jnp.pi * q**3)[None, :] * g
+                ctr_mu = alpha0 + alpha2 * mu_j**2 + alpha4 * mu_j**4 + alpha6 * mu_j**6
+                integrand = (
+                    bias_facs[0] * integrand_1
+                    + bias_facs[1] * integrand_b1
+                    + bias_facs[2] * integrand_b1_b1
+                    + bias_facs[3] * integrand_b2
+                    + bias_facs[4] * integrand_b1_b2
+                    + bias_facs[5] * integrand_b2_b2
+                    + bias_facs[6] * integrand_bs
+                    + bias_facs[7] * integrand_b1_bs
+                    + bias_facs[8] * integrand_b2_bs
+                    + bias_facs[9] * integrand_bs_bs
+                    + bias_facs[10] * integrand_b3
+                    + bias_facs[11] * integrand_b1_b3
+                )
+                integrand = integrand + k_i**2 * ctr_mu * integrand_ctr
 
-            pk_ffts = self.get_pk_batched(g, self._u_m[:L])
-            vals = (1.0 - t) * pk_ffts[:, i0] + t * pk_ffts[:, i0+1]
+                g = integrand * (base[None, :] * weights)
+                g = g.at[0, :].subtract(g[0, -1])
+                g = (4 * jnp.pi * q**3)[None, :] * g
 
-            kmu2 = (k_i * mu_j)**2
-            pkmu_stoch = R_h3 * (1 + sigma2 * kmu2 + sigma4 * kmu2**2)
-            return jnp.sum(vals) + pkmu_stoch
+                kmu2 = (k_i * mu_j)**2
+                stoch = R_h3 * (1 + sigma2 * kmu2 + sigma4 * kmu2**2)
+                return g, i0, t, stoch
 
-        pkmu = jax.vmap(per_point)(k_flat, mu_flat)
-        pkmu = pkmu.reshape(k_true.shape)
+            # g: (nmu, L, nq); one batched Hankel over all mu at once
+            gs, i0s, ts, stochs = jax.vmap(per_mu)(k_true_row, mu_true_row)
+            pk_ffts = self.get_pk_batched(gs, self._u_m[None, :L, :])  # (nmu, L, nfft)
+
+            def interp_mu(pk_fft, i0, t):
+                return jnp.sum((1.0 - t) * pk_fft[:, i0] + t * pk_fft[:, i0+1])
+
+            return jax.vmap(interp_mu)(pk_ffts, i0s, ts) + stochs  # (nmu,)
+
+        pkmu = jax.vmap(per_k)(k_true, mu_true)  # (nk, nmu)
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
         return pkmu
 
@@ -924,9 +1034,8 @@ class PowerSpectrum1LoopLPT:
         return self.get_pk_ells_from_corrs(k, corrs, params, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def get_corrs(self, pk_data, k_IR=0.2, k_cut=10.0):
+    def get_corrs(self, pk_data, k_IR=0.2):
         pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_lin = pk_lin * jnp.exp(-(self._k / k_cut)**2)
         pk_lin_lt = pk_lin * jnp.exp(-(self._k / k_IR)**2)
 
         # integrals of pk
@@ -970,47 +1079,36 @@ class PowerSpectrum1LoopLPT:
         return corrs
     
     def get_Qs(self, xi_ln):
+        integrands = jnp.stack([
+            8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2,
+            xi_ln[1,-1]**2 - xi_ln[3,-1]**2,
+            xi_ln[0,0]**2 - xi_ln[2,0]**2,
+        ], axis=0)
 
-        integrand_Q1 = 8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2
-        integrand_Q5 = 2/3 * xi_ln[0,0]**2 - 2/3 * xi_ln[2,0]**2 \
-                    - 2/5 * xi_ln[1,-1] * xi_ln[1,1] + 2/5 * xi_ln[3,-1] * xi_ln[3,1]
-        integrand_Q8 = 2/3 * xi_ln[0,0]**2 - 2/3 * xi_ln[2,0]**2
-        integrand_Q_G2 = 2/5 * xi_ln[1,-1]**2 - 2/5 * xi_ln[3,-1]**2
+        res = self.get_pk_batched(4 * jnp.pi * self._q[0]**3 * integrands, self._q_padded[0], self._u_m[0])
 
-        integrand_Qs = jnp.stack([integrand_Q1, integrand_Q5, integrand_Q8, integrand_Q_G2], axis=0)
-        Qs = self.get_pk_batched(4 * jnp.pi * self._q**3 * integrand_Qs, self._u_m[0])
-        Q1, Q5, Q8, Q_G2 = Qs[0], Qs[1], Qs[2], Qs[3]
-
-        Q2 = 2 * Q5 - Q1
+        Q1 = res[0]
+        Q2 = Q1 - 2/5 * self._k**2 * res[1]
+        Q5 = (Q1 + Q2) / 2
+        Q8 = 2/3 * res[2]
+        Q_G2 = 2/5 * res[1]
 
         Qs = jnp.stack([Q1, Q2, Q5, Q8, Q_G2], axis=0)
         return Qs
     
     def get_Rs(self, xi_ln, pk_lin):
-        ells = jnp.array([0, 2, 4, 1, 3, 2], dtype=jnp.int32)
-        xis = jnp.stack([
-            xi_ln[0,  0],
-            xi_ln[2,  0],
-            xi_ln[4,  0],
-            xi_ln[1,  1],
-            xi_ln[3,  1],
-            xi_ln[2,  2],
-        ], axis=0)
+        ells = jnp.array([0, 2, 4, 1, 3], dtype=jnp.int32)
+        xis = jnp.stack([xi_ln[0,0], xi_ln[2,0], xi_ln[4,0], xi_ln[1,-1], xi_ln[3,-1]], axis=0)
 
-        pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m[ells]) * pk_lin
-
-        pk_00, pk_20, pk_40, pk_11, pk_31, pk_22 = pk_list
+        pk_list = self.get_pk_batched(self._q[0]**2 * xis, self._q_padded[0], self._u_m[ells]) * pk_lin
+        pk_00, pk_20, pk_40, pk_1m1, pk_3m1 = pk_list
 
         k = self._k
         R1 = k**2 * (8/15 * pk_00 - 16/21 * pk_20 + 8/35 * pk_40)
-        R3 = 2/3 * k**2 * (pk_00 - pk_20) - 2/5 * k * (pk_11 - pk_31)
-        R2 = R3 - R1
-
+        R2 = k**2 * (-2/15 * pk_00 - 2/21 * pk_20 + 8/35 * pk_40 + 2/5 * k * (pk_1m1 - pk_3m1)) 
         F_G2 = -32/21 * k**2 * (pk_00 - 10/7 * pk_20 + 3/7 * pk_40)
-        Rb3  = k**2 * (32/105 * pk_00 - 80/441 * pk_20 + 32/245 * pk_40) \
-            - k * (64/315 * pk_11 + 32/105 * pk_31) + 16/63 * pk_22
 
-        return jnp.stack([R1, R2, F_G2, Rb3], axis=0)
+        return jnp.stack([R1, R2, F_G2], axis=0)
     
     def get_corrs_matter_1loop(self, Qs, Rs):
         Q1 = Qs[0]
@@ -1064,85 +1162,48 @@ class PowerSpectrum1LoopLPT:
         R1 = Rs[0]
         R2 = Rs[1]
         F_G2 = Rs[2]
-        Rb3 = Rs[3]
         
         # A10
         pk_data = jnp.stack([self._k, 2/7 * R1], axis=0)
         xi_ln_A10_q0 = get_pk_int(pk_data) # R2 integral is zero
 
-        if self.use_galileon:
-            xi_bias = self.get_xi_ln_batched(
-                jnp.array([1, 1, 1, 0, 2, 0, 0, 2, 1, 1, 1, 0]),
-                jnp.array([-1, -1, -1, -2, -2, 0, -2, -2, -1, -1, -1, 0]),
-                jnp.stack([
-                    -5/21 * R1,
-                    -6/7 * (R1 + R2),
-                    -3/7 * Q8,
-                    2/7 * (Q5 + 2 * R2),
-                    1/7 * (2 * Q5 + 3 * R1 + 4 * R2),
-                    Q_G2,
-                    Q1 - Q2,
-                    Q1 + 2 * Q2,
-                    3/7 * Q1,
-                    2 * Q5,
-                    -2/5 * F_G2,
-                    2/5 * F_G2,
-                ], axis=0),
-            )
-            U3, U11, U20 = xi_bias[0], xi_bias[1], xi_bias[2]
-            xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[3], xi_bias[4]
-            X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
-            Y10 = 3 * xi_ln_A10_2m2
+        xi_bias = self.get_xi_ln_batched(
+            jnp.array([1, 1, 1, 0, 2, 0, 0, 2, 1, 1, 1, 0]),
+            jnp.array([-1, -1, -1, -2, -2, 0, -2, -2, -1, -1, -1, 0]),
+            jnp.stack([
+                -5/21 * R1,
+                -6/7 * (R1 + R2),
+                -3/7 * Q8,
+                2/7 * (Q5 + 2 * R2),
+                1/7 * (2 * Q5 + 3 * R1 + 4 * R2),
+                Q_G2,
+                Q1 - Q2,
+                Q1 + 2 * Q2,
+                3/7 * Q1,
+                2 * Q5,
+                -2/5 * F_G2,
+                2/5 * F_G2,
+            ], axis=0),
+        )
+        U3, U11, U20 = xi_bias[0], xi_bias[1], xi_bias[2]
+        xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[3], xi_bias[4]
+        X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
+        Y10 = 3 * xi_ln_A10_2m2
 
-            # Upsilon based on G2
-            Up1 = -xi_bias[5]
-            Up2 = -xi_bias[6] - xi_bias[7]
-            X_Upsilon = 1/3 * Up1 - Up2
-            Y_Upsilon = Up2 - Up1
+        # Upsilon based on G2
+        Up1 = -xi_bias[5]
+        Up2 = -xi_bias[6] - xi_bias[7]
+        X_Upsilon = 1/3 * Up1 - Up2
+        Y_Upsilon = Up2 - Up1
 
-            V10 = xi_bias[8] # V10 based on G2
-            V12 = xi_bias[9] # V12 based on G2
-            chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2) # chi based on G2
-            zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
+        V10 = xi_bias[8] # V10 based on G2
+        V12 = xi_bias[9] # V12 based on G2
+        chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2) # chi based on G2
+        zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on G2
 
-            # 3rd-order bias
-            Ub3 = xi_bias[10] # Ub3 based on Gamma3
-            theta = xi_bias[11] # theta based on Gamma3
-        else:
-            xi_bias = self.get_xi_ln_batched(
-                jnp.array([1, 1, 1, 0, 2, 1, 1, 0]),
-                jnp.array([-1, -1, -1, -2, -2, -1, -1, 0]),
-                jnp.stack([
-                    -5/21 * R1,
-                    -6/7 * (R1 + R2),
-                    -3/7 * Q8,
-                    2/7 * (Q5 + 2 * R2),
-                    1/7 * (2 * Q5 + 3 * R1 + 4 * R2),
-                    3/7 * Q1 - 2/7 * Q8,
-                    -Rb3,
-                    Rb3,
-                ], axis=0),
-            )
-            U3, U11, U20 = xi_bias[0], xi_bias[1], xi_bias[2]
-            xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[3], xi_bias[4]
-            X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
-            Y10 = 3 * xi_ln_A10_2m2
-
-            # Upsilon based on s^2
-            J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-            J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-            J4 = xi_ln[3,-1]
-            X_Upsilon = 4 * J3**2
-            Y_Upsilon = 6 * J2**2 + 8 * J2 * J3 + 4 * J2 * J4 + 4 * J3**2 + 8 * J3 * J4 + 2 * J4**2
-
-            V10 = xi_bias[5] # V10 based on s^2
-            V12 = 2 * (4/15 * xi_ln[1,-1] - 2/5 * xi_ln[3,-1]) * xi_ln[2,0] # V12 based on s^2
-            chi = 4/3 * xi_ln[2,0]**2 # chi based on s^2
-            zeta = 2 * (4/45 * xi_ln[0,0]**2 + 8/63 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2) # zeta based on s^2
-            
-            # 3rd-order bias
-            Ub3 = xi_bias[6]
-            theta = xi_bias[7]
+        # 3rd-order bias
+        Ub3 = xi_bias[10] # Ub3 based on Gamma3
+        theta = xi_bias[11] # theta based on Gamma3
 
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
@@ -1158,9 +1219,9 @@ class PowerSpectrum1LoopLPT:
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk4 = get_pk(self._k, jnp.stack([k, pk_ells[2]], axis=0), kmin=self._kmin, kmax=self._kmax)
 
-        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(0, 0, pk0))
-        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q), -self.get_xi_ln(2, 0, pk2))
-        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(4, 0, pk4))
+        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q[0]), self.get_xi_ln(0, 0, pk0))
+        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q[2]), -self.get_xi_ln(2, 0, pk2))
+        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q[4]), self.get_xi_ln(4, 0, pk4))
 
         xi_ells = jnp.stack([xi0, xi2, xi4], axis=0)
         return xi_ells
