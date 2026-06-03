@@ -123,9 +123,9 @@ def get_hankel_pld_backward(nu_back, fx, x, y, u_m_pld, n_pad, x_high, window, w
                              pad_mode='zero-pad', damp_kind='exp', damp_power=6.0):
     """Backward Hankel (l=0) with PLD decomposition of the integrand F(q).
 
-    Decomposes F(q) in power-law modes q^{\nu_back+i*\eta}; the q^3 integration-measure
-    factor is absorbed analytically into u_m_pld = exp(lnxy)^{-i*\eta} * g_0(\nu_back+3+i*\eta).
-    Convergence strip: -3 < \nu_back < -1.
+    Decomposes F(q) in power-law modes q^{nu_back+i*eta}; the q^3 integration-measure
+    factor is absorbed analytically into u_m_pld = exp(lnxy)^{-i*eta} * g_0(nu_back+3+i*eta).
+    Convergence strip: -3 < nu_back < -1.
     """
     fx_pad = pad(fx, n_pad, mode=pad_mode)
     fx_pad = fx_pad * get_high_x_damp(x, x_high, damp_kind, damp_power)
