@@ -785,8 +785,8 @@ class PowerSpectrum1LoopEPT:
         pkmu = jnp.sum(terms, axis=0)  # (nk, nmu)
 
         # Hankel method computes only terms after subtraction of k->0 limit
-        if not self.subtract_k0_limit:
-            pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias)
+        if self.subtract_k0_limit:
+            pkmu = pkmu - self._get_pkmu_22_k0_limit(pk, bias)
         return pkmu  # (nk, nmu)
     
     def get_pkmu_13_hankel(self, xi_ln, pk, f, bias):
