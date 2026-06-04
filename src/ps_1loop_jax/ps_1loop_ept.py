@@ -500,15 +500,13 @@ class PowerSpectrum1LoopEPT:
 
         return pkmu
 
-    def get_pkmu_terms_22(self, p_q_1, p_q_2, p_q_3):
+    def get_pkmu_terms_22(self, p_q_1, p_q_2):
         """Compute per-block P22 terms on the internal k-grid.
 
         All three nu groups use nu > -3/2, so the FFTLog naturally evaluates I(k)-I(0)
         via analytic continuation — no explicit DC subtraction is needed.
         p_q_1: PLD data at nu=-0.3 (nu1 group)
         p_q_2: PLD data at nu=-1.0 (nu2 group, bias-operator blocks)
-        p_q_3: PLD data at nu=-1.0 (nu3 group, b2²-only block)
-
         Per-k cost: O(N^2) for each term.  XLA compiles the
         einsum to batched BLAS GEMM -- faster than an IDFT approach for N=512 on CPU.
         """
@@ -516,7 +514,7 @@ class PowerSpectrum1LoopEPT:
 
         diag22_1 = jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu1, p_q_1, p_q_1)
         diag22_2 = jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu2, p_q_2, p_q_2)
-        diag22_3 = jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu3, p_q_3, p_q_3)
+        diag22_3 = jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu3, p_q_2, p_q_2)
         diag22 = jnp.zeros((self.matrices_22.shape[0], self._nfft), dtype=diag22_1.dtype)
         diag22 = diag22.at[self._idx_22_nu1].set(diag22_1)
         diag22 = diag22.at[self._idx_22_nu2].set(diag22_2)
@@ -526,7 +524,6 @@ class PowerSpectrum1LoopEPT:
     
     def get_pkmu_terms_13(self, p_q_1, p_q_2, pk):
         """Compute per-block P13 terms on the internal k-grid.
-
         Per-k cost: O(N) for each term.
         """
         k = self._k
@@ -593,14 +590,14 @@ class PowerSpectrum1LoopEPT:
     def get_pkmu_1loop_pld(self, pk, f, bias):
         # nu=-0.3: P22 nu1 group and P13 nu1 group
         p_q_1, _, _ = get_decomp_data(-0.3, self._k, pk)
-        # nu=-1.6: P13 nu2 group only (P13 convergence strip requires this nu)
-        p_q_2, _, _ = get_decomp_data(-1.6, self._k, pk)
         # nu=-1.0: P22 nu2 (bias-operator blocks) and nu3 (b2^2-only) groups.
         # nu > -3/2 -> FFTLog evaluates I(k)-I(0) for all blocks via analytic continuation.
-        p_q_3, _, _ = get_decomp_data(self._nu_ept_b2sq, self._k, pk)
+        p_q_2, _, _ = get_decomp_data(self._nu_ept_b2sq, self._k, pk)
+        # nu=-1.6: P13 nu2 group only (P13 convergence strip requires this nu)
+        p_q_3, _, _ = get_decomp_data(-1.6, self._k, pk)
 
-        pkmu_terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_3, p_q_3)
-        pkmu_terms_13 = self.get_pkmu_terms_13(p_q_1, p_q_2, pk)
+        pkmu_terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
+        pkmu_terms_13 = self.get_pkmu_terms_13(p_q_1, p_q_3, pk)
 
         pkmu_22 = self.get_pkmu_22_pld(pkmu_terms_22, pk, f, bias)
         pkmu_13 = self.get_pkmu_13_pld(pkmu_terms_13, pk, f, bias)
