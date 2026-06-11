@@ -5,31 +5,40 @@ import re
 
 from . import spline
 
+_NU_GROUP_MATTER_TAG = -0.3
+_NU_GROUP_BIAS_TAG = -1.6
+
 kernel_to_decomp_dict = {
     # matter
-    '22_dd': -0.3,
-    '13_dd': -0.3,
+    '22_dd': _NU_GROUP_MATTER_TAG,
+    '13_dd': _NU_GROUP_MATTER_TAG,
     # biased tracer
-    'I_d2': -1.6,
-    'I_G2': -1.6,
-    'I_d2_d2': -1.6,
-    'I_d2_G2': -1.6,
-    'I_G2_G2': -1.6,
-    'F_G2': -1.6,
+    'I_d2': _NU_GROUP_BIAS_TAG,
+    'I_G2': _NU_GROUP_BIAS_TAG,
+    'I_d2_d2': _NU_GROUP_BIAS_TAG,
+    'I_d2_G2': _NU_GROUP_BIAS_TAG,
+    'I_G2_G2': _NU_GROUP_BIAS_TAG,
+    'F_G2': _NU_GROUP_BIAS_TAG,
 }
 
-def get_nu_from_name(name):
+def get_nu_group_tag_from_name(name):
+    """Return the matrix-path grouping tag for a PT kernel name.
+
+    This value is used to assign terms to matter-like and bias-like matrix
+    groups. It is not necessarily the FFTLog bias used to build the matrix;
+    EPT P22 bias groups are currently recomputed with a nu_override.
+    """
     if name in kernel_to_decomp_dict.keys():
         return kernel_to_decomp_dict[name]
     else:
         degree_dict = get_degree_dict(name)
         if 'b2' in degree_dict.keys():
-            if degree_dict['b2'] > 0: return -1.6
+            if degree_dict['b2'] > 0: return _NU_GROUP_BIAS_TAG
         if 'bG2' in degree_dict.keys():
-            if degree_dict['bG2'] > 0: return -1.6
+            if degree_dict['bG2'] > 0: return _NU_GROUP_BIAS_TAG
         if 'bGamma3' in degree_dict.keys():
-            if degree_dict['bGamma3'] > 0: return -1.6
-        return -0.3
+            if degree_dict['bGamma3'] > 0: return _NU_GROUP_BIAS_TAG
+        return _NU_GROUP_MATTER_TAG
 
 def get_degree_dict(name):
     degree_name = re.split('=', name)[-1]
