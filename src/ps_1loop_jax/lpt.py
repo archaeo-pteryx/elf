@@ -15,7 +15,7 @@ from .utils_lpt import get_G00s, get_Gs
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 
 
-class PowerSpectrum1LoopLPT:
+class LPT:
 
     def __init__(self,
                  kmin_fft=1e-5,

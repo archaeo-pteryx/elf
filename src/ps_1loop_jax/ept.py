@@ -20,7 +20,7 @@ from . import ir_resum
 from . import spline
 
 
-class PowerSpectrum1LoopEPT:
+class EPT:
 
     def __init__(self,
                  do_irres=True,
