@@ -15,6 +15,7 @@ from . import pt_matrix
 from . import utils_loop
 from .utils_loop import get_pk, get_pk_int, get_pk_int2
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
+from .eft_terms import Counterterms, stochasticity
 
 from . import ir_resum
 from . import spline
@@ -28,6 +29,7 @@ class PowerSpectrum1LoopEPT:
                  r_bao=110.,
                  k_IR=0.2,
                  irres_method='DST',
+                 counterterm_base=None,
                  subtract_k0_limit=True,
                  method='hybrid',
                  kmin_fft=1e-5,
@@ -41,6 +43,7 @@ class PowerSpectrum1LoopEPT:
                  hankel_npad_factor=0.5,
                  hankel_forward_pad_mode='power-law',
                  hankel_backward_pad_mode='smooth-zero-pad',
+                 hankel_p22_final_mode='block',
                  ngauss=4,
                  ):
 
@@ -52,6 +55,11 @@ class PowerSpectrum1LoopEPT:
         self.r_bao = r_bao
         self.k_IR = k_IR
         self.irres_method = irres_method
+        if counterterm_base is None:
+            counterterm_base = 'linear_ir_resum' if do_irres else 'linear'
+        self._counterterms = Counterterms(counterterm_base)
+        if self._counterterms.base == 'zeldovich':
+            raise ValueError("PowerSpectrum1LoopEPT does not support counterterm_base='zeldovich'")
 
         # --- computation mode ---
         self.subtract_k0_limit = subtract_k0_limit
@@ -68,6 +76,17 @@ class PowerSpectrum1LoopEPT:
         # Backward FFTLog bias for the P22 residual kernel j_0(x)-1.
         # This residual kernel has a different convergence strip from ordinary j_\ell.
         self._hankel_p22_residual_backward_nu = -1.7
+        # High-k handling of the m=0 P22 blocks B(k)-B(0).  
+        # Two FFTLog estimates of the same quantity have complementary accuracy:
+        #   * the j_0-1 residual kernel is accurate where |B(k)-B(0)| is small (low k): 
+        #     its absolute error is tiny there but grows steeply at high k (the kernel's non-decaying -1 tail makes the transform sensitive to the full-range integral B(0));
+        #   * the ordinary j_0 transform has a near-constant (small) absolute error, 
+        #     so reconstructing B(k)-B(0) as D(k)-D(0) is accurate where |B(k)-B(0)| is comparable to |B(0)| (high k) but loses precision where it is tiny (low k).
+        # We blend the two per block on the DIMENSIONLESS, cosmology-independent
+        # ratio r = |B(k)-B(0)|/|B(0)| (estimated from the direct transform):
+        #   w(r) = 1/(1+(r/rstar)^p),  w->1 (residual) as r->0, w->0 (direct) as r->O(1).  
+        self._p22_m0_blend_rstar = 0.03
+        self._p22_m0_blend_pow = 2.0
         if hankel_forward_mode not in ('direct', 'pld'):
             raise ValueError("hankel_forward_mode must be 'direct' or 'pld'")
         self._hankel_forward_mode = hankel_forward_mode
@@ -79,8 +98,11 @@ class PowerSpectrum1LoopEPT:
             raise ValueError("hankel_forward_pad_mode must be 'power-law', 'zero-pad', or 'smooth-zero-pad'")
         if hankel_backward_pad_mode not in ('power-law', 'zero-pad', 'smooth-zero-pad'):
             raise ValueError("hankel_backward_pad_mode must be 'power-law', 'zero-pad', or 'smooth-zero-pad'")
+        if hankel_p22_final_mode not in ('block', 'matrix'):
+            raise ValueError("hankel_p22_final_mode must be 'block' or 'matrix'")
         self._hankel_forward_pad_mode = hankel_forward_pad_mode
         self._hankel_backward_pad_mode = hankel_backward_pad_mode
+        self._hankel_p22_final_mode = hankel_p22_final_mode
         # --- internal grids ---
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
@@ -90,12 +112,22 @@ class PowerSpectrum1LoopEPT:
         # \nu=-1.0 is outside the strip for all.
         # All bias blocks (mixed and b2^2-only) share the same nu, so they form one group.
         self._nu_ept_22_bias_ac = -1.0
-        self._pld_xpow_nu1 = self._get_pld_xpow(-0.3) if self.method == 'hybrid' else None
-        self._pld_xpow_nu2 = self._get_pld_xpow(-1.6) if self.method == 'hybrid' else None
+        need_hybrid_pld = self.method == 'hybrid'
+        need_p22_matrix_backend = self._hankel_p22_final_mode == 'matrix'
+        self._pld_xpow_nu1 = self._get_pld_xpow(-0.3) if (need_hybrid_pld or need_p22_matrix_backend) else None
+        self._pld_xpow_nu2 = self._get_pld_xpow(-1.6) if need_hybrid_pld else None
+        self._pld_xpow_22_bias_ac = (
+            self._get_pld_xpow(self._nu_ept_22_bias_ac) if need_p22_matrix_backend else None
+        )
 
         self._initialize_loop_coeff()
-        if self.method != 'hankel':
+        if self.method != 'hankel' or self._hankel_p22_final_mode == 'matrix':
             self._initialize_loop_matrix()
+
+    @property
+    def counterterm_base(self):
+        """Counterterm base fixed at construction time."""
+        return self._counterterms.base
 
     def _get_pld_xpow(self, nu):
         dln = jnp.log(self._k[1] / self._k[0])
@@ -334,10 +366,13 @@ class PowerSpectrum1LoopEPT:
             pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
             pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias)
 
-            # counterterm
-            pk = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk, f, bias, ctr)
+            # Counterterms use the constructor-selected base spectrum.
+            if self.counterterm_base == 'linear':
+                pk_ctr_base = (pk_nw + pk_w)[:, None]
+            else:
+                pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
             pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -346,9 +381,15 @@ class PowerSpectrum1LoopEPT:
             pkmu_1loop = self.get_pkmu_1loop(pk, f, bias)
             pkmu = pkmu_tree + pkmu_1loop
 
-            # counterterm
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk[:, None], f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk[:, None], f, bias, ctr)
+            # Counterterms may request IR-resummed linear P even when the perturbative body itself is not IR resummed.
+            if self.counterterm_base == 'linear_ir_resum':
+                pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
+                pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
+                pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
+            else:
+                pk_ctr_base = pk[:, None]
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         pkmu_stoch = self.get_pkmu_stoch(self._k, self._mu, params)
@@ -629,30 +670,61 @@ class PowerSpectrum1LoopEPT:
         pk_data = jnp.stack([self._k, pk], axis=0)
         return b2**2 / 2. * get_pk_int2(pk_data)
 
+    def _get_coeff_matrix_22(self, f, bias):
+        b1, b2, bG2, _ = bias
+
+        def compute_coeffs(entry):
+            mu_pow  = entry[:, 0].astype(jnp.int32)
+            f_pow   = entry[:, 1].astype(jnp.int32)
+            b1_pow  = entry[:, 2].astype(jnp.int32)
+            b2_pow  = entry[:, 3].astype(jnp.int32)
+            bG2_pow = entry[:, 4].astype(jnp.int32)
+            coeff   = entry[:, 6]
+
+            coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)
+            mu_terms = self._mu[None, :] ** mu_pow[:, None]
+            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)
+
+        return jax.vmap(compute_coeffs)(self.coeff_info_22)
+
+    def get_pkmu_22_matrix_backend(self, pk, f, bias):
+        """Evaluate P22 with the PLD/matrix backend from a Hankel or hybrid run."""
+        p_q_1 = self._get_decomp_pq_from_xpow(-0.3, self._pld_xpow_nu1, pk)
+        p_q_2 = self._get_decomp_pq_from_xpow(self._nu_ept_22_bias_ac, self._pld_xpow_22_bias_ac, pk)
+        terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
+        return self.get_pkmu_22_pld(terms_22, pk, f, bias)
+
     def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
-        b1, b2, bG2, bGamma3 = bias
+        if self._hankel_p22_final_mode == 'matrix':
+            return self.get_pkmu_22_matrix_backend(pk, f, bias)
 
         pk_lnm_parts = {}
 
-        residual_sources = []
+        residual_sources = []   # m=0 sources on the j0-1 residual q-grid
+        m0_direct_sources = []  # same m=0 sources on the ordinary q[0] grid
         residual_indices = []
         standard_sources = []
         standard_indices = []
         for i, (l, n, m) in enumerate(self._lnm_list_22_static):
             xi = xi_ln[l, n]
             if m == 0:
-                # Only m=0 blocks contain a genuine k->0 constant.
-                # Use j0-1 so the FFTLog part evaluates B_i(k)-B_i(0).
-                source = spline.interp1d(
+                # m=0 blocks contain a genuine k->0 constant, so the quantity used in the sum is the residual B_i(k)-B_i(0).  
+                # We evaluate it two ways and combine: 
+                # the j0-1 kernel (accurate at low k) and the ordinary j0 transform minus its DC (accurate at high k).
+                residual_sources.append(4 * jnp.pi * spline.interp1d(
                     jnp.log(self._q_p22_residual),
                     jnp.log(self._q[l]),
                     xi * xi,
-                )
-                residual_sources.append(4 * jnp.pi * source)
+                ))
+                m0_direct_sources.append(4 * jnp.pi * spline.interp1d(
+                    jnp.log(self._q[0]),
+                    jnp.log(self._q[l]),
+                    xi * xi,
+                ))
                 residual_indices.append(i)
             else:
-                # For m>0 the desired block is k^m B_i(k).  Replacing j0 by
-                # j0-1 would incorrectly remove the finite k^m B_i(0) term.
+                # For m>0 the desired block is k^m B_i(k).  
+                # Replacing j0 by j0-1 would incorrectly remove the finite k^m B_i(0) term.
                 source = spline.interp1d(
                     jnp.log(self._q[0]),
                     jnp.log(self._q[l]),
@@ -662,11 +734,33 @@ class PowerSpectrum1LoopEPT:
                 standard_indices.append(i)
 
         if residual_sources:
+            # Low-k accurate form: B_i(k)-B_i(0) from the j0-1 residual kernel.
             residual_blocks = self.get_pk_ln_p22_residual_batched(
                 jnp.stack(residual_sources, axis=0)
             )
+            # High-k accurate form: full B_i(k) from the ordinary j0 transform,
+            # then subtract its own k->0 value B_i(0) (= first grid point).
+            direct_blocks = hankel.get_hankel_batched(
+                self._nu_hankel,
+                jnp.stack(m0_direct_sources, axis=0) * self._q[0][None, :]**3,
+                self._q_padded[0],
+                self._k_padded,
+                self._u_m[0],
+                self._npad,
+                self._w_m,
+                self._hankel_backward_pad_mode,
+            )
+            direct_residual = direct_blocks - direct_blocks[:, :1]
+            # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the direct transform); blend residual (low r) and direct (high r).  See the constructor comment.
+            denom = jnp.maximum(
+                jnp.abs(direct_blocks[:, :1]),
+                jnp.finfo(direct_blocks.real.dtype).tiny,
+            )
+            r_ratio = jnp.abs(direct_residual) / denom
+            w = 1.0 / (1.0 + (r_ratio / self._p22_m0_blend_rstar) ** self._p22_m0_blend_pow)
+            blended = w * residual_blocks + (1.0 - w) * direct_residual
             for j, i in enumerate(residual_indices):
-                pk_lnm_parts[i] = residual_blocks[j]
+                pk_lnm_parts[i] = blended[j]
 
         if standard_sources:
             standard_blocks = hankel.get_hankel_batched(
@@ -688,25 +782,13 @@ class PowerSpectrum1LoopEPT:
             axis=0,
         )
 
-        def compute_coeffs(entry):
-            mu_pow  = entry[:, 0].astype(jnp.int32)
-            f_pow   = entry[:, 1].astype(jnp.int32)
-            b1_pow  = entry[:, 2].astype(jnp.int32)
-            b2_pow  = entry[:, 3].astype(jnp.int32)
-            bG2_pow = entry[:, 4].astype(jnp.int32)
-            coeff   = entry[:, 6]
-
-            coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)  # (max_len,)
-
-            mu_terms = self._mu[None, :] ** mu_pow[:, None]  # (max_len, nmu)
-            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)  # (nmu,)
-
-        coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)  # (nterms, nmu)
+        coeff_matrix = self._get_coeff_matrix_22(f, bias)  # (nterms, nmu)
 
         terms = pk_lnm[:, :, None] * coeff_matrix[:, None, :]
         pkmu = jnp.sum(terms, axis=0)  # (nk, nmu)
-        
-        # m=0 blocks are residualized as B_i(k)-B_i(0). Only the physical b2^2 DC is restored for the unsubtracted spectrum.
+
+        # The m=0 blocks above are the residualized B_i(k)-B_i(0).  
+        # For the unsubtracted spectrum, restore the only physical k->0 constant, the b2^2 (delta^2 . delta^2) DC = b2^2/2 * k0_pk.
         if not self.subtract_k0_limit:
             pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias)
         return pkmu  # (nk, nmu)
@@ -785,43 +867,20 @@ class PowerSpectrum1LoopEPT:
         return pk_nw, pk_w, damp_fac
     
     def get_pkmu_ctr_k2(self, pk, f, ctr):
-        k = self._k
-        mu = self._mu
+        return self._counterterms.leading(
+            self._k[:, None], self._mu[None, :], f, ctr, pk
+        )
 
-        c0, c2, c4, _ = ctr
-        ctr_k2_mu = c0 + c2 * f * mu**2 + c4 * f**2 * mu**4
-        ctr_k2_fac = - 2 * jnp.outer(k**2, ctr_k2_mu)
-
-        pkmu_ctr_k2 = ctr_k2_fac * pk
-        return pkmu_ctr_k2
-    
     def get_pkmu_ctr_k4(self, pk, f, bias, ctr):
-        k = self._k
-        mu = self._mu
-
         b1 = bias[0]
-        cfog = ctr[3]
-
-        ctr_k4_mu = cfog * f**4 * mu**4 * (b1 + f * mu**2)**2
-        ctr_k4_fac = - jnp.outer(k**4, ctr_k4_mu)
-
-        pkmu_ctr_k4 = ctr_k4_fac * pk
-        return pkmu_ctr_k4
+        mu = self._mu[None, :]
+        tree_pk = (b1 + f * mu**2)**2 * pk
+        return self._counterterms.nlo(self._k[:, None], mu, f, ctr, tree_pk)
 
     def get_pkmu_stoch(self, k, mu, params):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
-
-        P_shot, a0, a2 = params.stoch
-        k_nl = params.k_nl
-        ndens = params.ndens
-
-        pkmu = P_shot \
-            + a0 * jnp.outer((k / k_nl)**2, mu**0) \
-            + a2 * jnp.outer((k / k_nl)**2, mu**2)
-        pkmu = (1. / ndens) * pkmu
-
-        return pkmu
+        return stochasticity(k[:, None], mu[None, :], params.stoch, params.k_nl, params.ndens)
     
     @partial(jit, static_argnames=['self'])
     def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0):

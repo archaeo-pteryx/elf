@@ -24,8 +24,8 @@ kernel_to_decomp_dict = {
 def get_nu_group_tag_from_name(name):
     """Return the matrix-path grouping tag for a PT kernel name.
 
-    This value is used to assign terms to matter-like and bias-like matrix
-    groups. It is not necessarily the FFTLog bias used to build the matrix;
+    This value is used to assign terms to matter-like and bias-like matrix groups. 
+    It is not necessarily the FFTLog bias used to build the matrix;
     EPT P22 bias groups are currently recomputed with a nu_override.
     """
     if name in kernel_to_decomp_dict.keys():
@@ -69,6 +69,20 @@ def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
     return res
 
 def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
+    """Pad ``(x, y)`` by endpoint power laws on a logarithmic grid.
+
+    The returned arrays always contain ``num_extrap`` points on either side of the input.  
+    Keeping this size static is important when the function is traced by JAX.  
+    ``xmin`` and ``xmax`` specify how far the padding should reach when they lie outside the input interval; 
+    when a requested bound is already inside the interval, one native endpoint spacing is used instead.
+
+    ``x`` must be positive and strictly increasing.  A positive endpoint of ``y`` is extrapolated with the logarithmic slope of the adjacent pair when their ratio is positive; 
+    otherwise the endpoint value is held constant.
+    A non-positive endpoint is padded with zeros because its logarithm does not define a real power-law continuation.
+    """
+    if num_extrap < 1:
+        raise ValueError("num_extrap must be a positive integer")
+
     x_dtype = x.dtype
     y_dtype = y.dtype
 
@@ -80,6 +94,14 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
 
     num_low  = (jnp.log(x[0] / xmin) / dlnx_low).astype(jnp.int32) + 1
     num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(jnp.int32) + 1
+
+    # The output shape is deliberately static, so padding is also added when the requested interval is narrower than the data interval.  
+    # In that case the raw span above is zero or negative.  
+    # Clamp it to one native log-spacing; 
+    # otherwise x_low/x_high would run *into* the input interval (and x_high would be descending), violating the sorted-grid contract of spline.interp1d/searchsorted.
+    one = jnp.asarray(1, dtype=jnp.int32)
+    num_low = jnp.maximum(num_low, one)
+    num_high = jnp.maximum(num_high, one)
 
     fac_low  = num_low.astype(x_dtype)  / jnp.asarray(num_extrap, x_dtype)
     fac_high = num_high.astype(x_dtype) / jnp.asarray(num_extrap, x_dtype)

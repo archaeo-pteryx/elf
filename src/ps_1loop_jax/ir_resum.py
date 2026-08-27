@@ -117,8 +117,8 @@ def _remove_wiggle_dst(kh, pk, n_min=140, n_max=200):
     harms_odd_sd  = jnp.concatenate([harms_odd[:n_min], harms_odd[n_max:]], axis=0)
     harms_even_sd = jnp.concatenate([harms_even[:n_min], harms_even[n_max:]], axis=0)
 
-    # Only the removed BAO band needs interpolation; outside it, evaluating the
-    # spline on original knots would reproduce the original coefficients.
+    # Only the removed BAO band needs interpolation; 
+    # outside it, evaluating the spline on original knots would reproduce the original coefficients.
     n_gap = n[n_min:n_max]
     harms_odd_gap = spline.interp1d(n_gap, n_sd, harms_odd_sd)
     harms_even_gap = spline.interp1d(n_gap, n_sd, harms_even_sd)
