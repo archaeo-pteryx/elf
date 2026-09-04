@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from .utils_loop import get_log_extrap
+from .utils import get_log_extrap
 from . import spline
 
 

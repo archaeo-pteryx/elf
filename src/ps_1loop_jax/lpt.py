@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from . import hankel
 from . import spline
 
-from .utils_loop import get_pk, get_pk_int, get_pk_int2
+from .utils import get_pk, get_pk_int, get_pk_int2
 from .utils_lpt import get_lpt_moments, compute_V_mu
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 from . import ir_resum

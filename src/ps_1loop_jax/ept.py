@@ -12,8 +12,8 @@ from . import hankel
 
 from . import pt_coeff
 from . import pt_matrix
-from . import utils_loop
-from .utils_loop import get_pk, get_pk_int, get_pk_int2, eval_power_coeffs
+from . import utils
+from .utils import get_pk, get_pk_int, get_pk_int2, eval_power_coeffs
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 from .eft_terms import Counterterms, stochasticity
 
@@ -286,8 +286,8 @@ class EPT:
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         # nu group tags: matter (-0.3) vs bias (-1.6), used to assign index subsets.
-        nus_22 = [utils_loop.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_22]
-        nus_13 = [utils_loop.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_13]
+        nus_22 = [utils.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_22]
+        nus_13 = [utils.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_13]
 
         # bias P22 blocks must use nu=-1.0 (outside the convergence strip -3 < nu < -3/2)
         # so the FFTLog evaluates I(k)-I(0) via analytic continuation for every block.
@@ -314,7 +314,7 @@ class EPT:
         self.matrices_13_nu2 = self.matrices_13[self._idx_13_nu2]
 
         def get_degree_vector(name):
-            d = utils_loop.get_degree_dict(name)
+            d = utils.get_degree_dict(name)
             if name in self.pkmu_term_names_22:
                 return [d['mu'], d['f'], d['b1'], d['b2'], d['bG2'], 0]
             else:
@@ -339,7 +339,7 @@ class EPT:
         matrix = {}
 
         for name in names:
-            nu = nu_override.get(name, utils_loop.get_nu_group_tag_from_name(name))
+            nu = nu_override.get(name, utils.get_nu_group_tag_from_name(name))
 
             if '22' in name or 'I' in name:
                 nu_m = -0.5 * (nu + eta_m * 1j)
