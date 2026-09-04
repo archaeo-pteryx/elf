@@ -754,7 +754,7 @@ class LPT:
         pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
 
         # counterterm
-        pkmu_ctr = self._counterterms.leading(k_true, mu_true, f, params.ctr, pkmu_terms[-1])
+        pkmu_ctr = self._counterterms.leading(k_true, mu_true, f, params.ctr, params.ctr, pkmu_terms[-1])
         pkmu = pkmu + pkmu_ctr
 
         # stochasticity
@@ -855,7 +855,7 @@ class LPT:
         if self._counterterms.needs_kspace_base:
             base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params)
             pkmu = pkmu + self._counterterms.leading(
-                k_true, mu_true, f, params.ctr, base_pk
+                k_true, mu_true, f, params.ctr, params.ctr, base_pk
             )
         return pkmu / (alpha_perp**2 * alpha_para)
 

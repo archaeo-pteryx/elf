@@ -67,18 +67,32 @@ class Counterterms:
         return ctr[..., :4], ctr[..., 4]
 
     @staticmethod
-    def leading_shape(k, mu, f, leading_coefficients):
-        """Return the leading counterterm factor multiplying the base P(k, mu)."""
-        c0, c2, c4, c6 = leading_coefficients
+    def leading_shape(k, mu, f, leading_a, leading_b=None):
+        """Return the leading counterterm factor multiplying the base P(k, mu).
+
+        For a cross spectrum the two tracers contribute
+        ``<d1_a d_ctr_b> + <d_ctr_a d1_b>``, i.e. the coefficients add.  Each
+        counterterm term is linear in its coefficient, so this is the same
+        degree-1 symmetrisation ``(x_a + x_b) / 2`` that
+        :func:`~.utils.cross_bias_factor` applies to the bias monomials, and it
+        reduces exactly to the auto case when ``leading_b is None``.
+        """
+        if leading_b is None:
+            leading_b = leading_a
+        c0, c2, c4, c6 = 0.5 * (jnp.asarray(leading_a) + jnp.asarray(leading_b))
         mu2 = mu**2
         coefficient = c0 + c2 * f * mu2 + c4 * f**2 * mu2**2 + c6 * f**3 * mu2**3
         return -2.0 * k**2 * coefficient
 
     @classmethod
-    def leading(cls, k, mu, f, ctr, base_pk):
-        """Leading ``k^2`` counterterm from the full five-slot ``ctr`` vector."""
-        leading_coefficients, _ = cls.split_coefficients(ctr)
-        return cls.leading_shape(k, mu, f, leading_coefficients) * base_pk
+    def leading(cls, k, mu, f, ctr_a, ctr_b, base_pk):
+        """Leading ``k^2`` counterterm from the full five-slot ``ctr`` vectors.
+
+        Pass the same vector twice for an auto spectrum.
+        """
+        leading_a, _ = cls.split_coefficients(ctr_a)
+        leading_b, _ = cls.split_coefficients(ctr_b)
+        return cls.leading_shape(k, mu, f, leading_a, leading_b) * base_pk
 
     @staticmethod
     def nlo_shape(k, mu, f, c_nlo):
@@ -86,14 +100,18 @@ class Counterterms:
         return -c_nlo * k**4 * f**4 * mu**4
 
     @classmethod
-    def nlo(cls, k, mu, f, ctr, tree_pk):
-        """NLO ``k^4`` counterterm from the full five-slot ``ctr`` vector.
+    def nlo(cls, k, mu, f, ctr_a, ctr_b, tree_pk):
+        """NLO ``k^4`` counterterm from the full five-slot ``ctr`` vectors.
 
+        ``c_nlo`` is linear in the coefficient like the leading shape, so the
+        two tracers are combined by the same degree-1 symmetrisation; the
+        ``Z1_a Z1_b`` factor lives in ``tree_pk``, supplied by the caller.
         Only backends that supply a tree spectrum call this.  The LPT backend
         has no numerical tree integrand yet, so it leaves ``c_nlo`` unused.
         """
-        _, c_nlo = cls.split_coefficients(ctr)
-        return cls.nlo_shape(k, mu, f, c_nlo) * tree_pk
+        _, c_nlo_a = cls.split_coefficients(ctr_a)
+        _, c_nlo_b = cls.split_coefficients(ctr_b)
+        return cls.nlo_shape(k, mu, f, 0.5 * (c_nlo_a + c_nlo_b)) * tree_pk
 
 
 def stochasticity(k, mu, stochastic_coefficients):

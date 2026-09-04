@@ -686,18 +686,10 @@ class EPT:
         pk_data = jnp.stack([self._k, pk], axis=0)
         return (b2_a * b2_b) / 2. * get_pk_int2(pk_data)
 
-    def _get_coeff_matrix_22(self, f, bias):
-        b1, b2, bG2, _ = bias
-
+    def _get_coeff_matrix_22(self, f, bias_a, bias_b):
         def compute_coeffs(entry):
-            mu_pow  = entry[:, 0].astype(jnp.int32)
-            f_pow   = entry[:, 1].astype(jnp.int32)
-            b1_pow  = entry[:, 2].astype(jnp.int32)
-            b2_pow  = entry[:, 3].astype(jnp.int32)
-            bG2_pow = entry[:, 4].astype(jnp.int32)
-            coeff   = entry[:, 6]
-
-            coeffs = coeff * (f ** f_pow) * (b1 ** b1_pow) * (b2 ** b2_pow) * (bG2 ** bG2_pow)
+            mu_pow, coeffs = eval_power_coeffs(entry[:, :6], f, bias_a, bias_b)
+            coeffs = entry[:, 6] * coeffs
             mu_terms = self._mu[None, :] ** mu_pow[:, None]
             return jnp.sum(coeffs[:, None] * mu_terms, axis=0)
 
@@ -885,10 +877,10 @@ class EPT:
         tree_pk = (b1_a + f * mu**2) * (b1_b + f * mu**2) * pk
         return self._counterterms.nlo(self._k[:, None], mu, f, ctr_a, ctr_b, tree_pk)
 
-    def get_pkmu_stoch(self, k, mu, params):
+    def get_pkmu_stoch(self, k, mu, stoch):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
-        return stochasticity(k[:, None], mu[None, :], params.stoch)
+        return stochasticity(k[:, None], mu[None, :], stoch)
 
     def get_xi_ells(self, r, pk_data, params_a, params_b=None, stoch=None, alpha_perp=1.0, alpha_para=1.0):
         if params_b is None:
