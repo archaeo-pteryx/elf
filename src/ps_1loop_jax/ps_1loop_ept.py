@@ -31,7 +31,7 @@ class PowerSpectrum1LoopEPT:
                  irres_method='DST',
                  counterterm_base=None,
                  subtract_k0_limit=True,
-                 method='hybrid',
+                 method='hankel',
                  kmin_fft=1e-5,
                  kmax_fft=1e2,
                  nfft=512,
@@ -880,7 +880,7 @@ class PowerSpectrum1LoopEPT:
     def get_pkmu_stoch(self, k, mu, params):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
-        return stochasticity(k[:, None], mu[None, :], params.stoch, params.k_nl, params.ndens)
+        return stochasticity(k[:, None], mu[None, :], params.stoch)
     
     @partial(jit, static_argnames=['self'])
     def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0):

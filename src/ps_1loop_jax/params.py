@@ -66,8 +66,8 @@ class LPTParams:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        f, bias, ctr, stoch, nl, h = children
-        return cls(f, bias, ctr, stoch, nl, h)
+        f, bias, ctr, stoch, h = children
+        return cls(f, bias, ctr, stoch, h)
 
 def make_lpt_params(*, f, bias, ctr, stoch, h=None, dtype=None):
     f     = _as_param_array(f,     dtype)

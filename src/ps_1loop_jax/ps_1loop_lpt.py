@@ -754,15 +754,11 @@ class PowerSpectrum1LoopLPT:
         pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
 
         # counterterm
-        pkmu_ctr = self._counterterms.leading(
-            k_true, mu_true, f, params.ctr, pkmu_terms[-1]
-        )
+        pkmu_ctr = self._counterterms.leading(k_true, mu_true, f, params.ctr, pkmu_terms[-1])
         pkmu = pkmu + pkmu_ctr
 
         # stochasticity
-        pkmu_stoch = stochasticity(
-            k_true, mu_true, params.stoch, params.k_nl, params.ndens
-        )
+        pkmu_stoch = stochasticity(k_true, mu_true, params.stoch)
         pkmu = pkmu + pkmu_stoch
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
@@ -842,9 +838,7 @@ class PowerSpectrum1LoopLPT:
                 g = integrand.at[0, :].subtract(integrand[0, -1])
                 g = self._4pi_q3[None, :] * g
 
-                stoch = stochasticity(
-                    k_i, mu_j, params.stoch, params.k_nl, params.ndens
-                )
+                stoch = stochasticity(k_i, mu_j, params.stoch)
                 return g, i0, t, stoch
 
             gs, i0s, ts, stochs = jax.vmap(per_mu)(k_true_row, mu_true_row, V_all_mu)

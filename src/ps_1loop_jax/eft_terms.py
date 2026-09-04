@@ -96,14 +96,10 @@ class Counterterms:
         return cls.nlo_shape(k, mu, f, c_nlo) * tree_pk
 
 
-def stochasticity(k, mu, stochastic_coefficients, k_nl, ndens):
+def stochasticity(k, mu, stochastic_coefficients):
     """Canonical stochastic contribution used by both EPT and LPT.
-
-    Implements Eq. (35) of JAX_EFT_power_spectrum.pdf:
-
-      1/nbar * [Pshot + (a0 + a2*mu^2) * (k/kNL)^2].
 
     ``k`` and ``mu`` must be broadcast-compatible.  The result is additive and is not multiplied by any linear or Zel'dovich power spectrum.
     """
     p_shot, a0, a2 = stochastic_coefficients
-    return (p_shot + (a0 + a2 * mu**2) * (k / k_nl) ** 2) / ndens
+    return (p_shot + (a0 + a2 * mu**2) * k**2)
