@@ -370,8 +370,8 @@ class EPT:
                 pk_ctr_base = (pk_nw + pk_w)[:, None]
             else:
                 pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias, ctr)
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr_a, ctr_b)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr_a, ctr_b)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
             pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -382,13 +382,13 @@ class EPT:
 
             # Counterterms may request IR-resummed linear P even when the perturbative body itself is not IR resummed.
             if self.counterterm_base == 'linear_ir_resum':
-                pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
+                pk_nw_data = ir_resum.get_pk_nw(pk_data, params_a.h, method=self.irres_method)
                 pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
                 pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
             else:
                 pk_ctr_base = pk[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias, ctr)
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr_a, ctr_b)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr_a, ctr_b)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         pkmu_stoch = self.get_pkmu_stoch(self._k, self._mu, stoch)
@@ -703,18 +703,17 @@ class EPT:
 
         return jax.vmap(compute_coeffs)(self.coeff_info_22)
 
-    def get_pkmu_22_matrix_backend(self, pk, f, bias):
+    def get_pkmu_22_matrix_backend(self, pk, f, bias_a, bias_b):
         """Evaluate P22 with the PLD/matrix backend from a Hankel or hybrid run."""
         p_q_1 = self._get_decomp_pq_from_xpow(-0.3, self._pld_xpow_nu1, pk)
         p_q_2 = self._get_decomp_pq_from_xpow(self._nu_ept_22_bias_ac, self._pld_xpow_22_bias_ac, pk)
         terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
-        return self.get_pkmu_22_pld(terms_22, pk, f, bias)
+        return self.get_pkmu_22_pld(terms_22, pk, f, bias_a, bias_b)
 
-    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias):
+    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias_a, bias_b):
         if self._hankel_p22_final_mode == 'matrix':
-            return self.get_pkmu_22_matrix_backend(pk, f, bias)
-
-    def get_pkmu_22_hankel(self, xi_ln, pk, f, bias_a, bias_b):    
+            return self.get_pkmu_22_matrix_backend(pk, f, bias_a, bias_b)
+        
         pk_lnm_parts = {}
 
         residual_sources = []   # m=0 sources on the j0-1 residual q-grid
@@ -875,22 +874,29 @@ class EPT:
 
         return pk_nw, pk_w, damp_fac
     
-    def get_pkmu_ctr_k2(self, pk, f, ctr):
+    def get_pkmu_ctr_k2(self, pk, f, ctr_a, ctr_b):
         return self._counterterms.leading(
-            self._k[:, None], self._mu[None, :], f, ctr, pk
+            self._k[:, None], self._mu[None, :], f, ctr_a, ctr_b, pk
         )
 
-    def get_pkmu_ctr_k4(self, pk, f, bias, ctr):
-        b1 = bias[0]
+    def get_pkmu_ctr_k4(self, pk, f, bias_a, bias_b, ctr_a, ctr_b):
+        b1_a, b1_b = bias_a[0], bias_b[0]
         mu = self._mu[None, :]
-        tree_pk = (b1 + f * mu**2)**2 * pk
-        return self._counterterms.nlo(self._k[:, None], mu, f, ctr, tree_pk)
+        tree_pk = (b1_a + f * mu**2) * (b1_b + f * mu**2) * pk
+        return self._counterterms.nlo(self._k[:, None], mu, f, ctr_a, ctr_b, tree_pk)
 
     def get_pkmu_stoch(self, k, mu, params):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
         return stochasticity(k[:, None], mu[None, :], params.stoch)
-    
+
+    def get_xi_ells(self, r, pk_data, params_a, params_b=None, stoch=None, alpha_perp=1.0, alpha_para=1.0):
+        if params_b is None:
+            params_b = params_a
+        if stoch is None:
+            stoch = params_a.stoch
+        return self._get_xi_ells_core(r, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
+        
     @partial(jit, static_argnames=['self'])
     def _get_xi_ells_core(self, r, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para):
         r = jnp.atleast_1d(r)
