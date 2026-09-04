@@ -5,6 +5,13 @@ from jax.tree_util import register_pytree_node_class
 
 from .eft_terms import N_COUNTERTERM_COEFFICIENTS
 
+def _as_param_array(value, dtype):
+    """Convert to a JAX array, defaulting to the ambient precision.
+
+    ``dtype=None`` means "follow ``jax_enable_x64``", which is what this package runs in.  
+    Forcing float32 here would silently round every nuisance parameter to ~1e-8 relative accuracy and show up in derivatives.
+    """
+    return jnp.asarray(value) if dtype is None else jnp.array(value, dtype)
 
 def _check_ctr_layout(ctr):
     """Reject a counterterm vector that is not in the shared five-slot layout."""
@@ -14,7 +21,6 @@ def _check_ctr_layout(ctr):
             f"{jnp.shape(ctr)}"
         )
 
-
 @register_pytree_node_class
 @dataclass(frozen=True)
 class EPTParams:
@@ -22,42 +28,27 @@ class EPTParams:
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
     ctr:   jnp.ndarray  # shape (5,)   [c0, c2, c4, c6, c_nlo]  (shared layout)
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    nl:    jnp.ndarray  # shape (2,)   [k_nl, ndens]
 
     def tree_flatten(self):
-        return (self.cosmo, self.bias, self.ctr, self.stoch, self.nl), None
+        return (self.cosmo, self.bias, self.ctr, self.stoch), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        cosmo, bias, ctr, stoch, nl = children
-        return cls(cosmo, bias, ctr, stoch, nl)
+        cosmo, bias, ctr, stoch = children
+        return cls(cosmo, bias, ctr, stoch)
     
     @property
     def f(self):     return self.cosmo[0]
     @property
     def h(self):     return self.cosmo[1]
-    @property
-    def k_nl(self):  return self.nl[0]
-    @property
-    def ndens(self): return self.nl[1]
 
-def _as_param_array(value, dtype):
-    """Convert to a JAX array, defaulting to the ambient precision.
-
-    ``dtype=None`` means "follow ``jax_enable_x64``", which is what this package runs in.  
-    Forcing float32 here would silently round every nuisance parameter to ~1e-8 relative accuracy and show up in derivatives.
-    """
-    return jnp.asarray(value) if dtype is None else jnp.array(value, dtype)
-
-
-def make_ept_params(*, f, h, bias, ctr, stoch, k_nl, ndens, dtype=None):
+def make_ept_params(*, f, h, bias, ctr, stoch, dtype=None):
     cosmo = _as_param_array([f, h], dtype)
     bias  = _as_param_array(bias,  dtype)
     ctr   = _as_param_array(ctr,   dtype)
     stoch = _as_param_array(stoch, dtype)
-    nl    = _as_param_array([k_nl, ndens], dtype)
     _check_ctr_layout(ctr)
-    return EPTParams(cosmo, bias, ctr, stoch, nl)
+    return EPTParams(cosmo, bias, ctr, stoch)
 
 @register_pytree_node_class
 @dataclass(frozen=True)
@@ -68,29 +59,21 @@ class LPTParams:
     # The k^4 FoG operator has no LPT tree integrand in this package yet, so ``c_nlo`` is accepted for layout compatibility but not evaluated.
     ctr:   jnp.ndarray  # shape (5,)   [cL0, cL2, cL4, cL6, c_nlo]
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    nl:    jnp.ndarray  # shape (2,) [k_nl, ndens]
     h:     Optional[jnp.ndarray] = None
 
     def tree_flatten(self):
-        return (self.f, self.bias, self.ctr, self.stoch, self.nl, self.h), None
+        return (self.f, self.bias, self.ctr, self.stoch, self.h), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         f, bias, ctr, stoch, nl, h = children
         return cls(f, bias, ctr, stoch, nl, h)
 
-    @property
-    def k_nl(self):  return self.nl[0]
-
-    @property
-    def ndens(self): return self.nl[1]
-
-def make_lpt_params(*, f, bias, ctr, stoch, k_nl, ndens, h=None, dtype=None):
+def make_lpt_params(*, f, bias, ctr, stoch, h=None, dtype=None):
     f     = _as_param_array(f,     dtype)
     bias  = _as_param_array(bias,  dtype)
     ctr   = _as_param_array(ctr,   dtype)
     stoch = _as_param_array(stoch, dtype)
     h = None if h is None else _as_param_array(h, dtype)
-    nl = _as_param_array([k_nl, ndens], dtype)
     _check_ctr_layout(ctr)
-    return LPTParams(f=f, bias=bias, ctr=ctr, stoch=stoch, nl=nl, h=h)
+    return LPTParams(f=f, bias=bias, ctr=ctr, stoch=stoch, h=h)
