@@ -17,7 +17,7 @@ from . import ir_resum
 from .eft_terms import Counterterms, stochasticity
 
 
-class PowerSpectrum1LoopLPT:
+class LPT:
 
     def __init__(self,
                  kmin_fft=1e-5,

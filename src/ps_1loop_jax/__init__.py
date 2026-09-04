@@ -1,2 +1,2 @@
-from .ps_1loop_ept import PowerSpectrum1LoopEPT
-from .ps_1loop_lpt import PowerSpectrum1LoopLPT
+from .ept import EPT
+from .lpt import LPT

@@ -8,19 +8,6 @@ from . import spline
 _NU_GROUP_MATTER_TAG = -0.3
 _NU_GROUP_BIAS_TAG = -1.6
 
-kernel_to_decomp_dict = {
-    # matter
-    '22_dd': _NU_GROUP_MATTER_TAG,
-    '13_dd': _NU_GROUP_MATTER_TAG,
-    # biased tracer
-    'I_d2': _NU_GROUP_BIAS_TAG,
-    'I_G2': _NU_GROUP_BIAS_TAG,
-    'I_d2_d2': _NU_GROUP_BIAS_TAG,
-    'I_d2_G2': _NU_GROUP_BIAS_TAG,
-    'I_G2_G2': _NU_GROUP_BIAS_TAG,
-    'F_G2': _NU_GROUP_BIAS_TAG,
-}
-
 def get_nu_group_tag_from_name(name):
     """Return the matrix-path grouping tag for a PT kernel name.
 
@@ -28,17 +15,14 @@ def get_nu_group_tag_from_name(name):
     It is not necessarily the FFTLog bias used to build the matrix;
     EPT P22 bias groups are currently recomputed with a nu_override.
     """
-    if name in kernel_to_decomp_dict.keys():
-        return kernel_to_decomp_dict[name]
-    else:
-        degree_dict = get_degree_dict(name)
-        if 'b2' in degree_dict.keys():
-            if degree_dict['b2'] > 0: return _NU_GROUP_BIAS_TAG
-        if 'bG2' in degree_dict.keys():
-            if degree_dict['bG2'] > 0: return _NU_GROUP_BIAS_TAG
-        if 'bGamma3' in degree_dict.keys():
-            if degree_dict['bGamma3'] > 0: return _NU_GROUP_BIAS_TAG
-        return _NU_GROUP_MATTER_TAG
+    degree_dict = get_degree_dict(name)
+    if 'b2' in degree_dict.keys():
+        if degree_dict['b2'] > 0: return _NU_GROUP_BIAS_TAG
+    if 'bG2' in degree_dict.keys():
+        if degree_dict['bG2'] > 0: return _NU_GROUP_BIAS_TAG
+    if 'bGamma3' in degree_dict.keys():
+        if degree_dict['bGamma3'] > 0: return _NU_GROUP_BIAS_TAG
+    return _NU_GROUP_MATTER_TAG
 
 def get_degree_dict(name):
     degree_name = re.split('=', name)[-1]
@@ -139,3 +123,54 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
     x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
     y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
     return x_extrap, y_extrap
+
+def cross_bias_factor(bias_pow, bias_a, bias_b):
+    """
+    bias_pow: (max_len, nbias)
+    bias_a, bias_b: (nbias,)
+    assumes total bias degree <= 2
+    """
+    deg = jnp.sum(bias_pow, axis=1)  # (max_len,)
+
+    # degree 0
+    fac0 = jnp.ones_like(deg, dtype=bias_a.dtype)
+
+    # degree 1: b_i -> (b_i^A + b_i^B)/2
+    lin_a = jnp.sum(bias_pow * bias_a[None, :], axis=1)
+    lin_b = jnp.sum(bias_pow * bias_b[None, :], axis=1)
+    fac1 = 0.5 * (lin_a + lin_b)
+
+    # degree 2
+    # case b_i^2 -> b_i^A b_i^B
+    same = jnp.sum((bias_pow == 2) * (bias_a * bias_b)[None, :], axis=1)
+
+    # case b_i b_j -> 1/2 (b_i^A b_j^B + b_i^B b_j^A)
+    outer_ab = bias_a[:, None] * bias_b[None, :]
+    outer_ba = bias_b[:, None] * bias_a[None, :]
+    sym_outer = 0.5 * (outer_ab + outer_ba)
+
+    # mask selects pairs i<j with pow_i=pow_j=1
+    pair_mask = (bias_pow[:, :, None] == 1) & (bias_pow[:, None, :] == 1)
+    upper = jnp.triu(jnp.ones((bias_a.size, bias_a.size), dtype=bool), k=1)
+    mixed = jnp.sum(pair_mask * upper[None, :, :] * sym_outer[None, :, :], axis=(1, 2))
+
+    fac2 = same + mixed
+
+    return jnp.where(deg == 0, fac0, jnp.where(deg == 1, fac1, fac2))
+
+def eval_power_coeffs(degrees, f, bias_a, bias_b):
+    """
+    degrees columns:
+    0: mu power
+    1: f power
+    2: b1 power
+    3: b2 power
+    4: bG2 power
+    5: bGamma3 power
+    """
+    mu_pow   = degrees[:, 0].astype(jnp.int32)
+    f_pow    = degrees[:, 1].astype(jnp.int32)
+    bias_pow = degrees[:, 2:].astype(jnp.int32)
+
+    coeffs = (f ** f_pow) * cross_bias_factor(bias_pow, bias_a, bias_b)
+    return mu_pow, coeffs
