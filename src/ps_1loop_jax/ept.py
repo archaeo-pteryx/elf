@@ -29,7 +29,7 @@ class EPT:
                  k_IR=0.2,
                  irres_method='DST',
                  counterterm_base=None,
-                 subtract_k0_limit=True,
+                 subtract_k0_limit=False,
                  method='hankel',
                  kmin_fft=1e-5,
                  kmax_fft=1e2,
@@ -893,7 +893,8 @@ class EPT:
     def _get_xi_ells_core(self, r, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para):
         r = jnp.atleast_1d(r)
 
-        k = jnp.geomspace(1e-3, 1, 128) # ad-hoc down-sampling of k
+        # This helper is an approximate configuration-space projection.
+        k = jnp.geomspace(max(self._kmin, 1e-4), min(self._kmax, 1.0), min(self._nfft, 128))
         pk_ells = self._get_pk_ells_core(k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
 
         pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
