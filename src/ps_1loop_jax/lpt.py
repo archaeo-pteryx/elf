@@ -10,11 +10,32 @@ import jax.numpy as jnp
 from . import hankel
 from . import spline
 
-from .utils import get_pk, get_pk_int, get_pk_int2
+from .utils import get_pk, get_pk_int, get_pk_int2, cross_bias_factor
 from .utils_lpt import get_lpt_moments, compute_V_mu
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 from . import ir_resum
 from .eft_terms import Counterterms, stochasticity
+
+
+# Bias monomials multiplying the 12 LPT term templates, in the order produced by
+# ``LPT._get_lpt_bias_factors``.  Columns are the powers of
+# (b1, b2, bG2, bGamma3).  Every monomial has total degree <= 2, which is the
+# regime ``cross_bias_factor`` covers, so the auto -> cross symmetrisation rule
+# is literally the same code path the EPT backend uses.
+_LPT_BIAS_DEGREES = jnp.array([
+    [0, 0, 0, 0],   # 1
+    [1, 0, 0, 0],   # b1
+    [2, 0, 0, 0],   # b1^2
+    [0, 1, 0, 0],   # b2
+    [1, 1, 0, 0],   # b1 b2
+    [0, 2, 0, 0],   # b2^2
+    [0, 0, 1, 0],   # bG2
+    [1, 0, 1, 0],   # b1 bG2
+    [0, 1, 1, 0],   # b2 bG2
+    [0, 0, 2, 0],   # bG2^2
+    [0, 0, 0, 1],   # bGamma3
+    [1, 0, 0, 1],   # b1 bGamma3
+], dtype=jnp.int32)
 
 
 class LPT:
@@ -738,14 +759,19 @@ class LPT:
         return self.get_pkmu_terms_on_grid_from_corrs(k, mu, corrs, f, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def combine_pkmu_terms(self, k, mu, pkmu_terms, params, alpha_perp=1.0, alpha_para=1.0):
+    def combine_pkmu_terms(self, k, mu, pkmu_terms, params_a, params_b=None, stoch=None,
+                           alpha_perp=1.0, alpha_para=1.0):
         if self._counterterms.needs_kspace_base:
             raise ValueError("combine_pkmu_terms currently accepts the fused Zel'dovich template only")
+        if params_b is None:
+            params_b = params_a
+        if stoch is None:
+            stoch = params_a.stoch
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        f = params.f
-        bias_facs = self._get_lpt_bias_factors(params.bias)
+        f = params_a.f
+        bias_facs = self._get_lpt_bias_factors(params_a.bias, params_b.bias)
 
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
@@ -754,11 +780,13 @@ class LPT:
         pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
 
         # counterterm
-        pkmu_ctr = self._counterterms.leading(k_true, mu_true, f, params.ctr, params.ctr, pkmu_terms[-1])
+        pkmu_ctr = self._counterterms.leading(
+            k_true, mu_true, f, params_a.ctr, params_b.ctr, pkmu_terms[-1]
+        )
         pkmu = pkmu + pkmu_ctr
 
         # stochasticity
-        pkmu_stoch = stochasticity(k_true, mu_true, params.stoch)
+        pkmu_stoch = stochasticity(k_true, mu_true, stoch)
         pkmu = pkmu + pkmu_stoch
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
@@ -794,8 +822,12 @@ class LPT:
         return pk_nw + jnp.exp(-k**2 * sigma2_s) * (pk - pk_nw)
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_from_corrs(self, k, mu, corrs, params, alpha_perp=1.0, alpha_para=1.0,
-                            pk_data=None):
+    def get_pkmu_from_corrs(self, k, mu, corrs, params_a, params_b=None, stoch=None,
+                            alpha_perp=1.0, alpha_para=1.0, pk_data=None):
+        if params_b is None:
+            params_b = params_a
+        if stoch is None:
+            stoch = params_a.stoch
         if self._counterterms.needs_kspace_base and pk_data is None:
             raise ValueError(
                 "pk_data is required when evaluating a linear-family counterterm from corrs"
@@ -804,10 +836,11 @@ class LPT:
         k = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        f = params.f
-        bias_facs = self._get_lpt_bias_factors(params.bias)
+        f = params_a.f
+        bias_facs = self._get_lpt_bias_factors(params_a.bias, params_b.bias)
         # The k^4 FoG slot has no LPT tree integrand in this package, so only the leading coefficients are consumed here.
-        ctr_leading, _ = Counterterms.split_coefficients(params.ctr)
+        ctr_leading_a, _ = Counterterms.split_coefficients(params_a.ctr)
+        ctr_leading_b, _ = Counterterms.split_coefficients(params_b.ctr)
         corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
@@ -828,7 +861,9 @@ class LPT:
                 ctr_shape = (
                     jnp.zeros_like(k_i)
                     if self._counterterms.needs_kspace_base
-                    else self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading)
+                    else self._counterterms.leading_shape(
+                        k_i, mu_j, f, ctr_leading_a, ctr_leading_b
+                    )
                 )
                 # Section 32 fast path: bias folded inside, never builds (13, L, nq).
                 integrand = self._get_lpt_bias_combined_integrand(
@@ -838,8 +873,8 @@ class LPT:
                 g = integrand.at[0, :].subtract(integrand[0, -1])
                 g = self._4pi_q3[None, :] * g
 
-                stoch = stochasticity(k_i, mu_j, params.stoch)
-                return g, i0, t, stoch
+                stoch_kmu = stochasticity(k_i, mu_j, stoch)
+                return g, i0, t, stoch_kmu
 
             gs, i0s, ts, stochs = jax.vmap(per_mu)(k_true_row, mu_true_row, V_all_mu)
 
@@ -853,35 +888,38 @@ class LPT:
 
         pkmu = jax.vmap(per_k)(k_true, mu_true)
         if self._counterterms.needs_kspace_base:
-            base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params)
+            base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params_a)
             pkmu = pkmu + self._counterterms.leading(
-                k_true, mu_true, f, params.ctr, params.ctr, base_pk
+                k_true, mu_true, f, params_a.ctr, params_b.ctr, base_pk
             )
         return pkmu / (alpha_perp**2 * alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_pkmu(self, k, mu, pk_data, params_a, params_b=None, stoch=None,
+                 alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pkmu_from_corrs(
-            k, mu, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
+            k, mu, corrs, params_a, params_b, stoch, alpha_perp, alpha_para, pk_data=pk_data
         )
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells_from_corrs(self, k, corrs, params, alpha_perp=1.0, alpha_para=1.0,
-                               pk_data=None):
+    def get_pk_ells_from_corrs(self, k, corrs, params_a, params_b=None, stoch=None,
+                               alpha_perp=1.0, alpha_para=1.0, pk_data=None):
         pkmu = self.get_pkmu_from_corrs(
-            k, self._mu_quad, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
+            k, self._mu_quad, corrs, params_a, params_b, stoch, alpha_perp, alpha_para,
+            pk_data=pk_data,
         )
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
         return pk_ells
 
-    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_pk_ells(self, k, pk_data, params_a, params_b=None, stoch=None,
+                    alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         """
         Legendre multipoles.
         """
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pk_ells_from_corrs(
-            k, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
+            k, corrs, params_a, params_b, stoch, alpha_perp, alpha_para, pk_data=pk_data
         )
 
     @partial(jit, static_argnames=['self'])
@@ -1071,18 +1109,30 @@ class LPT:
         corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
 
-    def _get_lpt_bias_factors(self, bias):
+    def _to_bG2_basis(self, bias):
+        """Map one tracer's bias vector onto the (b1, b2, bG2, bGamma3) basis.
+
+        Applied per tracer *before* the cross symmetrisation: the bs2 -> bG2
+        shift ``b2 -> b2 + 4/3 bs2`` is linear in a single tracer's parameters
+        and does not commute with the degree-2 symmetrisation.
+        """
         b1, b2, btidal, bGamma3 = bias
         if self.bias_basis == 'bs2':
-            b2_eff = b2 + (4.0 / 3.0) * btidal
-            bG2_eff = btidal
-        else:
-            b2_eff = b2
-            bG2_eff = btidal
-        return jnp.array([
-            1.0, b1, b1**2, b2_eff, b1*b2_eff, b2_eff**2,
-            bG2_eff, b1*bG2_eff, b2_eff*bG2_eff, bG2_eff**2, bGamma3, b1*bGamma3,
-        ])
+            b2 = b2 + (4.0 / 3.0) * btidal
+        return jnp.stack([b1, b2, btidal, bGamma3])
+
+    def _get_lpt_bias_factors(self, bias_a, bias_b=None):
+        """Bias monomials for the 12 LPT term templates.
+
+        ``bias_b=None`` reproduces the auto spectrum.  The cross case is handled
+        by :func:`~.utils.cross_bias_factor`, the helper the EPT backend also
+        uses, so a single rule maps auto -> cross in both backends.
+        """
+        if bias_b is None:
+            bias_b = bias_a
+        return cross_bias_factor(
+            _LPT_BIAS_DEGREES, self._to_bG2_basis(bias_a), self._to_bG2_basis(bias_b)
+        )
 
     def _get_U20_from_Ulin(self, U_lin):
         return -(6.0/7.0) * U_lin**2 / self._q
@@ -1094,18 +1144,18 @@ class LPT:
         )
         return (14.0/3.0) * V10 - (2.0/5.0) * d_q_delta
 
-    def _get_grid_pk_int(self, array):
-        return get_pk_int(jnp.stack([self._k, array], axis=0), kmin=self._kmin, kmax=self._kmax)
-
     @partial(jit, static_argnames=['self'])
-    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_xi_ells(self, r, pk_data, params_a, params_b=None, stoch=None,
+                    alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         r = jnp.atleast_1d(r)
 
         # This helper is an approximate configuration-space projection.
         # The final LPT multipoles are not numerically stable on the full FFT grid up to kmax_fft, 
         # so use a conservative spectrum grid and interpolate it back to self._k before the Hankel transform.
         k = jnp.geomspace(max(self._kmin, 1e-4), min(self._kmax, 1.0), min(self._nfft, 128))
-        pk_ells = self.get_pk_ells(k, pk_data, params, alpha_perp, alpha_para, k_IR)
+        pk_ells = self.get_pk_ells(
+            k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para, k_IR
+        )
 
         pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
