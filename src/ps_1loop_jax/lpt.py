@@ -426,9 +426,17 @@ class LPT:
         )
         return Kfac, K, Ksq, base, weights, moments
 
-    def _get_lpt_23_sub_integrands(
+    def _get_lpt_sub_integrands(
         self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
+        """Return the 24 named sub-integrands as a plain tuple.
+
+        This is the single definition of the LPT integrand algebra.  Returning a
+        tuple rather than a stacked array is what lets the bias-folded hot path
+        share it: ``_get_lpt_bias_combined_integrand`` contracts the tuple with
+        Python-level arithmetic and never materialises an ``(ncomp, L, nq)``
+        array, while the template paths stack it.
+        """
         Kfac, K, Ksq, base, weights, moments = self._get_lpt_kinematics(
             k_i, mu_j, f, V_mu, corrs_tree
         )
@@ -485,37 +493,61 @@ class LPT:
         # high-level pk_data paths, not from a bare corrs array.
         integrand_ctr = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
 
-        integrands = jnp.stack([
+        # b1^1 piece of the Zel'dovich (tree) spectrum.  ``integrand_U10`` keeps
+        # the full U_lin + U3 combination that the b1 bias template needs; this
+        # is the U_lin part on its own, appended so indices 0..22 are unchanged.
+        integrand_b1_tree = -2 * K * mq1 * U_lin
+
+        parts = (
             integrand_ZA, integrand_AA, integrand_A22, integrand_A13, integrand_W112,
             integrand_U10, integrand_A_U, integrand_A10, integrand_xi, integrand_A_xi,
             integrand_U_U, integrand_U11, integrand_U20, integrand_xi_U, integrand_xi_xi,
             integrand_Upsilon, integrand_V10, integrand_V12, integrand_chi, integrand_zeta,
-            integrand_Ub3, integrand_theta, integrand_ctr,
-        ], axis=0)
-        return integrands, base, weights
+            integrand_Ub3, integrand_theta, integrand_ctr, integrand_b1_tree,
+        )
+        return parts, base, weights
 
-    def _get_lpt_13_from_23_sub_integrands(self, integrands_23):
-        integrand_matter = jnp.sum(integrands_23[0:5], axis=0)
-        integrand_b1 = jnp.sum(integrands_23[5:8], axis=0)
-        integrand_b1_b1 = integrands_23[8] + integrands_23[9] + integrands_23[10] + integrands_23[11]
-        integrand_b2 = integrands_23[10] + integrands_23[12]
-        integrand_bG2 = integrands_23[15] + integrands_23[16]
+    def _group_lpt_integrands(self, parts):
+        """Group the 24 sub-integrands into the 15 bias/counterterm templates.
 
-        return jnp.stack([
-            integrand_matter,
-            integrand_b1,
-            integrand_b1_b1,
-            integrand_b2,
-            integrands_23[13],
-            integrands_23[14],
-            integrand_bG2,
-            integrands_23[17],
-            integrands_23[18],
-            integrands_23[19],
-            integrands_23[20],
-            integrands_23[21],
-            integrands_23[22],
-        ], axis=0)
+        Pure Python tuple arithmetic, so a caller that only wants a weighted sum
+        never builds the stacked array.
+        """
+        (ZA, AA, A22, A13, W112, U10, A_U, A10, xi, A_xi, U_U, U11, U20, xi_U,
+         xi_xi, Upsilon, V10, V12, chi, zeta, Ub3, theta, ctr, b1_tree) = parts
+        return (
+            ZA + AA + A22 + A13 + W112,   #  0  1
+            U10 + A_U + A10,              #  1  b1
+            xi + A_xi + U_U + U11,        #  2  b1^2
+            U_U + U20,                    #  3  b2
+            xi_U,                         #  4  b1 b2
+            xi_xi,                        #  5  b2^2
+            Upsilon + V10,                #  6  bG2
+            V12,                          #  7  b1 bG2
+            chi,                          #  8  b2 bG2
+            zeta,                         #  9  bG2^2
+            Ub3,                          # 10  bGamma3
+            theta,                        # 11  b1 bGamma3
+            # Tree (Zel'dovich) templates, carrying the counterterms:
+            # P_tree = t[12] + b1 t[13] + b1^2 t[14].
+            ctr,                          # 12  tree b1^0
+            b1_tree,                      # 13  tree b1^1
+            xi,                           # 14  tree b1^2
+        )
+
+    @staticmethod
+    def _get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape):
+        """Weights for the 15 templates, shared by the fused and template paths.
+
+        The 12 bias monomials, then the three tree templates: the k^2
+        counterterm rides on template 12 alone, the k^4 FoG operator on the
+        Lagrangian-biased tree ``t12 + b1 t13 + b1^2 t14``.
+        """
+        return [bias_facs[i] for i in range(12)] + [
+            ctr_k2_shape + nlo_shape * bias_facs[0],
+            nlo_shape * bias_facs[1],
+            nlo_shape * bias_facs[2],
+        ]
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_components(self, k, mu, pk_data, f, k_IR=0.2):
@@ -542,9 +574,10 @@ class LPT:
             t    = (logk - logk_fft[i0]) / (logk_fft[i0+1] - logk_fft[i0])
 
             def per_mu(mu_j, V_mu):
-                integrands, base, weights = self._get_lpt_23_sub_integrands(
+                parts, base, weights = self._get_lpt_sub_integrands(
                     k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
                 )
+                integrands = jnp.stack(parts, axis=0)
                 g = integrands * (base[None, None, :] * weights[None, :, :]) # (ncomp, L, nq)
                 g = g.at[14, 0, :].add(-0.5 * corrs_tree[6]**2)
                 g = g.at[:,0,:].subtract(g[:,0,-1][:,None])
@@ -564,106 +597,56 @@ class LPT:
 
         return pkmu_terms
 
-
-    def _get_lpt_bias_combined_integrand(
-        self, k_i, mu_j, f, V_mu, bias_facs, ctr_shape,
-        corrs_tree, corrs_matter_1loop, corrs_bias,
-    ):
-        """Section 32 production hot path: fold the 12 bias factors + counterterm into a single (L, nq) integrand inside the per-(k, mu) function.
-
-        Does **not** materialise the (13, L, nq) stack that `_get_lpt_weighted_term_integrands` builds, 
-        so XLA fuses the entire integrand into one elementwise kernel.  
-        Bit-identical to the tensordot path; about 2.1x faster for pk_ells (no AP), about 1.4x for pkmu.
-        """
-        Kfac, K, Ksq, base, weights, moments = self._get_lpt_kinematics(
-            k_i, mu_j, f, V_mu, corrs_tree
-        )
-        mq0, mq1, mq2, mq3, mq4, nq1, nq2, mq1_nq1, mq2_nq1 = moments
-
-        X_lin_gt, Y_lin_gt = corrs_tree[4], corrs_tree[5]
-        xi_lin, U_lin = corrs_tree[6], corrs_tree[7]
-        X22, Y22, X13, Y13, V1, V3, T = corrs_matter_1loop
-        U3, U11, U20, X10, Y10 = corrs_bias[0:5]
-        V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta = corrs_bias[5:]
-
-        # 13 production integrands, each (L, nq).  Built as locals, never stacked.
-        i_1 = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-        i_1 += (Ksq**2) / 8.0 * (
-            mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2
-        )
-        i_1 += -0.5 * k_i**2 * (
-            (Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
-            + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22
-        )
-        i_1 += -0.5 * k_i**2 * (
-            2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
-            + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13
-        )
-        i_1 += 0.5 * k_i**3 * (
-            2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
-            + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
-            + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T
-        )
-        i_b1 = -2 * (K * mq1 * (U_lin + U3) + 2 * f * k_i * mu_j * nq1 * U3)
-        i_b1 += Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
-        i_b1 += -Ksq * (X10 * mq0 + Y10 * mq2)
-        i_b1 += -f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10)
-        U_U = -Ksq * mq2 * U_lin**2  # shared U_U sub-integrand (b1^2 + b2 channels)
-        i_b1_b1 = (
-            mq0 * xi_lin
-            - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
-            - (K * mq1 + f * k_i * mu_j * nq1) * U11
-            + U_U
-        )
-        i_b2 = -(K * mq1 + f * k_i * mu_j * nq1) * U20 + U_U
-        i_b1_b2 = -2 * K * mq1 * xi_lin * U_lin
-        i_b2_b2 = 0.5 * mq0 * xi_lin**2
-        i_bG2 = (
-            -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
-            - 2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
-        )
-        i_b1_bG2 = -2 * K * mq1 * V12
-        i_chi = mq0 * chi
-        i_zeta = mq0 * zeta
-        i_Ub3 = -2 * K * mq1 * Ub3
-        i_theta = 2 * mq0 * theta
-        i_ctr = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-
-        # Single-pass bias combine: never materialise (13, L, nq).
-        integrand = (
-            bias_facs[0] * i_1
-            + bias_facs[1] * i_b1
-            + bias_facs[2] * i_b1_b1
-            + bias_facs[3] * i_b2
-            + bias_facs[4] * i_b1_b2
-            + bias_facs[5] * i_b2_b2
-            + bias_facs[6] * i_bG2
-            + bias_facs[7] * i_b1_bG2
-            + bias_facs[8] * i_chi
-            + bias_facs[9] * i_zeta
-            + bias_facs[10] * i_Ub3
-            + bias_facs[11] * i_theta
-            + ctr_shape * i_ctr
-        )
-        integrand = integrand * (base[None, :] * weights)
-        # DC split for b2^2: the final Hankel/dot-product path sees only the scale-dependent part; 
-        # H_0[0.5 xi^2] - I0 and the optional I0 add-back are handled by _get_lpt_dc_scalar.
-        return integrand.at[0, :].add(-bias_facs[5] * 0.5 * xi_lin**2)
-
     def _get_lpt_weighted_term_integrands(
         self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
-        """Return the 13 final LPT component integrands multiplied by base and ell weights."""
-        integrands_23, base, weights = self._get_lpt_23_sub_integrands(
+        """The 15 LPT templates multiplied by ``base`` and the ell weights."""
+        parts, base, w = self._get_lpt_sub_integrands(
             k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
         )
-        integrands = self._get_lpt_13_from_23_sub_integrands(integrands_23)
-        weighted = integrands * (base[None, None, :] * weights[None, :, :])
+        integrands = jnp.stack(self._group_lpt_integrands(parts), axis=0)
+        weighted = integrands * (base[None, None, :] * w[None, :, :])
         xi_lin = corrs_tree[6]
         return weighted.at[5, 0, :].add(-0.5 * xi_lin**2)
+    
+    def _get_lpt_bias_combined_integrand(
+        self, k_i, mu_j, f, V_mu, bias_facs, ctr_k2_shape, nlo_shape,
+        corrs_tree, corrs_matter_1loop, corrs_bias,
+    ):
+        """Production hot path: fold the bias factors and both counterterms into
+        a single ``(L, nq)`` integrand inside the per-(k, mu) function.
+
+        Uses exactly the same integrands as the template path, but contracts the
+        tuple with Python-level arithmetic, so the ``(15, L, nq)`` stack that
+        ``_get_lpt_weighted_term_integrands`` builds is never materialised and
+        XLA fuses the whole thing into one elementwise kernel.
+        """
+        parts, base, w = self._get_lpt_sub_integrands(
+            k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
+        )
+        templates = self._group_lpt_integrands(parts)
+        term_weights = self._get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape)
+
+        integrand = term_weights[0] * templates[0]
+        for weight, template in zip(term_weights[1:], templates[1:]):
+            integrand = integrand + weight * template
+        integrand = integrand * (base[None, :] * w)
+        # DC split for b2^2: the final Hankel/dot-product path sees only the
+        # scale-dependent part; H_0[0.5 xi^2] - I0 and the optional I0 add-back
+        # are handled by _get_lpt_dc_scalar.
+        xi_lin = corrs_tree[6]
+        return integrand.at[0, :].add(-bias_facs[5] * 0.5 * xi_lin**2)
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_terms_from_corrs(self, k, mu, corrs, f):
+    def get_pkmu_terms_from_corrs(self, k, mu, corrs, f, alpha_perp=1.0, alpha_para=1.0):
+        """Bias-independent LPT templates on the (k, mu) grid.
+
+        Returns ``(ncomp, nk, nmu)``: the 12 bias monomial templates followed by
+        the three tree templates.  Contract them with
+        :meth:`combine_pkmu_terms`; they depend only on the cosmology and ``f``,
+        so one evaluation serves every bias/counterterm/stochastic sample and
+        every tracer pair.
+        """
         if self._counterterms.needs_kspace_base:
             raise ValueError(
                 "bare corrs do not contain the raw linear spectrum required by "
@@ -671,13 +654,17 @@ class LPT:
             )
         self._require_corrs_rows(corrs)
         k = jnp.atleast_1d(k)
-        mu = jnp.abs(jnp.atleast_1d(mu))  # P even in mu; moments need mu >= 0
+        mu = jnp.atleast_1d(mu)
 
         corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
         logk_fft = self._logk_fft
-        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu)
+        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
+        # P(k, mu) is even in mu (plane-parallel); the internal moment algebra uses sqrt(s^2)=|s| and is only consistent for mu >= 0, so fold here.
+        mu_true = jnp.abs(mu_true)
+        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu_true)
+        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
 
         def per_point(k_i, mu_j, V_mu):
             logk = jnp.log(k_i)
@@ -698,65 +685,17 @@ class LPT:
                 chi_index=8, zeta_index=9, b2sq_index=5,
             )
 
-        return jax.vmap(per_point)(k, mu, V_all_mu).T
-
-    def get_pkmu_terms(self, k, mu, pk_data, f, k_IR=0.2):
-        corrs = self.get_corrs(pk_data, k_IR)
-        return self.get_pkmu_terms_from_corrs(k, mu, corrs, f)
-
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_terms_on_grid_from_corrs(self, k, mu, corrs, f, alpha_perp=1.0, alpha_para=1.0):
-        if self._counterterms.needs_kspace_base:
-            raise ValueError(
-                "bare corrs do not contain the raw linear spectrum required by "
-                f"counterterm_base={self.counterterm_base!r}"
-            )
-        self._require_corrs_rows(corrs)
-        k = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
-
-        corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
-        chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
-
-        logk_fft = self._logk_fft
-        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
-        # P(k, mu) is even in mu (plane-parallel); the internal moment algebra uses sqrt(s^2)=|s| and is only consistent for mu >= 0, so fold here.
-        mu_true = jnp.abs(mu_true)
-        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu_true)
-        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
-
+        # Interpolate inside the per-point function: the (nmu, ncomp, L, nq)
+        # integrand stack is never materialised.
         def per_k(k_true_row, mu_true_row):
-            def per_mu(k_i, mu_j, V_mu):
-                logk = jnp.log(k_i)
-                i0 = jnp.searchsorted(logk_fft, logk, side='right') - 1
-                i0 = jnp.clip(i0, 0, logk_fft.size - 2)
-                t = (logk - logk_fft[i0]) / (logk_fft[i0 + 1] - logk_fft[i0])
+            return jax.vmap(per_point)(k_true_row, mu_true_row, V_all_mu)
 
-                g = self._get_lpt_weighted_term_integrands(
-                    k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
-                )
-                g = g.at[:, 0, :].subtract(g[:, 0, -1][:, None])
-                g = self._4pi_q3[None, None, :] * g
-                return g, i0, t
+        pkmu_terms = jax.vmap(per_k)(k_true, mu_true)     # (nk, nmu, ncomp)
+        return jnp.transpose(pkmu_terms, (2, 0, 1))       # (ncomp, nk, nmu)
 
-            gs, i0s, ts = jax.vmap(per_mu)(k_true_row, mu_true_row, V_all_mu)
-
-            def interp_mu(g_mu, i0, t):
-                vals = self.get_pk_batched_interp(g_mu, i0, t)
-                pkmu_vals = jnp.sum(vals, axis=1)
-                return self._apply_lpt_dc_to_term_vector(
-                    pkmu_vals, i0, t, chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc,
-                    chi_index=8, zeta_index=9, b2sq_index=5,
-                )
-
-            return jax.vmap(interp_mu)(gs, i0s, ts)
-
-        pkmu_terms = jax.vmap(per_k)(k_true, mu_true)
-        return jnp.transpose(pkmu_terms, (2, 0, 1))
-
-    def get_pkmu_terms_on_grid(self, k, mu, pk_data, f, k_IR=0.2, alpha_perp=1.0, alpha_para=1.0):
+    def get_pkmu_terms(self, k, mu, pk_data, f, k_IR=0.2, alpha_perp=1.0, alpha_para=1.0):
         corrs = self.get_corrs(pk_data, k_IR)
-        return self.get_pkmu_terms_on_grid_from_corrs(k, mu, corrs, f, alpha_perp, alpha_para)
+        return self.get_pkmu_terms_from_corrs(k, mu, corrs, f, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
     def combine_pkmu_terms(self, k, mu, pkmu_terms, params_a, params_b=None, stoch=None,
@@ -777,11 +716,22 @@ class LPT:
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
         mu_true = jnp.broadcast_to(mu_true, k_true.shape)  # (nk, nmu)
 
-        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:-1], axes=(0, 0))   # (nk, nmu)
+        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:12], axes=(0, 0))   # (nk, nmu)
 
-        # counterterm
+        # Counterterms.  The k^2 operator rides on the Zel'dovich matter
+        # spectrum (template 12); the k^4 FoG operator rides on the
+        # Lagrangian-biased Zel'dovich tree, templates 12..14 contracted with
+        # (1, (b1_a+b1_b)/2, b1_a b1_b) = bias_facs[0:3].
         pkmu_ctr = self._counterterms.leading(
-            k_true, mu_true, f, params_a.ctr, params_b.ctr, pkmu_terms[-1]
+            k_true, mu_true, f, params_a.ctr, params_b.ctr, pkmu_terms[12]
+        )
+        tree_pk = (
+            bias_facs[0] * pkmu_terms[12]
+            + bias_facs[1] * pkmu_terms[13]
+            + bias_facs[2] * pkmu_terms[14]
+        )
+        pkmu_ctr = pkmu_ctr + self._counterterms.nlo(
+            k_true, mu_true, f, params_a.ctr, params_b.ctr, tree_pk
         )
         pkmu = pkmu + pkmu_ctr
 
@@ -802,24 +752,20 @@ class LPT:
             return pk
 
         if params.h is None:
-            raise ValueError(
-                "LPTParams.h is required for counterterm_base='linear_ir_resum'"
-            )
-        pk_nw_data = ir_resum.get_pk_nw(
-            pk_data, params.h, method=self.counterterm_irres_method
-        )
+            raise ValueError("LPTParams.h is required for counterterm_base='linear_ir_resum'")
+
+        # wiggly-non-wiggly decomposition
+        pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.counterterm_irres_method)
         pk_nw = get_pk(k, pk_nw_data, kmin=self._kmin, kmax=self._kmax)
-        sigma2 = ir_resum.get_Sigma2(
-            pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR
-        )
-        dsigma2 = ir_resum.get_dSigma2(
-            pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR
-        )
-        sigma2_s = (
-            (1.0 + mu**2 * params.f * (2.0 + params.f)) * sigma2
-            + params.f**2 * mu**2 * (mu**2 - 1.0) * dsigma2
-        )
-        return pk_nw + jnp.exp(-k**2 * sigma2_s) * (pk - pk_nw)
+        pk_w = pk - pk_nw
+
+        # BAO damping factor in redshift space
+        f = params.f
+        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR)
+        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR)
+        Sigma2_s = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
+
+        return pk_nw + jnp.exp(-k**2 * Sigma2_s) * pk_w
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_from_corrs(self, k, mu, corrs, params_a, params_b=None, stoch=None,
@@ -838,9 +784,9 @@ class LPT:
 
         f = params_a.f
         bias_facs = self._get_lpt_bias_factors(params_a.bias, params_b.bias)
-        # The k^4 FoG slot has no LPT tree integrand in this package, so only the leading coefficients are consumed here.
-        ctr_leading_a, _ = Counterterms.split_coefficients(params_a.ctr)
-        ctr_leading_b, _ = Counterterms.split_coefficients(params_b.ctr)
+        ctr_leading_a, c_nlo_a = Counterterms.split_coefficients(params_a.ctr)
+        ctr_leading_b, c_nlo_b = Counterterms.split_coefficients(params_b.ctr)
+        c_nlo = 0.5 * (c_nlo_a + c_nlo_b)
         corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
@@ -858,16 +804,18 @@ class LPT:
                 i0 = jnp.clip(i0, 0, logk_fft.size - 2)
                 t = (logk - logk_fft[i0]) / (logk_fft[i0 + 1] - logk_fft[i0])
 
-                ctr_shape = (
-                    jnp.zeros_like(k_i)
-                    if self._counterterms.needs_kspace_base
-                    else self._counterterms.leading_shape(
-                        k_i, mu_j, f, ctr_leading_a, ctr_leading_b
-                    )
-                )
+                # For the Zel'dovich base both counterterms are folded into the
+                # same (L, nq) integrand, so they cost no extra transform.  The
+                # linear-family bases are added in k space after the loop.
+                if self._counterterms.needs_kspace_base:
+                    ctr_k2_shape = jnp.zeros_like(k_i)
+                    nlo_shape = jnp.zeros_like(k_i)
+                else:
+                    ctr_k2_shape = self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading_a, ctr_leading_b)
+                    nlo_shape = Counterterms.nlo_shape(k_i, mu_j, f, c_nlo)
                 # Section 32 fast path: bias folded inside, never builds (13, L, nq).
                 integrand = self._get_lpt_bias_combined_integrand(
-                    k_i, mu_j, f, V_mu, bias_facs, ctr_shape,
+                    k_i, mu_j, f, V_mu, bias_facs, ctr_k2_shape, nlo_shape,
                     corrs_tree, corrs_matter_1loop, corrs_bias,
                 )
                 g = integrand.at[0, :].subtract(integrand[0, -1])
@@ -889,9 +837,10 @@ class LPT:
         pkmu = jax.vmap(per_k)(k_true, mu_true)
         if self._counterterms.needs_kspace_base:
             base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params_a)
-            pkmu = pkmu + self._counterterms.leading(
-                k_true, mu_true, f, params_a.ctr, params_b.ctr, base_pk
-            )
+            pkmu = pkmu + self._counterterms.leading(k_true, mu_true, f, params_a.ctr, params_b.ctr, base_pk)
+            tree_pk = self._get_lpt_nlo_tree_factor(f, mu_true, params_a.bias, params_b.bias) * base_pk
+            pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params_a.ctr, params_b.ctr, tree_pk)
+
         return pkmu / (alpha_perp**2 * alpha_para)
 
     @partial(jit, static_argnames=['self'])
@@ -1120,6 +1069,23 @@ class LPT:
         if self.bias_basis == 'bs2':
             b2 = b2 + (4.0 / 3.0) * btidal
         return jnp.stack([b1, b2, btidal, bGamma3])
+
+    def _get_lpt_nlo_tree_factor(self, f, mu, bias_a, bias_b):
+        """Factor turning the counterterm base into the tree galaxy spectrum.
+
+        ``Counterterms.nlo`` multiplies whatever ``tree_pk`` it is given, so the
+        caller supplies the full tree spectrum -- the EPT backend passes
+        ``(b1_a + f mu^2)(b1_b + f mu^2) P_lin``.  Two things differ here:
+
+        * ``b1`` is Lagrangian in this backend, so the Kaiser factor is
+          ``Z1 = 1 + b1 + f mu^2`` (verified against the k -> 0 limit);
+        * only the linear-family bases go through here.  The ``'zeldovich'``
+          base does not rescale a matter spectrum at all: it uses the genuine
+          Lagrangian-biased Zel'dovich tree assembled from templates 12..14
+          (see ``_get_lpt_bias_combined_integrand`` and ``combine_pkmu_terms``).
+        """
+        kaiser = 1.0 + f * mu**2
+        return (kaiser + bias_a[0]) * (kaiser + bias_b[0])
 
     def _get_lpt_bias_factors(self, bias_a, bias_b=None):
         """Bias monomials for the 12 LPT term templates.

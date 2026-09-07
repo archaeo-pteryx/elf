@@ -55,8 +55,6 @@ def make_ept_params(*, f, h, bias, ctr, stoch, dtype=None):
 class LPTParams:
     f:     jnp.ndarray  # shape (,)   [f]
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    # Same five-slot layout as EPTParams, in the paper (Lagrangian) convention.
-    # The k^4 FoG operator has no LPT tree integrand in this package yet, so ``c_nlo`` is accepted for layout compatibility but not evaluated.
     ctr:   jnp.ndarray  # shape (5,)   [cL0, cL2, cL4, cL6, c_nlo]
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
     h:     Optional[jnp.ndarray] = None

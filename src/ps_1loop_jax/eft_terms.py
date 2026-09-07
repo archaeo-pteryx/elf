@@ -30,7 +30,7 @@ class Counterterms:
 
     in the paper convention: the first four multiply the leading ``k^2`` shape and the fifth is the ``k^4`` FoG coefficient.  
     The slot layout is identical for EPT and LPT so that a coefficient vector never changes meaning when it is handed to the other backend; 
-    a backend that does not implement an operator simply leaves that slot unused (see ``Counterterms.leading`` and ``Counterterms.nlo``).  
+    Both backends implement both operators; each supplies its own tree spectrum to ``Counterterms.nlo`` (see ``Counterterms.leading`` and ``Counterterms.nlo``).  
     Mapping Eulerian coefficients to their Lagrangian counterparts is deliberately the caller's responsibility.
     """
 
@@ -101,14 +101,7 @@ class Counterterms:
 
     @classmethod
     def nlo(cls, k, mu, f, ctr_a, ctr_b, tree_pk):
-        """NLO ``k^4`` counterterm from the full five-slot ``ctr`` vectors.
-
-        ``c_nlo`` is linear in the coefficient like the leading shape, so the
-        two tracers are combined by the same degree-1 symmetrisation; the
-        ``Z1_a Z1_b`` factor lives in ``tree_pk``, supplied by the caller.
-        Only backends that supply a tree spectrum call this.  The LPT backend
-        has no numerical tree integrand yet, so it leaves ``c_nlo`` unused.
-        """
+        """NLO ``k^4`` counterterm from the full five-slot ``ctr`` vectors."""
         _, c_nlo_a = cls.split_coefficients(ctr_a)
         _, c_nlo_b = cls.split_coefficients(ctr_b)
         return cls.nlo_shape(k, mu, f, 0.5 * (c_nlo_a + c_nlo_b)) * tree_pk
