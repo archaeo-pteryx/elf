@@ -52,7 +52,7 @@ class LPT:
                  hankel_forward_mode='pld',
                  lmax=5,
                  ngauss=4,
-                 counterterm_base='zeldovich',
+                 counterterm_base='linear_ir_resum',
                  counterterm_irres_method='DST',
                  counterterm_r_bao=110.0,
                  counterterm_k_IR=0.2,
@@ -750,9 +750,6 @@ class LPT:
         pk = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
         if self.counterterm_base == 'linear':
             return pk
-
-        if params.h is None:
-            raise ValueError("LPTParams.h is required for counterterm_base='linear_ir_resum'")
 
         # wiggly-non-wiggly decomposition
         pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.counterterm_irres_method)
