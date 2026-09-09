@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
@@ -23,7 +22,7 @@ def _check_ctr_layout(ctr):
 
 @register_pytree_node_class
 @dataclass(frozen=True)
-class EPTParams:
+class Params:
     cosmo: jnp.ndarray  # shape (2,)   [f, h]
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
     ctr:   jnp.ndarray  # shape (5,)   [c0, c2, c4, c6, c_nlo]  (shared layout)
@@ -42,36 +41,10 @@ class EPTParams:
     @property
     def h(self):     return self.cosmo[1]
 
-def make_ept_params(*, f, h, bias, ctr, stoch, dtype=None):
+def make_params(*, f, h, bias, ctr, stoch, dtype=None):
     cosmo = _as_param_array([f, h], dtype)
     bias  = _as_param_array(bias,  dtype)
     ctr   = _as_param_array(ctr,   dtype)
     stoch = _as_param_array(stoch, dtype)
     _check_ctr_layout(ctr)
-    return EPTParams(cosmo, bias, ctr, stoch)
-
-@register_pytree_node_class
-@dataclass(frozen=True)
-class LPTParams:
-    f:     jnp.ndarray  # shape (,)   [f]
-    bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    ctr:   jnp.ndarray  # shape (5,)   [cL0, cL2, cL4, cL6, c_nlo]
-    stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    h:     Optional[jnp.ndarray] = None
-
-    def tree_flatten(self):
-        return (self.f, self.bias, self.ctr, self.stoch, self.h), None
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        f, bias, ctr, stoch, h = children
-        return cls(f, bias, ctr, stoch, h)
-
-def make_lpt_params(*, f, bias, ctr, stoch, h=None, dtype=None):
-    f     = _as_param_array(f,     dtype)
-    bias  = _as_param_array(bias,  dtype)
-    ctr   = _as_param_array(ctr,   dtype)
-    stoch = _as_param_array(stoch, dtype)
-    h = None if h is None else _as_param_array(h, dtype)
-    _check_ctr_layout(ctr)
-    return LPTParams(f=f, bias=bias, ctr=ctr, stoch=stoch, h=h)
+    return Params(cosmo, bias, ctr, stoch)
