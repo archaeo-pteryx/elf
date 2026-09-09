@@ -58,7 +58,7 @@ class EPT:
             counterterm_base = 'linear_ir_resum' if do_irres else 'linear'
         self._counterterms = Counterterms(counterterm_base)
         if self._counterterms.base == 'zeldovich':
-            raise ValueError("PowerSpectrum1LoopEPT does not support counterterm_base='zeldovich'")
+            raise ValueError("EPT does not support counterterm_base='zeldovich'")
 
         # --- computation mode ---
         self.subtract_k0_limit = subtract_k0_limit
