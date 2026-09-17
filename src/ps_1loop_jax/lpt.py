@@ -11,7 +11,7 @@ from . import hankel
 from . import spline
 
 from .utils import get_pk, get_pk_int, get_pk_int2, cross_bias_factor
-from .utils_lpt import get_lpt_moments, compute_V_mu
+from .utils_lpt import make_G00_coeffs, get_lpt_moments, compute_V_mu
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 from . import ir_resum
 from .eft_terms import Counterterms, stochasticity
@@ -108,14 +108,8 @@ class LPT:
         return self._counterterms.base
 
     def _initialize_lpt(self):
-        # load the coefficients of G00
-        loaded = jnp.load(os.path.dirname(__file__)+'/lpt_rsd_coeff/G00_coeffs.npz')
-        G00_coeffs = [jnp.array(loaded[k], dtype=jnp.float32) for k in loaded.files]
-        L = self.lmax + 1
-        coeffs_pad = jnp.zeros((L, L, L))  # axes: [l, k, i]
-        for l in range(L):
-            coeffs_pad = coeffs_pad.at[l, :l+1, :l+1].set(G00_coeffs[l])
-        self.G00_coeffs = coeffs_pad
+        # precompute the coefficients of G00
+        self.G00_coeffs = make_G00_coeffs(self.lmax)
 
         # (l, n) for which xi_ln's are cached; UV-safe basis uses n in {-2,-1,0} only.
         ln_list = [[0, 0], [0, -2], [1, -1], [2, 0], [2, -2], [3, -1], [4, 0]]

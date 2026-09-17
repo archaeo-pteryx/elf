@@ -1,5 +1,19 @@
-import jax
 import jax.numpy as jnp
+import sympy as sym
+
+def G00_coeff(l, k, i):
+    return ((-1)**(i - k) / (sym.factorial(l - k) * sym.factorial(i))
+            * sum((-1)**n * sym.binomial(i, n) * sym.binomial(l + n, k)
+                  * sym.rf(l + n + sym.Rational(1, 2), l - k) for n in range(i + 1)))
+
+def make_G00_coeffs(lmax, dtype=jnp.float32):
+    L = lmax + 1
+    coeffs = jnp.zeros((L, L, L), dtype=dtype)  # axes: [l, k, i]
+    for l in range(L):
+        for k in range(l + 1):
+            for i in range(l + 1):
+                coeffs = coeffs.at[l, k, i].set(float(G00_coeff(l, k, i)))
+    return coeffs
 
 def _pow_table_vec(x, L):
     x = jnp.array(x)
