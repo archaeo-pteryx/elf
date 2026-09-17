@@ -692,19 +692,14 @@ class LPT:
         return self.get_pkmu_terms_from_corrs(k, mu, corrs, f, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def combine_pkmu_terms(self, k, mu, pkmu_terms, params_a, params_b=None, stoch=None,
-                           alpha_perp=1.0, alpha_para=1.0):
+    def combine_pkmu_terms(self, k, mu, pkmu_terms, params, alpha_perp=1.0, alpha_para=1.0):
         if self._counterterms.needs_kspace_base:
             raise ValueError("combine_pkmu_terms currently accepts the fused Zel'dovich template only")
-        if params_b is None:
-            params_b = params_a
-        if stoch is None:
-            stoch = params_a.stoch
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        f = params_a.f
-        bias_facs = self._get_lpt_bias_factors(params_a.bias, params_b.bias)
+        f = params.f
+        bias_facs = self._get_lpt_bias_factors(params.bias, params.bias_b)
 
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
@@ -717,7 +712,7 @@ class LPT:
         # Lagrangian-biased Zel'dovich tree, templates 12..14 contracted with
         # (1, (b1_a+b1_b)/2, b1_a b1_b) = bias_facs[0:3].
         pkmu_ctr = self._counterterms.leading(
-            k_true, mu_true, f, params_a.ctr, params_b.ctr, pkmu_terms[12]
+            k_true, mu_true, f, params.ctr, pkmu_terms[12]
         )
         tree_pk = (
             bias_facs[0] * pkmu_terms[12]
@@ -725,12 +720,12 @@ class LPT:
             + bias_facs[2] * pkmu_terms[14]
         )
         pkmu_ctr = pkmu_ctr + self._counterterms.nlo(
-            k_true, mu_true, f, params_a.ctr, params_b.ctr, tree_pk
+            k_true, mu_true, f, params.ctr, tree_pk
         )
         pkmu = pkmu + pkmu_ctr
 
         # stochasticity
-        pkmu_stoch = stochasticity(k_true, mu_true, stoch)
+        pkmu_stoch = stochasticity(k_true, mu_true, params.stoch)
         pkmu = pkmu + pkmu_stoch
 
         pkmu = pkmu / (alpha_perp**2 * alpha_para)
@@ -759,12 +754,8 @@ class LPT:
         return pk_nw + jnp.exp(-k**2 * Sigma2_s) * pk_w
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_from_corrs(self, k, mu, corrs, params_a, params_b=None, stoch=None,
-                            alpha_perp=1.0, alpha_para=1.0, pk_data=None):
-        if params_b is None:
-            params_b = params_a
-        if stoch is None:
-            stoch = params_a.stoch
+    def get_pkmu_from_corrs(self, k, mu, corrs, params, alpha_perp=1.0, alpha_para=1.0,
+                            pk_data=None):
         if self._counterterms.needs_kspace_base and pk_data is None:
             raise ValueError(
                 "pk_data is required when evaluating a linear-family counterterm from corrs"
@@ -773,11 +764,9 @@ class LPT:
         k = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        f = params_a.f
-        bias_facs = self._get_lpt_bias_factors(params_a.bias, params_b.bias)
-        ctr_leading_a, c_nlo_a = Counterterms.split_coefficients(params_a.ctr)
-        ctr_leading_b, c_nlo_b = Counterterms.split_coefficients(params_b.ctr)
-        c_nlo = 0.5 * (c_nlo_a + c_nlo_b)
+        f = params.f
+        bias_facs = self._get_lpt_bias_factors(params.bias, params.bias_b)
+        ctr_leading, c_nlo = Counterterms.split_coefficients(params.ctr)
         corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
@@ -802,7 +791,7 @@ class LPT:
                     ctr_k2_shape = jnp.zeros_like(k_i)
                     nlo_shape = jnp.zeros_like(k_i)
                 else:
-                    ctr_k2_shape = self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading_a, ctr_leading_b)
+                    ctr_k2_shape = self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading)
                     nlo_shape = Counterterms.nlo_shape(k_i, mu_j, f, c_nlo)
                 # Section 32 fast path: bias folded inside, never builds (13, L, nq).
                 integrand = self._get_lpt_bias_combined_integrand(
@@ -812,7 +801,7 @@ class LPT:
                 g = integrand.at[0, :].subtract(integrand[0, -1])
                 g = self._4pi_q3[None, :] * g
 
-                stoch_kmu = stochasticity(k_i, mu_j, stoch)
+                stoch_kmu = stochasticity(k_i, mu_j, params.stoch)
                 return g, i0, t, stoch_kmu
 
             gs, i0s, ts, stochs = jax.vmap(per_mu)(k_true_row, mu_true_row, V_all_mu)
@@ -827,39 +816,36 @@ class LPT:
 
         pkmu = jax.vmap(per_k)(k_true, mu_true)
         if self._counterterms.needs_kspace_base:
-            base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params_a)
-            pkmu = pkmu + self._counterterms.leading(k_true, mu_true, f, params_a.ctr, params_b.ctr, base_pk)
-            tree_pk = self._get_lpt_nlo_tree_factor(f, mu_true, params_a.bias, params_b.bias) * base_pk
-            pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params_a.ctr, params_b.ctr, tree_pk)
+            base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params)
+            pkmu = pkmu + self._counterterms.leading(k_true, mu_true, f, params.ctr, base_pk)
+            tree_pk = self._get_lpt_nlo_tree_factor(f, mu_true, params.bias, params.bias_b) * base_pk
+            pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params.ctr, tree_pk)
 
         return pkmu / (alpha_perp**2 * alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, params_a, params_b=None, stoch=None,
-                 alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pkmu_from_corrs(
-            k, mu, corrs, params_a, params_b, stoch, alpha_perp, alpha_para, pk_data=pk_data
+            k, mu, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
         )
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells_from_corrs(self, k, corrs, params_a, params_b=None, stoch=None,
-                               alpha_perp=1.0, alpha_para=1.0, pk_data=None):
+    def get_pk_ells_from_corrs(self, k, corrs, params, alpha_perp=1.0, alpha_para=1.0,
+                               pk_data=None):
         pkmu = self.get_pkmu_from_corrs(
-            k, self._mu_quad, corrs, params_a, params_b, stoch, alpha_perp, alpha_para,
-            pk_data=pk_data,
+            k, self._mu_quad, corrs, params, alpha_perp, alpha_para, pk_data=pk_data,
         )
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
         return pk_ells
 
-    def get_pk_ells(self, k, pk_data, params_a, params_b=None, stoch=None,
-                    alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         """
         Legendre multipoles.
         """
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pk_ells_from_corrs(
-            k, corrs, params_a, params_b, stoch, alpha_perp, alpha_para, pk_data=pk_data
+            k, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
         )
 
     @partial(jit, static_argnames=['self'])
@@ -1102,17 +1088,14 @@ class LPT:
         return (14.0/3.0) * V10 - (2.0/5.0) * d_q_delta
 
     @partial(jit, static_argnames=['self'])
-    def get_xi_ells(self, r, pk_data, params_a, params_b=None, stoch=None,
-                    alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
         r = jnp.atleast_1d(r)
 
         # This helper is an approximate configuration-space projection.
         # The final LPT multipoles are not numerically stable on the full FFT grid up to kmax_fft, 
         # so use a conservative spectrum grid and interpolate it back to self._k before the Hankel transform.
         k = jnp.geomspace(max(self._kmin, 1e-4), min(self._kmax, 1.0), min(self._nfft, 128))
-        pk_ells = self.get_pk_ells(
-            k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para, k_IR
-        )
+        pk_ells = self.get_pk_ells(k, pk_data, params, alpha_perp, alpha_para, k_IR)
 
         pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)

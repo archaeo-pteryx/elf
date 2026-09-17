@@ -74,17 +74,18 @@ pk_AP = ept.get_pk_ells(k, pk_data, params, alpha_perp=alpha_perp, alpha_para=al
 
 ### Cross power spectrum
 
-The public API functions take an optional second parameter set. `params_b=None` (the default) gives the auto spectrum of `params_a`; passing both gives the cross spectrum. The stochasticity parameters for the cross power spectrum can be passed explicitly as independent parameters: 
+`Params` carries an optional `bias2`. Leaving it `None` (the default) gives the auto spectrum; setting it gives the cross spectrum of the tracers with biases `bias` and `bias2`. The bias monomials are symmetrised internally (`b1^2 -> b1 b1'`, `b1 b2 -> (b1 b2' + b1' b2)/2`, ...), while `ctr` and `stoch` keep the same functional form as in the auto case and are read as the cross spectrum's own coefficients, so they are set directly rather than derived from the two auto spectra:
 
 ```python
-params_b = ps_params.make_params(                # a second tracer
+params_ab = ps_params.make_params(
     f=0.578, h=0.6736,
-    bias=jnp.array([1.4, -0.5, 0.05, -0.1]),
-    ctr=jnp.array([3.0, 6.0, -2.0, 0.0, 50.0]),
-    stoch=jnp.array([5000.0, 0.0, 0.0]),
+    bias=jnp.array([2.0, -0.5, -0.2, 0.5]),
+    bias2=jnp.array([1.4, -0.5, 0.05, -0.1]),        # second tracer
+    ctr=jnp.array([4.0, 8.0, -3.0, 0.0, 70.0]),      # counterterms of the cross spectrum
+    stoch=jnp.array([0.0, 0.0, 0.0]),                # cross shot noise (0 for disjoint samples)
 )
 
-pk_ab = ept.get_pk_ells(k, pk_data, params, params_b, stoch=jnp.zeros(3))
+pk_ab = ept.get_pk_ells(k, pk_data, params_ab)
 ```
 
 ### Authors

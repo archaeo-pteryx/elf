@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
@@ -27,24 +28,33 @@ class Params:
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
     ctr:   jnp.ndarray  # shape (5,)   [c0, c2, c4, c6, c_nlo]  (shared layout)
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
+    # Second tracer's bias for a cross spectrum; ``None`` selects the auto
+    # spectrum.  ``ctr`` and ``stoch`` are then the cross spectrum's own
+    # coefficients (same functional form as the auto case, no symmetrisation).
+    bias2: Optional[jnp.ndarray] = None  # shape (4,)   [b1, b2, bG2, bGamma3]
 
     def tree_flatten(self):
-        return (self.cosmo, self.bias, self.ctr, self.stoch), None
+        return (self.cosmo, self.bias, self.ctr, self.stoch, self.bias2), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        cosmo, bias, ctr, stoch = children
-        return cls(cosmo, bias, ctr, stoch)
+        cosmo, bias, ctr, stoch, bias2 = children
+        return cls(cosmo, bias, ctr, stoch, bias2)
     
     @property
     def f(self):     return self.cosmo[0]
     @property
     def h(self):     return self.cosmo[1]
+    @property
+    def bias_b(self):
+        """Bias of the second tracer: ``bias2`` for a cross spectrum, ``bias`` for auto."""
+        return self.bias if self.bias2 is None else self.bias2
 
-def make_params(*, f, h, bias, ctr, stoch, dtype=None):
+def make_params(*, f, h, bias, ctr, stoch, bias2=None, dtype=None):
     cosmo = _as_param_array([f, h], dtype)
     bias  = _as_param_array(bias,  dtype)
     ctr   = _as_param_array(ctr,   dtype)
     stoch = _as_param_array(stoch, dtype)
+    bias2 = None if bias2 is None else _as_param_array(bias2, dtype)
     _check_ctr_layout(ctr)
-    return Params(cosmo, bias, ctr, stoch)
+    return Params(cosmo, bias, ctr, stoch, bias2)

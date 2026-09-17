@@ -352,16 +352,19 @@ class EPT:
         
         return matrix
     
-    def get_pkmu_grid(self, pk_data, params_a, params_b, stoch):
-        """Compute P(k, mu) on the internal (k, mu) grid including IR resummation and counterterms."""
+    def get_pkmu_grid(self, pk_data, params):
+        """Compute P(k, mu) on the internal (k, mu) grid including IR resummation and counterterms.
+        """
 
-        f = params_a.f
-        bias_a, bias_b = params_a.bias, params_b.bias
-        ctr_a, ctr_b = params_a.ctr, params_b.ctr
+        f = params.f
+        bias_a = params.bias
+        bias_b = params.bias_b
+        ctr = params.ctr
+        stoch = params.stoch
         
         if self.do_irres:
             # tree + 1-loop
-            pk_nw_data = ir_resum.get_pk_nw(pk_data, params_a.h, method=self.irres_method)
+            pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
             pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
             pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias_a, bias_b)
 
@@ -370,8 +373,8 @@ class EPT:
                 pk_ctr_base = (pk_nw + pk_w)[:, None]
             else:
                 pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr_a, ctr_b)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr_a, ctr_b)
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
             pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -382,13 +385,13 @@ class EPT:
 
             # Counterterms may request IR-resummed linear P even when the perturbative body itself is not IR resummed.
             if self.counterterm_base == 'linear_ir_resum':
-                pk_nw_data = ir_resum.get_pk_nw(pk_data, params_a.h, method=self.irres_method)
+                pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
                 pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
                 pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
             else:
                 pk_ctr_base = pk[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr_a, ctr_b)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr_a, ctr_b)
+            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         pkmu_stoch = self.get_pkmu_stoch(self._k, self._mu, stoch)
@@ -396,20 +399,13 @@ class EPT:
         
         return pkmu
     
-    def get_pkmu(self, k, mu, pk_data, params_a, params_b=None, stoch=None, alpha_perp=1.0, alpha_para=1.0):
-        if params_b is None:
-            params_b = params_a
-        if stoch is None:
-            stoch = params_a.stoch
-        return self._get_pkmu_core(k, mu, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
-
     @partial(jit, static_argnames=['self'])
-    def _get_pkmu_core(self, k, mu, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para):
+    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
         """Compute P(k, mu) at arbitrary (k, mu) via 2D spline interpolation of the internal grid."""
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        pkmu_grid = self.get_pkmu_grid(pk_data, params_a, params_b, stoch)
+        pkmu_grid = self.get_pkmu_grid(pk_data, params)
 
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
@@ -422,17 +418,10 @@ class EPT:
 
         return pkmu
 
-    def get_pk_ells(self, k, pk_data, params_a, params_b=None, stoch=None, alpha_perp=1.0, alpha_para=1.0):
-        if params_b is None:
-            params_b = params_a
-        if stoch is None:
-            stoch = params_a.stoch
-        return self._get_pk_ells_core(k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
-
     @partial(jit, static_argnames=['self'])
-    def _get_pk_ells_core(self, k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para):
+    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
         """Compute multipole power spectra P_0, P_2, P_4 via Gauss-Legendre quadrature."""
-        pkmu = self._get_pkmu_core(k, self._mu_quad, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
+        pkmu = self.get_pkmu(k, self._mu_quad, pk_data, params, alpha_perp, alpha_para)
         pk_ells = get_legendre_multipoles(pkmu, self._legendre_weights)  # (3, nk)
         return pk_ells
 
@@ -866,36 +855,29 @@ class EPT:
 
         return pk_nw, pk_w, damp_fac
     
-    def get_pkmu_ctr_k2(self, pk, f, ctr_a, ctr_b):
+    def get_pkmu_ctr_k2(self, pk, f, ctr):
         return self._counterterms.leading(
-            self._k[:, None], self._mu[None, :], f, ctr_a, ctr_b, pk
+            self._k[:, None], self._mu[None, :], f, ctr, pk
         )
 
-    def get_pkmu_ctr_k4(self, pk, f, bias_a, bias_b, ctr_a, ctr_b):
+    def get_pkmu_ctr_k4(self, pk, f, bias_a, bias_b, ctr):
         b1_a, b1_b = bias_a[0], bias_b[0]
         mu = self._mu[None, :]
         tree_pk = (b1_a + f * mu**2) * (b1_b + f * mu**2) * pk
-        return self._counterterms.nlo(self._k[:, None], mu, f, ctr_a, ctr_b, tree_pk)
+        return self._counterterms.nlo(self._k[:, None], mu, f, ctr, tree_pk)
 
     def get_pkmu_stoch(self, k, mu, stoch):
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
         return stochasticity(k[:, None], mu[None, :], stoch)
 
-    def get_xi_ells(self, r, pk_data, params_a, params_b=None, stoch=None, alpha_perp=1.0, alpha_para=1.0):
-        if params_b is None:
-            params_b = params_a
-        if stoch is None:
-            stoch = params_a.stoch
-        return self._get_xi_ells_core(r, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
-        
     @partial(jit, static_argnames=['self'])
-    def _get_xi_ells_core(self, r, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para):
+    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
         r = jnp.atleast_1d(r)
 
         # This helper is an approximate configuration-space projection.
         k = jnp.geomspace(max(self._kmin, 1e-4), min(self._kmax, 1.0), min(self._nfft, 128))
-        pk_ells = self._get_pk_ells_core(k, pk_data, params_a, params_b, stoch, alpha_perp, alpha_para)
+        pk_ells = self.get_pk_ells(k, pk_data, params, alpha_perp, alpha_para)
 
         pk0 = get_pk(self._k, jnp.stack([k, pk_ells[0]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
