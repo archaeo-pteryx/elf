@@ -49,6 +49,8 @@ class EPT:
 
         if method not in ('matrix', 'hankel', 'hybrid'):
             raise ValueError(f"method must be 'matrix', 'hankel', or 'hybrid', got {method!r}")
+        if nfft % 2:
+            raise ValueError("nfft must be even: the FFTLog pipeline uses rfft/irfft with an implicit even length")
 
         # --- IR resummation configuration ---
         self.do_irres = do_irres
@@ -417,6 +419,9 @@ class EPT:
 
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
+        # P(k, mu) of density tracers is even in mu.  The internal grid covers mu in [0, 1],
+        # so reflect negative mu_true here instead of letting interp2d clamp it to mu=0.
+        mu_true = jnp.abs(mu_true)
 
         # 2D interpolation
         xq = jnp.log(k_true)

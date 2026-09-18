@@ -32,3 +32,22 @@ def get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para):
     k_true = jnp.outer(k, fac) / alpha_perp
 
     return k_true, mu_true
+
+
+def get_k_mu_true_sin_for_ap(k, mu, alpha_perp, alpha_para):
+    """AP map plus a derivative-regular transverse direction cosine.
+
+    Computing ``sqrt(1 - mu_true**2)`` after the AP map creates the
+    indeterminate AD product ``inf * 0`` at ``|mu|=1``.  The algebraically
+    identical expression below takes the square root only of the observed
+    coordinate, which is constant when differentiating the AP parameters.
+    """
+    k = jnp.atleast_1d(k)
+    mu = jnp.atleast_1d(mu)
+
+    ratio = alpha_perp / alpha_para
+    fac = jnp.sqrt(1 + mu**2 * (ratio**2 - 1))
+    mu_true = mu * ratio / fac
+    sin_true = jnp.sqrt(jnp.maximum(1 - mu**2, 0.0)) / fac
+    k_true = jnp.outer(k, fac) / alpha_perp
+    return k_true, mu_true, sin_true

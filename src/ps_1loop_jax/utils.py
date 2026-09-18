@@ -59,6 +59,13 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
     ``xmin`` and ``xmax`` specify how far the padding should reach when they lie outside the input interval; 
     when a requested bound is already inside the interval, one native endpoint spacing is used instead.
 
+    The padding spans are continuous functions of the endpoints: the low side covers
+    ``log(x[0]/xmin)`` in ``num_extrap`` equal logarithmic steps (and likewise ``log(xmax/x[-1])`` on the high side), 
+    rather than a spacing quantised to an integer count of native steps.  
+    The padded grid and values -- and their derivatives -- therefore vary smoothly with the input grid, 
+    e.g. with the ``modes/h`` grid an emulator hands over, where ``h`` shifts every node continuously.  
+    The only switch left is the ``max`` below, which engages just when a requested bound lies within one native spacing of the data.
+
     ``x`` must be positive and strictly increasing.  A positive endpoint of ``y`` is extrapolated with the logarithmic slope of the adjacent pair when their ratio is positive; 
     otherwise the endpoint value is held constant.
     A non-positive endpoint is padded with zeros because its logarithm does not define a real power-law continuation.
@@ -75,31 +82,30 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
     dlnx_low  = jnp.log(x[1] / x[0])
     dlnx_high = jnp.log(x[-1] / x[-2])
 
-    num_low  = (jnp.log(x[0] / xmin) / dlnx_low).astype(jnp.int32) + 1
-    num_high = (jnp.log(xmax / x[-1]) / dlnx_high).astype(jnp.int32) + 1
-
     # The output shape is deliberately static, so padding is also added when the requested interval is narrower than the data interval.  
-    # In that case the raw span above is zero or negative.  
+    # In that case the raw span below is zero or negative.  
     # Clamp it to one native log-spacing; 
     # otherwise x_low/x_high would run *into* the input interval (and x_high would be descending), violating the sorted-grid contract of spline.interp1d/searchsorted.
-    one = jnp.asarray(1, dtype=jnp.int32)
-    num_low = jnp.maximum(num_low, one)
-    num_high = jnp.maximum(num_high, one)
+    s_low  = jnp.maximum(jnp.log(x[0] / xmin),  dlnx_low)
+    s_high = jnp.maximum(jnp.log(xmax / x[-1]), dlnx_high)
 
-    fac_low  = num_low.astype(x_dtype)  / jnp.asarray(num_extrap, x_dtype)
-    fac_high = num_high.astype(x_dtype) / jnp.asarray(num_extrap, x_dtype)
+    # Equal logarithmic steps across the requested span, so the padded nodes move
+    # continuously with the endpoints instead of jumping when an integer step count changes.
+    t = jnp.arange(1, num_extrap + 1, dtype=x_dtype) / jnp.asarray(num_extrap, x_dtype)
 
-    t_low  = jnp.arange(-num_extrap, 0, dtype=x_dtype)
-    t_high = jnp.arange(1, num_extrap + 1, dtype=x_dtype)
+    x_low  = (x[0]  * jnp.exp(-s_low * t))[::-1]   # ascending; x_low[0] sits at xmin (or one native spacing below x[0])
+    x_high = x[-1] * jnp.exp(s_high * t)
 
-    x_low  = x[0]  * jnp.exp(dlnx_low  * fac_low  * t_low)
-    x_high = x[-1] * jnp.exp(dlnx_high * fac_high * t_high)
+    # Exponents measured in units of the native endpoint log-spacing, so the
+    # power-law slope convention matches the unpadded data.
+    n_low  = (-s_low  * t[::-1] / dlnx_low).astype(y_dtype)
+    n_high = ( s_high * t       / dlnx_high).astype(y_dtype)
 
     def _low_true(_):
         den   = jnp.where(y[0] == 0, jnp.inf, y[0])
         ratio = y[1] / den
         ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)  # log(1)=0
-        growth = jnp.exp(jnp.log(ratio) * (num_low.astype(y_dtype) / jnp.asarray(num_extrap, y_dtype)) * t_low.astype(y_dtype))
+        growth = jnp.exp(jnp.log(ratio) * n_low)
         return y[0] * growth
 
     def _low_false(_):
@@ -111,7 +117,7 @@ def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
         den   = jnp.where(y[-2] == 0, jnp.inf, y[-2])
         ratio = y[-1] / den
         ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)
-        growth = jnp.exp(jnp.log(ratio) * (num_high.astype(y_dtype) / jnp.asarray(num_extrap, y_dtype)) * t_high.astype(y_dtype))
+        growth = jnp.exp(jnp.log(ratio) * n_high)
         return y[-1] * growth
 
     def _high_false(_):

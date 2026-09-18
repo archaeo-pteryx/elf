@@ -1,35 +1,44 @@
 import jax.numpy as jnp
-import sympy as sym
+import numpy as np
 
-def G00_coeff(l, k, i):
-    return ((-1)**(i - k) / (sym.factorial(l - k) * sym.factorial(i))
-            * sum((-1)**n * sym.binomial(i, n) * sym.binomial(l + n, k)
-                  * sym.rf(l + n + sym.Rational(1, 2), l - k) for n in range(i + 1)))
+from .lpt_coefficients import generate_g00_coefficient, validate_lmax
 
-def make_G00_coeffs(lmax, dtype=jnp.float32):
+def make_G00_coeffs(lmax, dtype=jnp.float64):
+    """Assemble the [l, k, i] table of Appendix-G coefficients up to ``lmax``.
+
+    The per-ell blocks come from exact rational arithmetic, so the table is
+    built once in NumPy at full float64 precision and only then converted to
+    the model dtype.  The earlier float32 table rounded the coefficients by
+    ~6e-8 relative (0.1 absolute at lmax=10); the effect on the spectra was
+    only ~1e-11, but float64 costs nothing.
+    """
+    lmax = validate_lmax(lmax)
     L = lmax + 1
-    coeffs = jnp.zeros((L, L, L), dtype=dtype)  # axes: [l, k, i]
+    coeffs = np.zeros((L, L, L), dtype=np.float64)  # axes: [l, k, i]
     for l in range(L):
-        for k in range(l + 1):
-            for i in range(l + 1):
-                coeffs = coeffs.at[l, k, i].set(float(G00_coeff(l, k, i)))
-    return coeffs
+        coeffs[l, :l + 1, :l + 1] = generate_g00_coefficient(l)
+    return jnp.asarray(coeffs, dtype=dtype)
 
 def _pow_table_vec(x, L):
-    x = jnp.array(x)
-    one = jnp.ones((1, x.shape[0]), dtype=x.dtype)  # (1,nq)
-    if L == 1:
-        return one
-    xs   = jnp.repeat(x[None, :], L-1, axis=0)     # (L-1,nq)
-    base = jnp.concatenate([one, xs], axis=0)      # (L,nq)
-    return jnp.cumprod(base, axis=0)               # (L,nq)
+    """Static integer powers, without a cumulative-product transpose.
+
+    The table is small (normally L=6). Integer exponents let XLA share powers
+    and avoid differentiating a scan. Keeping the constant row explicit also
+    makes first/higher derivatives finite at x=0. Both JVP and VJP are native
+    JAX operations; there is no reverse-only custom derivative.
+    """
+    x = jnp.asarray(x)
+    return jnp.stack([jnp.ones_like(x)] + [x**n for n in range(1, L)])
 
 def compute_V_mu(s2, coeffs, lmax):
     """Precompute V[d,l,i] = sum_k poly[d,l,k,i]*core[l,k,i] for a given scalar s2.
 
-    This quantity depends only on s2 (which varies with mu but not with k), 
+    This quantity depends only on s2 (which varies with mu but not with k),
     so it can be factored out of the per-k loop.
-    Passing V_mu to get_lpt_moments reduces the einsum from O(L^3*nq) to O(L^2*nq).
+    Passing V_mu to get_lpt_moments reduces the einsum from O(L^3*nq) to
+    O(L^2*nq).
+
+    Row d holds the coefficients of S_d, d = 0..4.
 
     Returns shape (5, L, L) with L = lmax + 1.
     """
@@ -39,7 +48,10 @@ def compute_V_mu(s2, coeffs, lmax):
     ii = jnp.arange(L)[None, None, :]
     N = li + ii - ki
     mask = (N >= 0)
-    s2_powN = jnp.where(mask, jnp.power(s2, N), 0.0)
+    # Never evaluate a masked negative power.  At s2=0, XLA/JAX still
+    # differentiates both inputs of where(), so ``where(mask, s2**N, 0)``
+    # injects inf/NaN into an otherwise regular polynomial.
+    s2_powN = jnp.where(mask, jnp.power(s2, jnp.maximum(N, 0)), 0.0)
     core = coeffs * mask.astype(s2_powN.dtype) * s2_powN  # (L, L, L)
     Nd = N.astype(jnp.float64)
     N2, N3, N4 = Nd * Nd, Nd * Nd * Nd, Nd * Nd * Nd * Nd
@@ -107,11 +119,14 @@ def _assemble_lpt_moments_from_derivatives(
 
     return mq0, mq1, mq2, mq3, mq4, nq1, nq2, mq1_nq1, mq2_nq1
 
-def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, coeffs, lmax=10, V_mu=None):
+def get_lpt_moments(
+    A, B, C, c2, s2, A_mu, B_mu, coeffs, lmax=10, V_mu=None, *, c=None, s=None
+):
     """Compute LPT moment arrays.
 
-    If V_mu (shape (5, L, L)) is supplied it is used directly and the O(L^3*nq) einsum is replaced by a cheaper O(L^2*nq) contraction.  
-    Compute V_mu with compute_V_mu(s2, coeffs, lmax) once per mu value to amortise its cost.
+    ``V_mu`` (shape (5, L, L)) is the s2-only contraction returned by
+    compute_V_mu; computing it once per mu value amortises its cost and turns
+    the O(L^3*nq) einsum into a cheaper O(L^2*nq) one.
     """
     L = lmax + 1
 
@@ -121,40 +136,42 @@ def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, coeffs, lmax=10, V_mu=None):
     B_pows = _pow_table_vec(-B, L)
 
     if V_mu is None:
-        li = jnp.arange(L)[:, None, None]
-        ki = jnp.arange(L)[None, :, None]
-        ii = jnp.arange(L)[None, None, :]
-        N = li + ii - ki
-        mask = (N >= 0)
-        s2_powN = jnp.where(mask, jnp.power(s2, N), 0.0)
-        core = coeffs * mask.astype(coeffs.dtype) * s2_powN
-        One = jnp.ones_like(N, dtype=A.dtype)
-        Nd = N.astype(A.dtype)
-        N2 = Nd * Nd
-        N3 = N2 * Nd
-        N4 = N2 * N2
-        poly = jnp.stack([One, Nd, N2, N3, N4], axis=0)
-        S = jnp.einsum('dlki,lki,lq,iq->dlq', poly, core, B_pows, B_pows)
-    else:
-        # Factored form: S[d,l,q] = B_pows[l,q] * sum_i V_mu[d,l,i] * B_pows[i,q]
-        T = jnp.einsum('dli,iq->dlq', V_mu.astype(B_pows.dtype), B_pows)  # (5, L, nq)
-        S = T * B_pows[None]  # multiply by (-B)^l for each l
+        V_mu = compute_V_mu(s2, coeffs, lmax)
+
+    # Factored form: S[d,l,q] = B_pows[l,q] * sum_i V_mu[d,l,i] * B_pows[i,q]
+    T = jnp.einsum('dli,iq->dlq', V_mu.astype(B_pows.dtype), B_pows)  # (5, L, nq)
+    S = T * B_pows[None]  # multiply by (-B)^l for each l
 
     S0, S1, S2, S3, S4 = S
 
+    # ``invs2`` uses a double-``where`` so the untaken 1/s^2 branch has a finite derivative:
+    # ``where(safe, 1/s2, 0)`` alone still evaluates d(1/s2) at s2=0 and feeds inf into the
+    # 0*inf product JAX forms for the masked branch (the NaN at mu=0,1).
+    # At s^2=0 exactly every T_d is set to 0; the public spectra and
+    # all parameter gradients are unaffected because the T-terms with a non-vanishing prefactor
+    # combine to zero there and ds^2/dparam = 0 at both endpoints.  The intermediate moment
+    # ``nq2`` alone is therefore not the exact mu->0 limit at mu=0; observables that expose the
+    # moments themselves (e.g. velocity moments) must use the exact S_d = s^2 R_d formulation
+    # kept in the project notes.
     tiny = jnp.finfo(A.dtype).tiny
-    zero = jnp.array(0.0, dtype=A.dtype)
-    invs2 = jnp.where(s2 <= tiny, zero, 1.0 / s2)
+    safe = s2 > tiny
+    s2_safe = jnp.where(safe, s2, jnp.ones_like(s2))
+    invs2 = jnp.where(safe, 1.0 / s2_safe, jnp.zeros_like(s2))
     T0, T1, T2, T3 = (invs2*S0, invs2*S1, invs2*S2, invs2*S3)
+
+    # The production caller supplies the signed geometric variables.  The
+    # fallback preserves the old internal API away from the endpoints.
+    c = jnp.sqrt(c2) if c is None else c
+    s = jnp.sqrt(s2) if s is None else s
 
     e2 = jnp.exp(-Bs2)[None, :]
     Afac = (2 * A / rho2)[None, :]
-    Cfac = (2 * c2 * jnp.sqrt(s2 / rho2))[None, :]
+    Cfac = (2 * c2 * s / jnp.sqrt(rho2))[None, :]
     A2f = (2 / rho2)[None, :]
     C2f = (2 * c2 / rho2)[None, :]
-    ACf = (-4 * jnp.sqrt(c2 * s2) / rho2)[None, :]
-    A3f = (-4 * jnp.sqrt(c2) / rho2**1.5)[None, :]
-    A2Cf = (4 * jnp.sqrt(s2) / rho2**1.5)[None, :]
+    ACf = (-4 * c * s / rho2)[None, :]
+    A3f = (-4 * c / rho2**1.5)[None, :]
+    A2Cf = (4 * s / rho2**1.5)[None, :]
     A4f = (4 / rho2**2)[None, :]
 
     G00 = S0 * e2

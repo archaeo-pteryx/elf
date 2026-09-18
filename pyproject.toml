@@ -34,7 +34,7 @@ tests = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-ps_1loop = ["pt_matrix/*/*/*.txt"]
+ps_1loop_jax = ["pt_matrix/*/*/*.txt", "pt_coeff/*.txt"]
 
 [project.urls]
 Homepage = "https://github.com/archaeo-pteryx/ps_1loop_jax"

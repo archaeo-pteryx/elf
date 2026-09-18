@@ -11,8 +11,17 @@ from . import hankel
 from . import spline
 
 from .utils import get_pk, get_pk_int, get_pk_int2, cross_bias_factor
-from .utils_lpt import make_G00_coeffs, get_lpt_moments, compute_V_mu
-from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
+from .utils_lpt import (
+    make_G00_coeffs,
+    get_lpt_moments,
+    compute_V_mu,
+)
+from .multipole import (
+    prepare_mu_gauleg,
+    get_legendre_multipoles,
+    get_k_mu_true_for_ap,
+    get_k_mu_true_sin_for_ap,
+)
 from . import ir_resum
 from .eft_terms import Counterterms, stochasticity
 
@@ -63,6 +72,11 @@ class LPT:
 
         if hankel_forward_mode not in ('fftlog', 'pld'):
             raise ValueError("hankel_forward_mode must be 'fftlog' or 'pld'")
+        if nfft % 2:
+            raise ValueError(
+                "nfft must be even: the FFTLog pipeline uses rfft/irfft with an "
+                "implicit even length"
+            )
         if bias_basis not in ('bG2', 'bs2'):
             raise ValueError("bias_basis must be 'bG2' or 'bs2'")
         valid_pad_modes = ("power-law", "zero-pad", "smooth-zero-pad")
@@ -247,10 +261,15 @@ class LPT:
         weights = jnp.where(use_cubic, cubic, linear)
         return jnp.sum(arrays * weights, axis=-1)
 
-    def _get_V_mu_for_mu(self, mu_j, f):
+    def _get_V_mu_for_mu(self, mu_j, f, sin_mu=None):
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
-        s = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
-        return compute_V_mu(s**2, self.G00_coeffs, self.lmax)
+        if sin_mu is None:
+            sin_mu = jnp.sqrt(jnp.maximum(1 - mu_j**2, 0.0))
+        s = f * mu_j * sin_mu / Kfac
+        s2 = s**2
+        # sin_mu travels with the cached contraction so that the caller's
+        # AD-regular value (not a re-derived sqrt(1-mu^2)) reaches the moments.
+        return (compute_V_mu(s2, self.G00_coeffs, self.lmax), sin_mu)
 
     def _get_lpt_weights(self, k_i):
         return ((-2.0 / k_i) ** self._ell_indices)[:, None] * self._q_inv_pows
@@ -402,13 +421,15 @@ class LPT:
         q = self._q
         X_lin_lt, Y_lin_lt = corrs_tree[2], corrs_tree[3]
 
+        V_mu, sin_mu = V_mu
+
         Kfac = jnp.sqrt(1 + f * (2 + f) * mu_j**2)
         K = k_i * Kfac
         Ksq = K**2
         c = (1 + f * mu_j**2) / Kfac
-        s = f * mu_j * jnp.sqrt(1 - mu_j**2) / Kfac
+        s = f * mu_j * sin_mu / Kfac
         A_mu = (1 + f) * mu_j / Kfac
-        B_mu = jnp.sqrt(1 - mu_j**2) / Kfac
+        B_mu = sin_mu / Kfac
 
         A = k_i * q * c
         B = -0.5 * Ksq * Y_lin_lt
@@ -416,7 +437,8 @@ class LPT:
         base = jnp.exp(-0.5 * Ksq * (X_lin_lt + Y_lin_lt))
         weights = self._get_lpt_weights(k_i)
         moments = get_lpt_moments(
-            A, B, C, c**2, s**2, A_mu, B_mu, self.G00_coeffs, self.lmax, V_mu
+            A, B, C, c**2, s**2, A_mu, B_mu, self.G00_coeffs, self.lmax, V_mu,
+            c=c, s=s,
         )
         return Kfac, K, Ksq, base, weights, moments
 
@@ -558,7 +580,10 @@ class LPT:
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
         logk_fft = self._logk_fft
-        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu)
+        sin_mu = jnp.sqrt(jnp.maximum(1 - mu**2, 0.0))
+        V_all_mu = jax.vmap(
+            lambda mu_j, sin_j: self._get_V_mu_for_mu(mu_j, f, sin_j)
+        )(mu, sin_mu)
 
         def per_k(k_i):
             logk = jnp.log(k_i)
@@ -654,10 +679,14 @@ class LPT:
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
         logk_fft = self._logk_fft
-        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
+        k_true, mu_true, sin_true = get_k_mu_true_sin_for_ap(
+            k, mu, alpha_perp, alpha_para
+        )
         # P(k, mu) is even in mu (plane-parallel); the internal moment algebra uses sqrt(s^2)=|s| and is only consistent for mu >= 0, so fold here.
         mu_true = jnp.abs(mu_true)
-        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu_true)
+        V_all_mu = jax.vmap(
+            lambda mu_j, sin_j: self._get_V_mu_for_mu(mu_j, f, sin_j)
+        )(mu_true, sin_true)
         mu_true = jnp.broadcast_to(mu_true, k_true.shape)
 
         def per_point(k_i, mu_j, V_mu):
@@ -771,10 +800,14 @@ class LPT:
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
         logk_fft = self._logk_fft
-        k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
+        k_true, mu_true, sin_true = get_k_mu_true_sin_for_ap(
+            k, mu, alpha_perp, alpha_para
+        )
         # P(k, mu) is even in mu; internal moments are mu>=0-consistent only.
         mu_true = jnp.abs(mu_true)
-        V_all_mu = jax.vmap(lambda mu_j: self._get_V_mu_for_mu(mu_j, f))(mu_true)
+        V_all_mu = jax.vmap(
+            lambda mu_j, sin_j: self._get_V_mu_for_mu(mu_j, f, sin_j)
+        )(mu_true, sin_true)
         mu_true = jnp.broadcast_to(mu_true, k_true.shape)
 
         def per_k(k_true_row, mu_true_row):
