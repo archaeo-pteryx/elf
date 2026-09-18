@@ -690,7 +690,7 @@ class EPT:
             return self.get_pkmu_22_matrix_backend(pk, f, bias_a, bias_b)
 
         def get_pk_lnm_22(term):
-            # ordinary j0 transform of xi_ln^2
+            # ordinary j0 kernel
             l, n, m = term
             xi = xi_ln[l, n]
             source = spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[l]), xi * xi)
@@ -698,19 +698,27 @@ class EPT:
             return (self._k ** m) * pk_ln
 
         def get_pk_lnm_22_m0(term):
-            pk_ln = get_pk_lnm_22(term)
+            # m=0 blocks contain a genuine k->0 constant, so the quantity used in the sum is the residual B_i(k)-B_i(0). 
+            # We evaluate it two ways and combine: 
+            # the j0-1 kernel (accurate at low k) and the ordinary j0 transform minus its DC (accurate at high k).
 
+            # Low-k accurate form: B_i(k)-B_i(0) from the j0-1 residual kernel.
             l, n, _ = term
             xi = xi_ln[l, n]
-            residual_source = spline.interp1d(jnp.log(self._q_p22_residual), jnp.log(self._q[l]), xi * xi)
-            pk_ln_residual = 4 * jnp.pi * self.get_pk_ln_p22_residual(residual_source)
+            source = spline.interp1d(jnp.log(self._q_p22_residual), jnp.log(self._q[l]), xi * xi)
+            pk_ln_residual = 4 * jnp.pi * self.get_pk_ln_p22_residual(source)
 
-            direct_residual = pk_ln - pk_ln[:1]
+            # High-k accurate form: full B_i(k) from the ordinary j0 transform,
+            # then subtract its own k->0 value B_i(0) (= first grid point).
+            pk_ln = get_pk_lnm_22(term)
+            pk_ln_direct = pk_ln - pk_ln[:1]
+
+            # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the direct transform); blend residual (low r) and direct (high r).
             denom = jnp.maximum(jnp.abs(pk_ln[:1]), jnp.finfo(pk_ln.real.dtype).tiny)
-            r_ratio = jnp.abs(direct_residual) / denom
+            r_ratio = jnp.abs(pk_ln_direct) / denom
             w = 1.0 / (1.0 + (r_ratio / self._p22_m0_blend_rstar) ** self._p22_m0_blend_pow)
 
-            return w * pk_ln_residual + (1.0 - w) * direct_residual
+            return w * pk_ln_residual + (1.0 - w) * pk_ln_direct
 
         pk_lnm_m0 = jax.vmap(get_pk_lnm_22_m0)(self._lnm_22_m0)   # (n_m0, nk)
         pk_lnm_m = jax.vmap(get_pk_lnm_22)(self._lnm_22_m)        # (n_m,  nk)
