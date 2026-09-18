@@ -8,8 +8,7 @@ from functools import partial
 
 import jax.numpy as jnp
 
-from .power_law_decomp import get_decomp_data
-from . import hankel
+from . import fftlog
 
 from . import pt_coeff
 from . import pt_matrix
@@ -132,23 +131,27 @@ class EPT:
         return self._counterterms.base
 
     def _get_pld_xpow(self, nu):
-        dln = jnp.log(self._k[1] / self._k[0])
-        eta_m = 2 * jnp.pi / (self._nfft * dln) * (jnp.arange(self._nfft) - self._nfft // 2)
-        nu_m = nu + eta_m * 1j
-        return self._k[None, :]**nu_m[:, None]
+        """Tabulate k^{nu_m} for the power-law decomposition on the unpadded grid."""
+        nu_m = nu + 1j * fftlog.LogGrid(self._k, 0).eta_full
+        return fftlog.power_law_xpow(nu_m, self._k)
 
     def _get_decomp_pq_from_xpow(self, nu, xpow, fx):
-        dln = jnp.log(self._k[1] / self._k[0])
-        eta_m = 2 * jnp.pi / (self._nfft * dln) * (jnp.arange(self._nfft) - self._nfft // 2)
-        c_m = jnp.fft.rfft(fx * self._k**(-nu), norm='forward')
-        c_m = self._k[0]**(-eta_m * 1j) * jnp.concatenate([c_m[::-1][:-1].conj(), c_m[:-1]], axis=0)
-        return c_m[:, None] * xpow
+        """Power-law decomposition of ``fx`` against a precomputed ``k^{nu_m}`` table."""
+        c_m, _ = fftlog.full_spectrum(
+            fftlog.mellin_coefficients(fx, self._k, nu, norm='forward'), self._k, nu)
+        return fftlog.power_law_terms(c_m, xpow)
+
+    def _get_decomp_pq(self, nu, fx):
+        """Power-law decomposition of ``fx`` with the ``k^{nu_m}`` table built inline."""
+        c_m, nu_m = fftlog.full_spectrum(
+            fftlog.mellin_coefficients(fx, self._k, nu, norm='forward'), self._k, nu)
+        return fftlog.power_law_terms(c_m, fftlog.power_law_xpow(nu_m, self._k))
     
     def _initialize_loop_coeff(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/22*.txt')
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_coeff/22*.txt'))
         self.pkmu_coeff_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_coeff/13*.txt')
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_coeff/13*.txt'))
         self.pkmu_coeff_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         lnm_list = []
@@ -212,23 +215,24 @@ class EPT:
         _mellin_arg = self._nu_hankel
 
         self._npad = max(1, int(self._hankel_npad_factor * self._nfft))
-        self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
+        self._grid = fftlog.LogGrid.from_core(self._k, self._npad)
+        self._k_padded = self._grid.x
 
         n_window = 0 if self._hankel_window_factor is None else int(self._hankel_window_factor * self._nfft)
-        self._w_m = hankel.get_window(n_window, self._k_padded)
+        self._w_m = fftlog.window(n_window, self._k_padded)
 
-        nfft = len(self._k_padded)
-        dln = jnp.log(self._k_padded[1] / self._k_padded[0])
-        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
-
-        g_l = jnp.array([hankel.get_g_l(l, _mellin_arg + 1j * eta_m) for l in l_list])
-
-        lnxy = jnp.array([dln * jnp.angle(hankel.get_g_l(l, _mellin_arg + 1j * jnp.pi / dln)) / jnp.pi for l in l_list])
+        lnxy = jnp.array([
+            fftlog.low_ringing_phase(l, _mellin_arg, self._grid) for l in l_list
+        ])
         self._lnxy = lnxy  # stored for PLD u_m construction
-        self._q_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
-        self._q = jnp.array([self._q_padded[l][self._npad:-self._npad] for l in l_list])
+        self._q_padded = jnp.array([
+            fftlog.output_grid(self._grid, lnxy[l]) for l in l_list
+        ])
+        self._q = self._grid.crop(self._q_padded)
 
-        self._u_m = jnp.array([jnp.exp(lnxy[l])**(-1j*eta_m) * g_l[l] for l in l_list])
+        self._u_m = jnp.array([
+            fftlog.hankel_kernel(l, _mellin_arg, self._grid, lnxy[l]) for l in l_list
+        ])
 
         self._set_hankel_forward_pld_kernel()
         self._set_hankel_p22_residual()
@@ -247,18 +251,14 @@ class EPT:
             self._xi_pld_n0_mask = None
             return
 
-        nfft_pad = len(self._k_padded)
-        dln = jnp.log(self._k_padded[1] / self._k_padded[0])
-        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft_pad, d=1.0) / dln
-
         def _build_pld_arrays(nu):
             u_ms, q_factors = [], []
             for l, n in self._ln_list:
                 l_int, n_int = int(l), int(n)
                 nu_eff = nu + n_int + 3
-                g_l = jnp.asarray(hankel.get_g_l(l_int, nu_eff + 1j * eta_m))
-                lnxy_l = self._lnxy[l_int]  # low-ring phase from standard \nu
-                u_m = jnp.exp(lnxy_l * (-1j * eta_m)) * g_l
+                # Low-ring phase from the standard \nu, kernel bias from \nu_eff
+                u_m = fftlog.hankel_kernel(
+                    l_int, nu_eff, self._grid, self._lnxy[l_int])
                 q_factor = self._q_padded[l_int] ** (-nu_eff)  # (nfft_pad,)
                 u_ms.append(u_m)
                 q_factors.append(q_factor)
@@ -274,15 +274,10 @@ class EPT:
     def _set_hankel_p22_residual(self):
         nu = self._hankel_p22_residual_backward_nu
 
-        nfft = len(self._k_padded)
-        dln = jnp.log(self._k_padded[1] / self._k_padded[0])
-        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
-
-        g_0 = jnp.asarray(hankel.get_g_l(0, nu + 1j * eta_m))
-        lnxy = dln * jnp.angle(hankel.get_g_l(0, nu + 1j * jnp.pi / dln)) / jnp.pi
-        q_padded = jnp.exp(lnxy - dln) / self._k_padded[::-1]
-        q = q_padded[self._npad:-self._npad]
-        u_m = jnp.exp(lnxy)**(-1j * eta_m) * g_0
+        lnxy = fftlog.low_ringing_phase(0, nu, self._grid)
+        q_padded = fftlog.output_grid(self._grid, lnxy)
+        q = self._grid.crop(q_padded)
+        u_m = fftlog.hankel_kernel(0, nu, self._grid, lnxy)
 
         self._q_p22_residual_padded = q_padded
         self._q_p22_residual = q
@@ -290,9 +285,9 @@ class EPT:
     
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/22*.txt')
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/22*.txt'))
         self.pkmu_term_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/13*.txt')
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/13*.txt'))
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         # nu group tags: matter (-0.3) vs bias (-1.6), used to assign index subsets.
@@ -345,7 +340,7 @@ class EPT:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
 
         # precompute the PT matrices for appropriate FFT settings.
-        eta_m = 2 * jnp.pi / (self._nfft * jnp.log(self._k[1] / self._k[0])) * (jnp.arange(self._nfft) - self._nfft // 2)
+        eta_m = fftlog.LogGrid(self._k, 0).eta_full
         matrix = {}
 
         for name in names:
@@ -537,12 +532,12 @@ class EPT:
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_pld(self, pk, f, bias_a, bias_b):
         # nu=-0.3: P22 nu1 group and P13 nu1 group
-        p_q_1, _, _ = get_decomp_data(-0.3, self._k, pk)
+        p_q_1 = self._get_decomp_pq(-0.3, pk)
         # nu=-1.0: P22 nu2 (bias-operator blocks) and nu3 (b2^2-only) groups.
         # nu > -3/2 -> FFTLog evaluates I(k)-I(0) for all blocks via analytic continuation.
-        p_q_2, _, _ = get_decomp_data(self._nu_ept_22_bias_ac, self._k, pk)
+        p_q_2 = self._get_decomp_pq(self._nu_ept_22_bias_ac, pk)
         # nu=-1.6: P13 nu2 group only (P13 convergence strip requires this nu)
-        p_q_3, _, _ = get_decomp_data(-1.6, self._k, pk)
+        p_q_3 = self._get_decomp_pq(-1.6, pk)
 
         pkmu_terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
         pkmu_terms_13 = self.get_pkmu_terms_13(p_q_1, p_q_3, pk)
@@ -554,7 +549,7 @@ class EPT:
     
     def _get_xi_ln_direct(self, l, n, array):
         fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = hankel.get_hankel(
+        xi_ln = fftlog.hankel(
             self._nu_hankel,
             fx,
             self._k_padded,
@@ -573,7 +568,7 @@ class EPT:
 
     def get_pk_ln(self, l, n, array):
         fx = array * self._q[l]**(n + 3)
-        pk_ln = hankel.get_hankel(
+        pk_ln = fftlog.hankel(
             self._nu_hankel,
             fx,
             self._q_padded[l],
@@ -587,7 +582,7 @@ class EPT:
 
     def get_pk_ln_p22_residual(self, array):
         fx = array * self._q_p22_residual**3
-        pk_ln = hankel.get_hankel(
+        pk_ln = fftlog.hankel(
             self._hankel_p22_residual_backward_nu,
             fx,
             self._q_p22_residual_padded,
@@ -613,13 +608,18 @@ class EPT:
 
     def _get_forward_pld_rfft(self, nu, array):
         """Padded rfft for PLD: rfft(array/(2 pi^2) * k_padded^{-nu} * window)."""
-        fx_pad = hankel.pad(array / (2 * jnp.pi**2), self._npad, mode=self._hankel_forward_pad_mode)
-        return jnp.fft.rfft(fx_pad * self._k_padded**(-nu) * self._w_m)
+        fx_pad = fftlog.pad(array / (2 * jnp.pi**2), self._npad, mode=self._hankel_forward_pad_mode)
+        return fftlog.mellin_coefficients(fx_pad, self._k_padded, nu, window=self._w_m)
 
     def _apply_pld_batch(self, c_m, u_m_batch, q_factor_batch):
-        """Batched irfft for all (l,n) pairs -> shape (n_ln, nfft)."""
-        xi_pad = jnp.fft.irfft(jnp.conj(c_m[None, :] * u_m_batch))  # (n_ln, nfft_pad)
-        return (xi_pad * q_factor_batch)[:, self._npad:-self._npad]   # (n_ln, nfft)
+        """Batched irfft for all (l,n) pairs -> shape (n_ln, nfft).
+
+        Each row has its own output grid and bias, so the row-wise
+        ``q_padded[l]**(-nu_eff)`` factors are precomputed once at construction
+        and handed to ``hankel_transform`` as ``y_pow``.
+        """
+        return fftlog.hankel_transform(
+            c_m, u_m_batch, None, None, self._npad, y_pow=q_factor_batch)
 
     def _get_xi_ln_pld(self, l, n, array):
         idx = self._ln_index[(int(l), int(n))]
@@ -631,8 +631,8 @@ class EPT:
             c_m = self._get_forward_pld_rfft(self._nu_hankel_forward_pld, array)
             u_m = self._xi_pld_u_m[idx]
             q_factor = self._xi_pld_q_factor[idx]
-        xi_pad = jnp.fft.irfft(jnp.conj(c_m * u_m))
-        return (xi_pad * q_factor)[self._npad:-self._npad]
+        return fftlog.hankel_transform(
+            c_m, u_m, None, None, self._npad, y_pow=q_factor)
 
     def _get_xi_ln_array_pld(self, array):
         c_m = self._get_forward_pld_rfft(self._nu_hankel_forward_pld, array)

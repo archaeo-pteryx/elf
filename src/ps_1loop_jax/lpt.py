@@ -7,7 +7,7 @@ from functools import partial
 
 import jax.numpy as jnp
 
-from . import hankel
+from . import fftlog
 from . import spline
 
 from .utils import get_pk, get_pk_int, get_pk_int2, cross_bias_factor
@@ -90,6 +90,13 @@ class LPT:
         ):
             if mode not in valid_pad_modes:
                 raise ValueError(f"{name} must be one of {valid_pad_modes}")
+        if self._hankel_backward_pad_mode == 'power-law':
+            # The q-space sources change sign, so a geometric continuation over
+            # the guard band overflows and every multipole comes out NaN.
+            raise ValueError(
+                "hankel_backward_pad_mode='power-law' is not supported for the LPT "
+                "backward transforms; use 'zero-pad' (default) or 'smooth-zero-pad'"
+            )
 
         self.lmax = lmax
         self._counterterms = Counterterms(counterterm_base)
@@ -135,24 +142,23 @@ class LPT:
         l_list = list(range(lmax + 1))
 
         self._npad = max(1, int(self._hankel_npad_factor * self._nfft))
-        self._k_padded = hankel.get_log_extrap(self._k, self._npad, self._npad)
+        self._grid = fftlog.LogGrid.from_core(self._k, self._npad)
+        self._k_padded = self._grid.x
 
         # Spatial window disabled: analytic residualization handles the large-q tail.
-        self._w_m = hankel.get_window(0, self._k_padded)
-
-        nfft = len(self._k_padded)
-        dln = jnp.log(self._k_padded[1] / self._k_padded[0])
-        eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
+        self._w_m = fftlog.window(0, self._k_padded)
 
         # Low-ringing output phase per ell
         lnxy = jnp.array([
-            dln * jnp.angle(hankel.get_g_l(l, self._nu_hankel + 1j * jnp.pi / dln)) / jnp.pi
+            fftlog.low_ringing_phase(l, self._nu_hankel, self._grid)
             for l in l_list
         ])
 
         # Ell-specific forward output grids (used for xi_ln forward transforms)
-        self._q_xi_padded = jnp.array([jnp.exp(lnxy[l] - dln) / self._k_padded[::-1] for l in l_list])
-        self._q_xi = jnp.array([self._q_xi_padded[l][self._npad:-self._npad] for l in l_list])
+        self._q_xi_padded = jnp.array([
+            fftlog.output_grid(self._grid, lnxy[l]) for l in l_list
+        ])
+        self._q_xi = self._grid.crop(self._q_xi_padded)
 
         # Common q-grid (ell=0) for backward transforms and all q-space products
         self._q_padded = self._q_xi_padded[0]   # shape (nfft_padded,)
@@ -163,12 +169,14 @@ class LPT:
         self._4pi_q3 = 4.0 * jnp.pi * self._q**3
         self._logk_fft = jnp.log(self._k)
 
-        g_l = jnp.array([hankel.get_g_l(l, self._nu_hankel + 1j * eta_m) for l in l_list])
-
         # Forward kernels: ell-specific output phase, ell-specific G_l kernel
-        self._u_m_xi = jnp.array([jnp.exp(lnxy[l])**(-1j * eta_m) * g_l[l] for l in l_list])
+        self._u_m_xi = jnp.array([
+            fftlog.hankel_kernel(l, self._nu_hankel, self._grid, lnxy[l]) for l in l_list
+        ])
         # Backward kernels: ell=0 output phase, ell-specific G_l kernel
-        self._u_m = jnp.array([jnp.exp(lnxy[0])**(-1j * eta_m) * g_l[l] for l in l_list])
+        self._u_m = jnp.array([
+            fftlog.hankel_kernel(l, self._nu_hankel, self._grid, lnxy[0]) for l in l_list
+        ])
 
         self._set_hankel_forward_pld_groups()
         self._set_pk_select_kernel()
@@ -191,7 +199,7 @@ class LPT:
         basis = jnp.eye(self._q.shape[0], dtype=self._q.dtype)
 
         def build_one(u_m):
-            pk = hankel.get_hankel_batched(
+            pk = fftlog.hankel(
                 self._nu_hankel, basis, self._q_padded, self._k_padded,
                 u_m, self._npad, self._w_m, self._hankel_backward_pad_mode,
             )
@@ -278,7 +286,7 @@ class LPT:
         if pad_mode is None:
             pad_mode = self._hankel_forward_pad_mode
         fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = hankel.get_hankel(
+        xi_ln = fftlog.hankel(
             self._nu_hankel,
             fx,
             self._k_padded,
@@ -299,7 +307,7 @@ class LPT:
         arrays = jnp.asarray(arrays)
 
         fx = arrays * self._k[None, :] ** (ns[:, None] + 3) / (2 * jnp.pi**2)
-        xi_ln = hankel.get_hankel_batched(
+        xi_ln = fftlog.hankel(
             self._nu_hankel,
             fx,
             self._k_padded,
@@ -316,14 +324,14 @@ class LPT:
 
     def get_pk_ln(self, l, n, array):
         fx = array * self._q**(n + 3)
-        pk_ln = hankel.get_hankel(
+        pk_ln = fftlog.hankel(
             self._nu_hankel, fx, self._q_padded, self._k_padded, self._u_m[l],
             self._npad, self._w_m, self._hankel_backward_pad_mode,
         )
         return pk_ln
 
     def get_pk_batched(self, arrays, u_m):
-        pks = hankel.get_hankel_batched(
+        pks = fftlog.hankel(
             self._nu_hankel, arrays, self._q_padded, self._k_padded, u_m,
             self._npad, self._w_m, self._hankel_backward_pad_mode,
         )
@@ -369,16 +377,15 @@ class LPT:
         return xi_ln.at[:, ls, ns].set(xis)
 
     def _get_forward_pld_rfft_batch(self, array, pad_mode):
-        fx_pad = hankel.pad(array / (2 * jnp.pi**2), self._npad, mode=pad_mode)
+        fx_pad = fftlog.pad(array / (2 * jnp.pi**2), self._npad, mode=pad_mode)
         nu_n = self._nu_hankel - (self._xi_pld_group_ns + 3).astype(jnp.float64)
-        weighted = fx_pad[None, :] * self._k_padded[None, :] ** (-nu_n[:, None])
-        return jnp.fft.rfft(weighted * self._w_m[None, :])
+        return fftlog.mellin_coefficients(
+            fx_pad[None, :], self._k_padded, nu_n[:, None], window=self._w_m)
 
     def _apply_forward_pld_group(self, c_m, ells):
         c_m = jnp.atleast_2d(c_m)
-        xi_pad = jnp.fft.irfft(jnp.conj(c_m * self._u_m_xi[ells]))
-        xi = xi_pad * self._q_xi_padded[ells] ** (-self._nu_hankel)
-        xi = xi[:, self._npad:-self._npad]
+        xi = fftlog.hankel_transform(
+            c_m, self._u_m_xi[ells], self._q_xi_padded[ells], self._nu_hankel, self._npad)
         log_q = jnp.log(self._q)
         def interp_to_common_q(ell, row):
             return spline.interp1d(log_q, jnp.log(self._q_xi[ell]), row)
