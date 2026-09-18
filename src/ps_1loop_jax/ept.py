@@ -1,5 +1,6 @@
 import os
 import glob, re
+import numpy as _np
 import jax
 jax.config.update('jax_enable_x64', True)
 from jax import jit
@@ -163,7 +164,16 @@ class EPT:
             padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
             padded_coeff_info.append(padded)
         
-        self._lnm_list_22_static = tuple(tuple(int(x) for x in row) for row in lnm_list)
+        # P22 blocks are split statically by m: m=0 blocks carry a genuine k->0
+        # constant and are residualized, m>0 blocks are plain k^m B(k).
+        # ``_lnm_22_order`` maps the concatenated (m=0, m>0) result back to
+        # the ``coeff_info_22`` row order.
+        lnm = _np.asarray(lnm_list)
+        idx_m0 = _np.flatnonzero(lnm[:, 2] == 0)
+        idx_m = _np.flatnonzero(lnm[:, 2] > 0)
+        self._lnm_22_m0 = jnp.asarray(lnm[idx_m0], dtype=jnp.int32)
+        self._lnm_22_m = jnp.asarray(lnm[idx_m], dtype=jnp.int32)
+        self._lnm_22_order = jnp.asarray(_np.argsort(_np.concatenate([idx_m0, idx_m])), dtype=jnp.int32)
         self.coeff_info_22 = jnp.array(padded_coeff_info)
 
         lnm_list = []
@@ -181,7 +191,7 @@ class EPT:
             padded = lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst))
             padded_coeff_info.append(padded)
         
-        self._lnm_list_13 = jnp.array(lnm_list)
+        self._lnm_13 = jnp.array(lnm_list)
         self.coeff_info_13 = jnp.array(padded_coeff_info)
 
         # set the Hankel transforms
@@ -260,13 +270,8 @@ class EPT:
         )
 
     def _set_hankel_p22_residual(self):
-        (
-            self._q_p22_residual_padded,
-            self._q_p22_residual,
-            self._u_m_p22_residual,
-        ) = self._make_hankel_p22_residual(self._hankel_p22_residual_backward_nu)
+        nu = self._hankel_p22_residual_backward_nu
 
-    def _make_hankel_p22_residual(self, nu):
         nfft = len(self._k_padded)
         dln = jnp.log(self._k_padded[1] / self._k_padded[0])
         eta_m = 2 * jnp.pi * jnp.fft.rfftfreq(nfft, d=1.0) / dln
@@ -276,7 +281,10 @@ class EPT:
         q_padded = jnp.exp(lnxy - dln) / self._k_padded[::-1]
         q = q_padded[self._npad:-self._npad]
         u_m = jnp.exp(lnxy)**(-1j * eta_m) * g_0
-        return q_padded, q, u_m
+
+        self._q_p22_residual_padded = q_padded
+        self._q_p22_residual = q
+        self._u_m_p22_residual = u_m
     
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
@@ -586,21 +594,6 @@ class EPT:
         )
         return pk_ln
 
-    def get_pk_ln_p22_residual_batched(self, arrays):
-        """Batched P22 residual backward Hankel for sources on q_p22_residual."""
-        fx = arrays * self._q_p22_residual[None, :]**3
-        pk_ln = hankel.get_hankel_batched(
-            self._hankel_p22_residual_backward_nu,
-            fx,
-            self._q_p22_residual_padded,
-            self._k_padded,
-            self._u_m_p22_residual,
-            self._npad,
-            self._w_m,
-            self._hankel_backward_pad_mode,
-        )
-        return pk_ln
-
     def _get_xi_ln_array_direct(self, array):
         def compute_ln(ln):
             l, n = ln
@@ -675,15 +668,6 @@ class EPT:
         pk_data = jnp.stack([self._k, pk], axis=0)
         return (b2_a * b2_b) / 2. * get_pk_int2(pk_data)
 
-    def _get_coeff_matrix_22(self, f, bias_a, bias_b):
-        def compute_coeffs(entry):
-            mu_pow, coeffs = eval_power_coeffs(entry[:, :6], f, bias_a, bias_b)
-            coeffs = entry[:, 6] * coeffs
-            mu_terms = self._mu[None, :] ** mu_pow[:, None]
-            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)
-
-        return jax.vmap(compute_coeffs)(self.coeff_info_22)
-
     def get_pkmu_22_matrix_backend(self, pk, f, bias_a, bias_b):
         """Evaluate P22 with the PLD/matrix backend from a Hankel or hybrid run."""
         p_q_1 = self._get_decomp_pq_from_xpow(-0.3, self._pld_xpow_nu1, pk)
@@ -692,104 +676,61 @@ class EPT:
         return self.get_pkmu_22_pld(terms_22, pk, f, bias_a, bias_b)
 
     def get_pkmu_22_hankel(self, xi_ln, pk, f, bias_a, bias_b):
+        """P22 from per-block Hankel transforms (same structure as get_pkmu_13_hankel).
+
+        m=0 blocks contain a genuine k->0 constant, so the quantity summed is the
+        residual B_i(k)-B_i(0).  It is evaluated two ways and blended on the
+        dimensionless ratio r = |B(k)-B(0)|/|B(0)|: the j0-1 kernel (accurate at
+        low k) and the ordinary j0 transform minus its DC (accurate at high k);
+        see the constructor comment.  m>0 blocks are k^m B_i(k) and use the
+        ordinary transform only.  The two groups are split at construction so
+        no transform is computed and discarded.
+        """
         if self._hankel_p22_final_mode == 'matrix':
             return self.get_pkmu_22_matrix_backend(pk, f, bias_a, bias_b)
-        
-        pk_lnm_parts = {}
 
-        residual_sources = []   # m=0 sources on the j0-1 residual q-grid
-        m0_direct_sources = []  # same m=0 sources on the ordinary q[0] grid
-        residual_indices = []
-        standard_sources = []
-        standard_indices = []
-        for i, (l, n, m) in enumerate(self._lnm_list_22_static):
+        def get_pk_lnm_22(term):
+            # ordinary j0 transform of xi_ln^2
+            l, n, m = term
             xi = xi_ln[l, n]
-            if m == 0:
-                # m=0 blocks contain a genuine k->0 constant, so the quantity used in the sum is the residual B_i(k)-B_i(0).  
-                # We evaluate it two ways and combine: 
-                # the j0-1 kernel (accurate at low k) and the ordinary j0 transform minus its DC (accurate at high k).
-                residual_sources.append(4 * jnp.pi * spline.interp1d(
-                    jnp.log(self._q_p22_residual),
-                    jnp.log(self._q[l]),
-                    xi * xi,
-                ))
-                m0_direct_sources.append(4 * jnp.pi * spline.interp1d(
-                    jnp.log(self._q[0]),
-                    jnp.log(self._q[l]),
-                    xi * xi,
-                ))
-                residual_indices.append(i)
-            else:
-                # For m>0 the desired block is k^m B_i(k).  
-                # Replacing j0 by j0-1 would incorrectly remove the finite k^m B_i(0) term.
-                source = spline.interp1d(
-                    jnp.log(self._q[0]),
-                    jnp.log(self._q[l]),
-                    xi * xi,
-                )
-                standard_sources.append(4 * jnp.pi * source)
-                standard_indices.append(i)
+            source = spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[l]), xi * xi)
+            pk_ln =  4 * jnp.pi * self.get_pk_ln(0, 0, source)
+            return (self._k ** m) * pk_ln
 
-        if residual_sources:
-            # Low-k accurate form: B_i(k)-B_i(0) from the j0-1 residual kernel.
-            residual_blocks = self.get_pk_ln_p22_residual_batched(
-                jnp.stack(residual_sources, axis=0)
-            )
-            # High-k accurate form: full B_i(k) from the ordinary j0 transform,
-            # then subtract its own k->0 value B_i(0) (= first grid point).
-            direct_blocks = hankel.get_hankel_batched(
-                self._nu_hankel,
-                jnp.stack(m0_direct_sources, axis=0) * self._q[0][None, :]**3,
-                self._q_padded[0],
-                self._k_padded,
-                self._u_m[0],
-                self._npad,
-                self._w_m,
-                self._hankel_backward_pad_mode,
-            )
-            direct_residual = direct_blocks - direct_blocks[:, :1]
-            # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the direct transform); blend residual (low r) and direct (high r).  See the constructor comment.
-            denom = jnp.maximum(
-                jnp.abs(direct_blocks[:, :1]),
-                jnp.finfo(direct_blocks.real.dtype).tiny,
-            )
+        def get_pk_lnm_22_m0(term):
+            pk_ln = get_pk_lnm_22(term)
+
+            l, n, _ = term
+            xi = xi_ln[l, n]
+            residual_source = spline.interp1d(jnp.log(self._q_p22_residual), jnp.log(self._q[l]), xi * xi)
+            pk_ln_residual = 4 * jnp.pi * self.get_pk_ln_p22_residual(residual_source)
+
+            direct_residual = pk_ln - pk_ln[:1]
+            denom = jnp.maximum(jnp.abs(pk_ln[:1]), jnp.finfo(pk_ln.real.dtype).tiny)
             r_ratio = jnp.abs(direct_residual) / denom
             w = 1.0 / (1.0 + (r_ratio / self._p22_m0_blend_rstar) ** self._p22_m0_blend_pow)
-            blended = w * residual_blocks + (1.0 - w) * direct_residual
-            for j, i in enumerate(residual_indices):
-                pk_lnm_parts[i] = blended[j]
 
-        if standard_sources:
-            standard_blocks = hankel.get_hankel_batched(
-                self._nu_hankel,
-                jnp.stack(standard_sources, axis=0) * self._q[0][None, :]**3,
-                self._q_padded[0],
-                self._k_padded,
-                self._u_m[0],
-                self._npad,
-                self._w_m,
-                self._hankel_backward_pad_mode,
-            )
-            for j, i in enumerate(standard_indices):
-                m = self._lnm_list_22_static[i][2]
-                pk_lnm_parts[i] = self._k**m * standard_blocks[j]
+            return w * pk_ln_residual + (1.0 - w) * direct_residual
 
-        pk_lnm = jnp.stack(
-            [pk_lnm_parts[i] for i in range(len(self._lnm_list_22_static))],
-            axis=0,
-        )
+        pk_lnm_m0 = jax.vmap(get_pk_lnm_22_m0)(self._lnm_22_m0)   # (n_m0, nk)
+        pk_lnm_m = jax.vmap(get_pk_lnm_22)(self._lnm_22_m)        # (n_m,  nk)
+        pk_lnm = jnp.concatenate([pk_lnm_m0, pk_lnm_m], axis=0)[self._lnm_22_order]  # (nterms, nk)
 
-        coeff_matrix = self._get_coeff_matrix_22(f, bias_a, bias_b)  # (nterms, nmu)
+        def compute_coeffs(entry):
+            mu_pow, coeffs = eval_power_coeffs(entry[:, :6], f, bias_a, bias_b)
+            coeffs = entry[:, 6] * coeffs
+            mu_terms = self._mu[None, :] ** mu_pow[:, None]  # (max_len, nmu)
+            return jnp.sum(coeffs[:, None] * mu_terms, axis=0)  # (nmu,)
 
-        terms = pk_lnm[:, :, None] * coeff_matrix[:, None, :]
-        pkmu = jnp.sum(terms, axis=0)  # (nk, nmu)
+        coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_22)  # (nterms, nmu)
+        pkmu = jnp.sum(pk_lnm[:, :, None] * coeff_matrix[:, None, :], axis=0)  # (nk, nmu)
 
-        # The m=0 blocks above are the residualized B_i(k)-B_i(0).  
+        # The m=0 blocks above are the residualized B_i(k)-B_i(0).
         # For the unsubtracted spectrum, restore the only physical k->0 constant, the b2^2 (delta^2 . delta^2) DC = b2^2/2 * k0_pk.
         if not self.subtract_k0_limit:
             pkmu = pkmu + self._get_pkmu_22_k0_limit(pk, bias_a, bias_b)
         return pkmu  # (nk, nmu)
-    
+
     def get_pkmu_13_hankel(self, xi_ln, pk, f, bias_a, bias_b):
         
         def get_pk_lnm_13(term):
@@ -797,7 +738,7 @@ class EPT:
             pk_ln = self.get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
             return (self._k ** m) * pk * pk_ln
 
-        pk_lnm = jax.vmap(get_pk_lnm_13)(self._lnm_list_13)  # (nterms, nk)
+        pk_lnm = jax.vmap(get_pk_lnm_13)(self._lnm_13)  # (nterms, nk)
 
         def compute_coeffs(entry):
             mu_pow, coeffs = eval_power_coeffs(entry[:, :6], f, bias_a, bias_b)
@@ -806,9 +747,7 @@ class EPT:
             return jnp.sum(coeffs[:, None] * mu_terms, axis=0)  # (nmu,)
 
         coeff_matrix = jax.vmap(compute_coeffs)(self.coeff_info_13)  # (nterms, nmu)
-
-        terms = pk_lnm[:, :, None] * coeff_matrix[:, None, :]
-        pkmu = jnp.sum(terms, axis=0)  # (nk, nmu)
+        pkmu = jnp.sum(pk_lnm[:, :, None] * coeff_matrix[:, None, :], axis=0)  # (nk, nmu)
 
         return pkmu
     
