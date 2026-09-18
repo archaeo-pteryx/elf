@@ -706,19 +706,19 @@ class EPT:
             l, n, _ = term
             xi = xi_ln[l, n]
             source = spline.interp1d(jnp.log(self._q_p22_residual), jnp.log(self._q[l]), xi * xi)
-            pk_ln_residual = 4 * jnp.pi * self.get_pk_ln_p22_residual(source)
+            pk_ln_j0m1 = 4 * jnp.pi * self.get_pk_ln_p22_residual(source)
 
             # High-k accurate form: full B_i(k) from the ordinary j0 transform,
             # then subtract its own k->0 value B_i(0) (= first grid point).
             pk_ln = get_pk_lnm_22(term)
-            pk_ln_direct = pk_ln - pk_ln[:1]
+            pk_ln_j0 = pk_ln - pk_ln[:1]
 
-            # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the direct transform); blend residual (low r) and direct (high r).
+            # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the ordinary j0 transform); blend the j0-1 (at low k) and j0 (at high k) results.
             denom = jnp.maximum(jnp.abs(pk_ln[:1]), jnp.finfo(pk_ln.real.dtype).tiny)
-            r_ratio = jnp.abs(pk_ln_direct) / denom
+            r_ratio = jnp.abs(pk_ln_j0) / denom
             w = 1.0 / (1.0 + (r_ratio / self._p22_m0_blend_rstar) ** self._p22_m0_blend_pow)
 
-            return w * pk_ln_residual + (1.0 - w) * pk_ln_direct
+            return w * pk_ln_j0m1 + (1.0 - w) * pk_ln_j0
 
         pk_lnm_m0 = jax.vmap(get_pk_lnm_22_m0)(self._lnm_22_m0)   # (n_m0, nk)
         pk_lnm_m = jax.vmap(get_pk_lnm_22)(self._lnm_22_m)        # (n_m,  nk)
