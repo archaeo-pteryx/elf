@@ -285,9 +285,9 @@ class EPT:
     
     def _initialize_loop_matrix(self):
         # store the names of 1-loop terms calculated with the FFTLog-based method
-        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/22*.txt'))
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/22*.txt'))
         self.pkmu_term_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
-        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/redshift_space/gauss/13*.txt'))
+        fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/13*.txt'))
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
         # nu group tags: matter (-0.3) vs bias (-1.6), used to assign index subsets.
@@ -331,10 +331,10 @@ class EPT:
     def _set_matrix(self, names=[], nu_override={}):
         mat = {}
         for name in names:
-            mat_file = glob.glob(os.path.dirname(__file__)+'/pt_matrix/*/*/%s.txt' % (name))[0]
-            if '22' in name or 'I' in name:
+            mat_file = glob.glob(os.path.dirname(__file__)+'/pt_matrix/%s.txt' % (name))[0]
+            if '22' in name:
                 mat[name] = pt_matrix.PTMatrix22(mat_file)
-            elif '13' in name or 'F' in name:
+            elif '13' in name:
                 mat[name] = pt_matrix.PTMatrix13(mat_file)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
@@ -346,12 +346,12 @@ class EPT:
         for name in names:
             nu = nu_override.get(name, utils.get_nu_group_tag_from_name(name))
 
-            if '22' in name or 'I' in name:
+            if '22' in name:
                 nu_m = -0.5 * (nu + eta_m * 1j)
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m, nu_m)
                 matrix[name] = mat[name](nu_m1, nu_m2).T
 
-            elif '13' in name or 'F' in name:
+            elif '13' in name:
                 nu_m1 = -0.5 * (nu + eta_m * 1j)
                 matrix[name] = mat[name](nu_m1)
         
