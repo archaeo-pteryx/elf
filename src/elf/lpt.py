@@ -47,6 +47,44 @@ _LPT_BIAS_DEGREES = jnp.array([
 ], dtype=jnp.int32)
 
 
+# Indices into the tuple returned by utils_lpt.get_lpt_moments:
+# (mq0, mq1, mq2, mq3, mq4, nq1, nq2, mq1_nq1, mq2_nq1)
+MQ0, MQ1, MQ2, MQ3, MQ4, NQ1, NQ2, MQ1NQ1, MQ2NQ1 = range(9)
+N_MOMENTS = 9
+
+
+def _sum_coeffs(dicts):
+    """Sum a list of {moment index: (nq,) coefficient} dictionaries."""
+    out = {}
+    for d in dicts:
+        for j, v in d.items():
+            out[j] = out[j] + v if j in out else v
+    return out
+
+
+def _weighted_sum_coeffs(dicts, weights):
+    """sum_t weight_t * dict_t, again as a {moment index: coefficient} dict."""
+    out = {}
+    for d, weight in zip(dicts, weights):
+        for j, v in d.items():
+            term = weight * v
+            out[j] = out[j] + term if j in out else term
+    return out
+
+
+def _apply_coeffs(coeffs, moments):
+    """Contract a coefficient dictionary with the moments: sum_j c_j[q] m_j[l, q].
+
+    ``moments`` is the nine-element tuple from ``utils_lpt.get_lpt_moments``,
+    each entry of shape (L, nq); the result is a single (L, nq) integrand.
+    """
+    integrand = None
+    for j, c_j in coeffs.items():
+        term = c_j[None, :] * moments[j]
+        integrand = term if integrand is None else integrand + term
+    return integrand
+
+
 class LPT:
 
     def __init__(self,
@@ -449,114 +487,171 @@ class LPT:
         )
         return Kfac, K, Ksq, base, weights, moments
 
-    def _get_lpt_sub_integrands(
-        self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
+    def _lpt_moment_coefficient_parts(
+        self, k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
-        """Return the 24 named sub-integrands as a plain tuple.
+        """Coefficient of each moment in each of the 24 named sub-integrands.
 
-        This is the single definition of the LPT integrand algebra.  Returning a
-        tuple rather than a stacked array is what lets the bias-folded hot path
-        share it: ``_get_lpt_bias_combined_integrand`` contracts the tuple with
-        Python-level arithmetic and never materialises an ``(ncomp, L, nq)``
-        array, while the template paths stack it.
+        This is the single definition of the LPT integrand algebra.  Each
+        sub-integrand is *linear* in the nine moment arrays returned by
+        ``utils_lpt.get_lpt_moments``, so rather than materialising one
+        ``(L, nq)`` array per sub-integrand the algebra is carried as its
+        q-dependent coefficients: entry ``j`` of the dictionary returned for a
+        part is the ``(nq,)`` factor multiplying moment ``j`` in that part, and
+        absent keys are exact zeros.  A caller that only wants a weighted sum of
+        the parts can therefore combine the coefficients first -- at most nine
+        ``(nq,)`` vectors -- and touch the ``(L, nq)`` moments exactly once,
+        which is what the bias-folded hot path
+        ``_get_lpt_bias_combined_integrand`` does.
+
+        The comment above each entry restates the sub-integrand in its
+        ``(L, nq)`` form so that the coefficients can be checked term by term.
         """
-        Kfac, K, Ksq, base, weights, moments = self._get_lpt_kinematics(
-            k_i, mu_j, f, V_mu, corrs_tree
-        )
-        mq0, mq1, mq2, mq3, mq4, nq1, nq2, mq1_nq1, mq2_nq1 = moments
-
         X_lin_gt, Y_lin_gt = corrs_tree[4], corrs_tree[5]
         xi_lin, U_lin = corrs_tree[6], corrs_tree[7]
         X22, Y22, X13, Y13, V1, V3, T = corrs_matter_1loop
         U3, U11, U20, X10, Y10 = corrs_bias[0:5]
         V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta = corrs_bias[5:]
 
-        integrand_ZA = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
-        integrand_AA = Ksq**2 / 8.0 * (
-            mq0 * X_lin_gt**2 + 2 * mq2 * X_lin_gt * Y_lin_gt + mq4 * Y_lin_gt**2
-        )
-        integrand_A22 = -0.5 * k_i**2 * (
-            (Kfac**2 + 2 * f * (1 + f) * mu_j**2 + f**2 * mu_j**2) * mq0 * X22
-            + (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1 + f**2 * mu_j**2 * nq2) * Y22
-        )
-        integrand_A13 = -0.5 * k_i**2 * (
-            2 * (Kfac**2 + 2 * f * (1 + f) * mu_j**2) * mq0 * X13
-            + 2 * (Kfac**2 * mq2 + 2 * f * Kfac * mu_j * mq1_nq1) * Y13
-        )
-        integrand_W112 = 0.5 * k_i**3 * (
-            2 * Kfac * (Kfac**2 + f * (1 + f) * mu_j**2) * mq1 * V1
-            + Kfac**2 * (Kfac * mq1 + f * mu_j * nq1) * V3
-            + Kfac**2 * (Kfac * mq3 + f * mu_j * mq2_nq1) * T
-        )
+        mu2 = mu_j**2
 
-        integrand_U10 = -2 * (K * mq1 * (U_lin + U3) + 2 * f * k_i * mu_j * nq1 * U3)
-        integrand_A_U = Ksq * (mq1 * X_lin_gt + mq3 * Y_lin_gt) * (K * U_lin)
-        integrand_A10 = -Ksq * (X10 * mq0 + Y10 * mq2)
-        integrand_A10 += -f * k_i**2 * mu_j * ((1 + f) * mu_j * mq0 * X10 + Kfac * mq1_nq1 * Y10)
+        # integrand_ZA = mq0 - 0.5*Ksq*(mq0*X_lin_gt + mq2*Y_lin_gt)
+        ZA = {MQ0: 1.0 - 0.5 * Ksq * X_lin_gt, MQ2: -0.5 * Ksq * Y_lin_gt}
 
-        integrand_xi = mq0 * xi_lin
-        integrand_A_xi = -0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt) * xi_lin
-        integrand_U11 = -(K * mq1 + f * k_i * mu_j * nq1) * U11
-        integrand_U_U = -Ksq * mq2 * U_lin**2
-        integrand_U20 = -(K * mq1 + f * k_i * mu_j * nq1) * U20
-        integrand_xi_U = -2 * K * mq1 * xi_lin * U_lin
-        integrand_xi_xi = 0.5 * mq0 * xi_lin**2
+        # integrand_AA = Ksq^2/8 * (mq0*X_gt^2 + 2*mq2*X_gt*Y_gt + mq4*Y_gt^2)
+        aa = Ksq**2 / 8.0
+        AA = {MQ0: aa * X_lin_gt**2,
+              MQ2: aa * 2.0 * X_lin_gt * Y_lin_gt,
+              MQ4: aa * Y_lin_gt**2}
 
-        integrand_Upsilon = -Ksq * (mq0 * X_Upsilon + mq2 * Y_Upsilon)
-        integrand_V10 = -2 * (K * mq1 + f * k_i * mu_j * nq1) * V10
-        integrand_V12 = -2 * K * mq1 * V12
-        integrand_chi = mq0 * chi
-        integrand_zeta = mq0 * zeta
+        # integrand_A22 = -0.5*k^2*((Kfac^2 + 2 f (1+f) mu^2 + f^2 mu^2)*mq0*X22
+        #                 + (Kfac^2*mq2 + 2 f Kfac mu*mq1_nq1 + f^2 mu^2*nq2)*Y22)
+        p22 = -0.5 * k_i**2
+        A22 = {MQ0: p22 * (Kfac**2 + 2 * f * (1 + f) * mu2 + f**2 * mu2) * X22,
+               MQ2: p22 * Kfac**2 * Y22,
+               MQ1NQ1: p22 * 2 * f * Kfac * mu_j * Y22,
+               NQ2: p22 * f**2 * mu2 * Y22}
 
-        integrand_Ub3 = -2 * K * mq1 * Ub3
-        integrand_theta = 2 * mq0 * theta
+        # integrand_A13 = -0.5*k^2*(2*(Kfac^2 + 2 f (1+f) mu^2)*mq0*X13
+        #                 + 2*(Kfac^2*mq2 + 2 f Kfac mu*mq1_nq1)*Y13)
+        A13 = {MQ0: p22 * 2 * (Kfac**2 + 2 * f * (1 + f) * mu2) * X13,
+               MQ2: p22 * 2 * Kfac**2 * Y13,
+               MQ1NQ1: p22 * 2 * 2 * f * Kfac * mu_j * Y13}
 
-        # The diagnostic component is the Zel'dovich base.  Linear-family
-        # counterterms need raw pk_data and are therefore assembled only in the
-        # high-level pk_data paths, not from a bare corrs array.
-        integrand_ctr = mq0 - 0.5 * Ksq * (mq0 * X_lin_gt + mq2 * Y_lin_gt)
+        # integrand_W112 = 0.5*k^3*(2*Kfac*(Kfac^2 + f (1+f) mu^2)*mq1*V1
+        #                  + Kfac^2*(Kfac*mq1 + f mu*nq1)*V3
+        #                  + Kfac^2*(Kfac*mq3 + f mu*mq2_nq1)*T)
+        p112 = 0.5 * k_i**3
+        W112 = {MQ1: p112 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu2) * V1 + Kfac**2 * Kfac * V3),
+                NQ1: p112 * Kfac**2 * f * mu_j * V3,
+                MQ3: p112 * Kfac**2 * Kfac * T,
+                MQ2NQ1: p112 * Kfac**2 * f * mu_j * T}
 
-        # b1^1 piece of the Zel'dovich (tree) spectrum.  ``integrand_U10`` keeps
-        # the full U_lin + U3 combination that the b1 bias template needs; this
-        # is the U_lin part on its own, appended so indices 0..22 are unchanged.
-        integrand_b1_tree = -2 * K * mq1 * U_lin
+        # integrand_U10 = -2*(K*mq1*(U_lin + U3) + 2 f k mu*nq1*U3)
+        U10 = {MQ1: -2.0 * K * (U_lin + U3), NQ1: -4.0 * f * k_i * mu_j * U3}
 
-        parts = (
-            integrand_ZA, integrand_AA, integrand_A22, integrand_A13, integrand_W112,
-            integrand_U10, integrand_A_U, integrand_A10, integrand_xi, integrand_A_xi,
-            integrand_U_U, integrand_U11, integrand_U20, integrand_xi_U, integrand_xi_xi,
-            integrand_Upsilon, integrand_V10, integrand_V12, integrand_chi, integrand_zeta,
-            integrand_Ub3, integrand_theta, integrand_ctr, integrand_b1_tree,
-        )
-        return parts, base, weights
+        # integrand_A_U = Ksq*(mq1*X_gt + mq3*Y_gt)*(K*U_lin)
+        A_U = {MQ1: Ksq * K * X_lin_gt * U_lin, MQ3: Ksq * K * Y_lin_gt * U_lin}
 
-    def _group_lpt_integrands(self, parts):
-        """Group the 24 sub-integrands into the 15 bias/counterterm templates.
+        # integrand_A10 = -Ksq*(X10*mq0 + Y10*mq2)
+        #                 - f*k^2*mu*((1+f)*mu*mq0*X10 + Kfac*mq1_nq1*Y10)
+        A10 = {MQ0: -Ksq * X10 - f * k_i**2 * mu_j * (1 + f) * mu_j * X10,
+               MQ2: -Ksq * Y10,
+               MQ1NQ1: -f * k_i**2 * mu_j * Kfac * Y10}
 
-        Pure Python tuple arithmetic, so a caller that only wants a weighted sum
-        never builds the stacked array.
+        # integrand_xi = mq0*xi_lin
+        XI = {MQ0: xi_lin}
+        # integrand_A_xi = -0.5*Ksq*(mq0*X_gt + mq2*Y_gt)*xi_lin
+        A_XI = {MQ0: -0.5 * Ksq * X_lin_gt * xi_lin, MQ2: -0.5 * Ksq * Y_lin_gt * xi_lin}
+        # integrand_U_U = -Ksq*mq2*U_lin^2
+        U_U = {MQ2: -Ksq * U_lin**2}
+        # integrand_U11 = -(K*mq1 + f k mu*nq1)*U11
+        U11p = {MQ1: -K * U11, NQ1: -f * k_i * mu_j * U11}
+        # integrand_U20 = -(K*mq1 + f k mu*nq1)*U20
+        U20p = {MQ1: -K * U20, NQ1: -f * k_i * mu_j * U20}
+        # integrand_xi_U = -2*K*mq1*xi_lin*U_lin
+        XI_U = {MQ1: -2.0 * K * xi_lin * U_lin}
+        # integrand_xi_xi = 0.5*mq0*xi_lin^2
+        XI_XI = {MQ0: 0.5 * xi_lin**2}
+
+        # integrand_Upsilon = -Ksq*(mq0*X_Upsilon + mq2*Y_Upsilon)
+        UPS = {MQ0: -Ksq * X_Upsilon, MQ2: -Ksq * Y_Upsilon}
+        # integrand_V10 = -2*(K*mq1 + f k mu*nq1)*V10
+        V10p = {MQ1: -2.0 * K * V10, NQ1: -2.0 * f * k_i * mu_j * V10}
+        # integrand_V12 = -2*K*mq1*V12
+        V12p = {MQ1: -2.0 * K * V12}
+        # integrand_chi = mq0*chi
+        CHI = {MQ0: chi}
+        # integrand_zeta = mq0*zeta
+        ZETA = {MQ0: zeta}
+        # integrand_Ub3 = -2*K*mq1*Ub3
+        UB3 = {MQ1: -2.0 * K * Ub3}
+        # integrand_theta = 2*mq0*theta
+        THETA = {MQ0: 2.0 * theta}
+
+        # The diagnostic counterterm component is the Zel'dovich base, i.e.
+        # integrand_ctr is literally integrand_ZA.  Linear-family counterterms
+        # need raw pk_data and are therefore assembled only in the high-level
+        # pk_data paths, not from a bare corrs array.
+        CTR = {MQ0: 1.0 - 0.5 * Ksq * X_lin_gt, MQ2: -0.5 * Ksq * Y_lin_gt}
+
+        # b1^1 piece of the Zel'dovich (tree) spectrum: integrand_b1_tree =
+        # -2*K*mq1*U_lin, the U_lin-only part of integrand_U10 (which keeps the
+        # full U_lin + U3 combination that the b1 bias template needs).
+        # Appended last so indices 0..22 are unchanged.
+        B1_TREE = {MQ1: -2.0 * K * U_lin}
+
+        return (ZA, AA, A22, A13, W112, U10, A_U, A10, XI, A_XI, U_U, U11p,
+                U20p, XI_U, XI_XI, UPS, V10p, V12p, CHI, ZETA, UB3, THETA,
+                CTR, B1_TREE)
+
+    def _lpt_template_coefficients(self, parts):
+        """Group the 24 coefficient dictionaries into the 15 templates.
+
+        Same grouping as the ``(L, nq)`` form used to apply, but performed on
+        the coefficients, so a caller that only wants a weighted sum of the
+        templates never builds a single ``(L, nq)`` array per template.
         """
-        (ZA, AA, A22, A13, W112, U10, A_U, A10, xi, A_xi, U_U, U11, U20, xi_U,
-         xi_xi, Upsilon, V10, V12, chi, zeta, Ub3, theta, ctr, b1_tree) = parts
+        (ZA, AA, A22, A13, W112, U10, A_U, A10, XI, A_XI, U_U, U11, U20, XI_U,
+         XI_XI, UPS, V10, V12, CHI, ZETA, UB3, THETA, CTR, B1_TREE) = parts
         return (
-            ZA + AA + A22 + A13 + W112,   #  0  1
-            U10 + A_U + A10,              #  1  b1
-            xi + A_xi + U_U + U11,        #  2  b1^2
-            U_U + U20,                    #  3  b2
-            xi_U,                         #  4  b1 b2
-            xi_xi,                        #  5  b2^2
-            Upsilon + V10,                #  6  bG2
-            V12,                          #  7  b1 bG2
-            chi,                          #  8  b2 bG2
-            zeta,                         #  9  bG2^2
-            Ub3,                          # 10  bGamma3
-            theta,                        # 11  b1 bGamma3
+            _sum_coeffs([ZA, AA, A22, A13, W112]),   #  0  1
+            _sum_coeffs([U10, A_U, A10]),            #  1  b1
+            _sum_coeffs([XI, A_XI, U_U, U11]),       #  2  b1^2
+            _sum_coeffs([U_U, U20]),                 #  3  b2
+            XI_U,                                    #  4  b1 b2
+            XI_XI,                                   #  5  b2^2
+            _sum_coeffs([UPS, V10]),                 #  6  bG2
+            V12,                                     #  7  b1 bG2
+            CHI,                                     #  8  b2 bG2
+            ZETA,                                    #  9  bG2^2
+            UB3,                                     # 10  bGamma3
+            THETA,                                   # 11  b1 bGamma3
             # Tree (Zel'dovich) templates, carrying the counterterms:
             # P_tree = t[12] + b1 t[13] + b1^2 t[14].
-            ctr,                          # 12  tree b1^0
-            b1_tree,                      # 13  tree b1^1
-            xi,                           # 14  tree b1^2
+            CTR,                                     # 12  tree b1^0
+            B1_TREE,                                 # 13  tree b1^1
+            XI,                                      # 14  tree b1^2
         )
+
+    def _get_lpt_sub_integrands(
+        self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
+    ):
+        """Return the 24 named sub-integrands as a plain tuple of (L, nq) arrays.
+
+        Thin wrapper around ``_lpt_moment_coefficient_parts``: it contracts each
+        part's coefficients with the moments.  Only the diagnostic component
+        path needs all 24 arrays separately; the template and bias-folded paths
+        combine the coefficients first and never build them.
+        """
+        Kfac, K, Ksq, base, weights, moments = self._get_lpt_kinematics(
+            k_i, mu_j, f, V_mu, corrs_tree
+        )
+        parts = self._lpt_moment_coefficient_parts(
+            k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
+        )
+        integrands = tuple(_apply_coeffs(coeffs, moments) for coeffs in parts)
+        return integrands, base, weights
 
     @staticmethod
     def _get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape):
@@ -626,15 +721,26 @@ class LPT:
     def _get_lpt_weighted_term_integrands(
         self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
-        """The 15 LPT templates multiplied by ``base`` and the ell weights."""
-        parts, base, w = self._get_lpt_sub_integrands(
-            k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
+        """The 15 LPT templates multiplied by ``base`` and the ell weights.
+
+        The 24 sub-integrands are never built: the templates are assembled from
+        the moment coefficients (:meth:`_lpt_template_coefficients`) and each
+        one is contracted with the moments once.
+        """
+        Kfac, K, Ksq, base, w, moments = self._get_lpt_kinematics(
+            k_i, mu_j, f, V_mu, corrs_tree
         )
-        integrands = jnp.stack(self._group_lpt_integrands(parts), axis=0)
+        parts = self._lpt_moment_coefficient_parts(
+            k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
+        )
+        templates = self._lpt_template_coefficients(parts)
+        integrands = jnp.stack(
+            [_apply_coeffs(coeffs, moments) for coeffs in templates], axis=0
+        )
         weighted = integrands * (base[None, None, :] * w[None, :, :])
         xi_lin = corrs_tree[6]
         return weighted.at[5, 0, :].add(-0.5 * xi_lin**2)
-    
+
     def _get_lpt_bias_combined_integrand(
         self, k_i, mu_j, f, V_mu, bias_facs, ctr_k2_shape, nlo_shape,
         corrs_tree, corrs_matter_1loop, corrs_bias,
@@ -642,21 +748,27 @@ class LPT:
         """Production hot path: fold the bias factors and both counterterms into
         a single ``(L, nq)`` integrand inside the per-(k, mu) function.
 
-        Uses exactly the same integrands as the template path, but contracts the
-        tuple with Python-level arithmetic, so the ``(15, L, nq)`` stack that
-        ``_get_lpt_weighted_term_integrands`` builds is never materialised and
-        XLA fuses the whole thing into one elementwise kernel.
+        Exactly the same algebra as the template path, but carried out on the
+        moment coefficients: the 15 templates are folded with their bias /
+        counterterm weights into at most nine ``(nq,)`` coefficient vectors, and
+        only then contracted with the ``(L, nq)`` moments.  Neither the
+        ``(15, L, nq)`` stack of ``_get_lpt_weighted_term_integrands`` nor the
+        24 individual sub-integrands are ever materialised, so the per-(k, mu)
+        integrand costs at most nine multiply-adds on ``(L, nq)`` arrays instead
+        of one per sub-integrand.
         """
-        parts, base, w = self._get_lpt_sub_integrands(
-            k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
+        Kfac, K, Ksq, base, w, moments = self._get_lpt_kinematics(
+            k_i, mu_j, f, V_mu, corrs_tree
         )
-        templates = self._group_lpt_integrands(parts)
-        term_weights = self._get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape)
-
-        integrand = term_weights[0] * templates[0]
-        for weight, template in zip(term_weights[1:], templates[1:]):
-            integrand = integrand + weight * template
-        integrand = integrand * (base[None, :] * w)
+        parts = self._lpt_moment_coefficient_parts(
+            k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
+        )
+        templates = self._lpt_template_coefficients(parts)
+        coeffs = _weighted_sum_coeffs(
+            templates,
+            self._get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape),
+        )
+        integrand = _apply_coeffs(coeffs, moments) * (base[None, :] * w)
         # DC split for b2^2: the final Hankel/dot-product path sees only the
         # scale-dependent part; H_0[0.5 xi^2] - I0 and the optional I0 add-back
         # are handled by _get_lpt_dc_scalar.
@@ -833,7 +945,9 @@ class LPT:
                 else:
                     ctr_k2_shape = self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading)
                     nlo_shape = Counterterms.nlo_shape(k_i, mu_j, f, c_nlo)
-                # Section 32 fast path: bias folded inside, never builds (13, L, nq).
+                # Fast path: the bias factors and both counterterms are folded
+                # into the moment coefficients, so this builds one (L, nq)
+                # integrand and never a per-template stack.
                 integrand = self._get_lpt_bias_combined_integrand(
                     k_i, mu_j, f, V_mu, bias_facs, ctr_k2_shape, nlo_shape,
                     corrs_tree, corrs_matter_1loop, corrs_bias,
