@@ -1,4 +1,4 @@
-# ps_1loop_jax
+# elf
 
 A JAX code of the one-loop galaxy power spectrum in redshift space. 
 
@@ -6,8 +6,8 @@ The Eulerian and Lagrangian perturbation theory are provided and share the same 
 
 | perturbation theory | class |
 |---|---|
-| Eulerian PT | `ps_1loop_jax.EPT` |
-| Lagrangian PT | `ps_1loop_jax.LPT` |
+| Eulerian PT | `elf.EPT` |
+| Lagrangian PT | `elf.LPT` |
 
 Everything is written in JAX, so the models are `jit`-compiled and differentiable with respect to both the cosmological and the nuisance parameters. 
 
@@ -16,7 +16,7 @@ Everything is written in JAX, so the models are `jit`-compiled and differentiabl
 After cloning this repository, run the following commands:
 
 ```bash
-cd ps_1loop_jax
+cd elf
 python -m pip install -e .
 ```
 
@@ -24,10 +24,10 @@ python -m pip install -e .
 
 ```python
 import numpy as np, jax.numpy as jnp
-import ps_1loop_jax
-import ps_1loop_jax.params as ps_params
+import elf
+import elf.params as ps_params
 
-ept = ps_1loop_jax.EPT(do_irres=True)
+ept = elf.EPT(do_irres=True)
 
 d = np.loadtxt('example/data/pk_lin_planck18_fid_z0.txt')
 pk_data = jnp.stack([d[:, 0], d[:, 1]], axis=0)      # (2, nk): k and P_lin(k)

@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ps_1loop_jax"
+name = "elf"
 version = "0.1.0"
 authors = [
   {name = "Yosuke Kobayashi", email = "yosuke.kobayashi@cc.kyoto-su.ac.jp"},
@@ -34,7 +34,7 @@ tests = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-ps_1loop_jax = ["pt_matrix/*/*/*.txt", "pt_coeff/*.txt"]
+elf = ["pt_matrix/*/*/*.txt", "pt_coeff/*.txt"]
 
 [project.urls]
-Homepage = "https://github.com/archaeo-pteryx/ps_1loop_jax"
+Homepage = "https://github.com/archaeo-pteryx/elf"
