@@ -7,11 +7,12 @@ name = "elf"
 version = "0.1.0"
 authors = [
   {name = "Yosuke Kobayashi", email = "yosuke.kobayashi@cc.kyoto-su.ac.jp"},
+  {name = "Kazuyuki Akitsu"},
 ]
-description = "Theory code for galaxy power spectrum based on one-loop perturbation theory"
+description = "JAX code for galaxy power spectrum based on one-loop perturbation theory"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "scipy",
@@ -24,17 +25,11 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
-[project.optional-dependencies]
-tests = [
-  'pytest',
-  'tomllib',
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-elf = ["pt_matrix/*/*/*.txt", "pt_coeff/*.txt"]
+elf = ["pt_matrix/*.txt", "pt_coeff/*.txt"]
 
 [project.urls]
 Homepage = "https://github.com/archaeo-pteryx/elf"
