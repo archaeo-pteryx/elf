@@ -1,18 +1,60 @@
+from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
-from .utils import get_log_extrap
+from .utils import get_log_extrap, _log_extrap_nodes
 from . import spline
 
 
-def get_Sigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
-    q = jnp.linspace(kmin, k_IR, num)
+@dataclass(frozen=True)
+class DSTSettings:
+    """Numerical settings of the wiggle/no-wiggle split :func:`get_pk_nw`.
+
+    Not exposed through the ``EPT``/``LPT`` constructors: the module-level
+    instance ``DST_SETTINGS`` is used.  The DST-specific fields apply to
+    ``method='DST'`` only; ``kmin_ext``/``kmax_ext``/``n_mid``/``n_ext`` define
+    the grid of the returned no-wiggle spectrum for every method.
+    """
+
+    kmin_ext: float = 1e-6
+    """Lower end (h/Mpc) of the returned no-wiggle table; the input is
+    power-law extrapolated down to it."""
+    kmax_ext: float = 1e3
+    """Upper end (h/Mpc) of the returned no-wiggle table."""
+    kh_min: float = 7e-5
+    """DST: lower end of the linear k grid, in 1/Mpc."""
+    kh_max: float = 7.0
+    """DST: upper end of the linear k grid, in 1/Mpc."""
+    n_grid: int = 2**15
+    """DST: number of nodes of the linear k grid."""
+    n_min: int = 140
+    """DST: first harmonic of the removed (BAO) band."""
+    n_max: int = 200
+    """DST: end (exclusive) of the removed harmonic band."""
+    n_keep_high: int = 100
+    """DST: number of high-k nodes where the smoothed spectrum is replaced by
+    the input (the DST is unreliable at the grid end)."""
+    n_mid: int = 200
+    """Number of log-spaced nodes of the smoothed range in the returned table."""
+    n_ext: int = 40
+    """Number of log-spaced nodes (per side, endpoints shared) of the
+    unsmoothed extension to ``[kmin_ext, kmax_ext]``."""
+
+
+DST_SETTINGS = DSTSettings()
+
+
+def get_Sigma2(pk_data, r_bao, lambda_ir, kmin=1e-4, num=1000):
+    """BAO displacement dispersion ``Sigma^2``, integrated over ``k <= lambda_ir``."""
+    q = jnp.linspace(kmin, lambda_ir, num)
     pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * (1 - spherical_jn(0, r_bao * q) + 2 * spherical_jn(2, r_bao * q))
     res = jnp.trapezoid(integrand, x=q) / (6 * jnp.pi**2)
     return res
 
-def get_dSigma2(pk_data, r_bao, k_IR, kmin=1e-4, num=1000):
-    q = jnp.linspace(kmin, k_IR, num)
+def get_dSigma2(pk_data, r_bao, lambda_ir, kmin=1e-4, num=1000):
+    """Anisotropic part ``delta Sigma^2``, integrated over ``k <= lambda_ir``."""
+    q = jnp.linspace(kmin, lambda_ir, num)
     pk = jnp.exp(spline.interp1d(jnp.log(q), jnp.log(pk_data[0]), jnp.log(pk_data[1])))
     integrand = pk * spherical_jn(2, r_bao * q)
     res = jnp.trapezoid(integrand, x=q) / (2 * jnp.pi**2)
@@ -27,24 +69,27 @@ def spherical_jn(n, x):
                                             lambda: ((3 - x**2) * jnp.sin(x) - 3 * x * jnp.cos(x)) / x**3))
     return res
 
-def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
+def get_pk_nw(pk_data, h, method='DST'):
+    s = DST_SETTINGS
+    kmin_ext, kmax_ext = s.kmin_ext, s.kmax_ext
 
-    k_grid, pk_grid = get_log_extrap(pk_data[0], pk_data[1], kmin_ext, kmax_ext)
+    x, y = pk_data[0], pk_data[1]
+    x_low, x_high = _log_extrap_nodes(x, kmin_ext, kmax_ext)
+    y_low, y_high = get_log_extrap(x, y, x_low, x_high)
+    k_grid = jnp.concatenate([x_low, x, x_high], axis=0)
+    pk_grid = jnp.concatenate([y_low, y, y_high], axis=0)
 
     if method == 'DST':
-        khmin, khmax, num = 7e-5, 7.0, 2**15
-        n_min, n_max = 140, 200
-
-        kh = jnp.linspace(khmin, khmax, num) # 1/Mpc
+        kh = jnp.linspace(s.kh_min, s.kh_max, s.n_grid) # 1/Mpc
         k = kh / h
         kmin, kmax = k[0], k[-1]
         pk = spline.interp1d(jnp.log(k), jnp.log(k_grid), pk_grid)
 
         # remove the BAO using DST
-        pk_nw = _remove_wiggle_dst(kh, pk, n_min, n_max)
+        pk_nw = _remove_wiggle_dst(kh, pk, s.n_min, s.n_max)
 
         # ad-hoc adjustment at high k for extrapolation
-        pk_nw = pk_nw.at[-100:].set(pk[-100:])
+        pk_nw = pk_nw.at[-s.n_keep_high:].set(pk[-s.n_keep_high:])
 
     elif method == 'SG':
         kmin, kmax, num = 1e-4, 1e1, 256
@@ -86,12 +131,12 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
         pk_nw = pk_nw.at[-int(num/5):].set(pk[-int(num/5):])
 
     # redefine the intermediate k grids for a roughly equidistant logarithmic binning
-    k_mid = jnp.geomspace(kmin, kmax, 200) # h/Mpc
+    k_mid = jnp.geomspace(kmin, kmax, s.n_mid) # h/Mpc
     pk_nw = jnp.exp(spline.interp1d(jnp.log(k_mid), jnp.log(k), jnp.log(pk_nw)))
 
     # extrapolation with the un-smoothed linear power spectrum
-    k_low   = jnp.geomspace(kmin_ext, kmin, 40)[:-1]
-    k_high  = jnp.geomspace(kmax, kmax_ext, 40)[1:]
+    k_low   = jnp.geomspace(kmin_ext, kmin, s.n_ext)[:-1]
+    k_high  = jnp.geomspace(kmax, kmax_ext, s.n_ext)[1:]
     pk_low  = spline.interp1d(jnp.log(k_low), jnp.log(k_grid), pk_grid)
     pk_high = spline.interp1d(jnp.log(k_high), jnp.log(k_grid), pk_grid)
 
@@ -102,7 +147,7 @@ def get_pk_nw(pk_data, h, kmin_ext=1e-6, kmax_ext=1e3, method='DST'):
 
     return pk_nw_data
 
-def _remove_wiggle_dst(kh, pk, n_min=140, n_max=200):
+def _remove_wiggle_dst(kh, pk, n_min, n_max):
     # wiggly-non-wiggly splitting using DST-II
 
     signs = (-1)**jnp.arange(0, len(pk))

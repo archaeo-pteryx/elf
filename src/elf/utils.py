@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import re
 
 from . import spline
+from .fftlog import get_log_extrap  # noqa: F401 (re-exported: ir_resum.py and tests import it from here)
 
 _NU_GROUP_MATTER_TAG = -0.3
 _NU_GROUP_BIAS_TAG = -1.6
@@ -11,7 +12,7 @@ def get_nu_group_tag_from_name(name):
     """Return the matrix-path grouping tag for a PT kernel name.
 
     This value is used to assign terms to matter-like and bias-like matrix groups. 
-    It is not necessarily the FFTLog bias used to build the matrix;
+    It is not necessarily the FFTlog bias used to build the matrix;
     EPT P22 bias groups are currently recomputed with a nu_override.
     """
     degree_dict = get_degree_dict(name)
@@ -35,99 +36,63 @@ def get_degree_dict(name):
     return degree_dict
 
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
-    k_extrap, pk_extrap = get_log_extrap(pk_data[0], pk_data[1], kmin, kmax)
+    x, y = pk_data[0], pk_data[1]
+    x_low, x_high = _log_extrap_nodes(x, kmin, kmax)
+    y_low, y_high = get_log_extrap(x, y, x_low, x_high)
+    k_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
+    pk_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
     pk = spline.interp1d(jnp.log(k), jnp.log(k_extrap), pk_extrap)
     return pk
 
-def get_pk_int(pk_data, kmin=1e-4, kmax=1e4, num=1000):
-    q = jnp.geomspace(kmin, kmax, num)
-    integrand = q * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)
-    res = jnp.trapezoid(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
-    return res
+def _log_extrap_nodes(x, xmin, xmax, num=10):
+    """Ascending extrapolation nodes below ``x[0]`` and above ``x[-1]``.
 
-def get_pk_int2(pk_data, kmin=1e-4, kmax=1e4, num=1000):
-    q = jnp.geomspace(kmin, kmax, num)
-    integrand = q**3 * get_pk(q, pk_data, kmin * 0.1, kmax * 10.)**2
-    res = jnp.trapezoid(integrand, x=jnp.log(q)) / (2 * jnp.pi**2)
-    return res
+    The returned arrays always contain ``num`` points on either side of the
+    input.  Keeping this size static is important when the function is traced
+    by JAX.  ``xmin`` and ``xmax`` specify how far the padding should reach
+    when they lie outside the input interval; when a requested bound is
+    already inside the interval, one native endpoint spacing is used instead.
 
-def get_log_extrap(x, y, xmin, xmax, num_extrap=10):
-    """Pad ``(x, y)`` by endpoint power laws on a logarithmic grid.
+    The padding spans are continuous functions of the endpoints: the low side
+    covers ``log(x[0]/xmin)`` in ``num`` equal logarithmic steps (and likewise
+    ``log(xmax/x[-1])`` on the high side), rather than a spacing quantised to
+    an integer count of native steps.  The padded grid -- and any function
+    evaluated on it, and their derivatives -- therefore vary smoothly with the
+    input grid, e.g. with the ``modes/h`` grid an emulator hands over, where
+    ``h`` shifts every node continuously.  The only switch left is the ``max``
+    below, which engages just when a requested bound lies within one native
+    spacing of the data.
 
-    The returned arrays always contain ``num_extrap`` points on either side of the input.  
-    Keeping this size static is important when the function is traced by JAX.  
-    ``xmin`` and ``xmax`` specify how far the padding should reach when they lie outside the input interval; 
-    when a requested bound is already inside the interval, one native endpoint spacing is used instead.
-
-    The padding spans are continuous functions of the endpoints: the low side covers
-    ``log(x[0]/xmin)`` in ``num_extrap`` equal logarithmic steps (and likewise ``log(xmax/x[-1])`` on the high side), 
-    rather than a spacing quantised to an integer count of native steps.  
-    The padded grid and values -- and their derivatives -- therefore vary smoothly with the input grid, 
-    e.g. with the ``modes/h`` grid an emulator hands over, where ``h`` shifts every node continuously.  
-    The only switch left is the ``max`` below, which engages just when a requested bound lies within one native spacing of the data.
-
-    ``x`` must be positive and strictly increasing.  A positive endpoint of ``y`` is extrapolated with the logarithmic slope of the adjacent pair when their ratio is positive; 
-    otherwise the endpoint value is held constant.
-    A non-positive endpoint is padded with zeros because its logarithm does not define a real power-law continuation.
+    ``x`` must be positive and strictly increasing.  Shared by
+    :func:`get_pk` and ``ir_resum.get_pk_nw``, the two callers that need this
+    smoothly-varying node placement (as opposed to ``fftlog.pad``, whose
+    padded nodes sit at a fixed integer number of native log-spacings from the
+    grid edge).
     """
-    if num_extrap < 1:
-        raise ValueError("num_extrap must be a positive integer")
+    if num < 1:
+        raise ValueError("num must be a positive integer")
 
-    x_dtype = x.dtype
-    y_dtype = y.dtype
-
-    xmin = jnp.asarray(xmin, x_dtype)
-    xmax = jnp.asarray(xmax, x_dtype)
+    dtype = x.dtype
+    xmin = jnp.asarray(xmin, dtype)
+    xmax = jnp.asarray(xmax, dtype)
 
     dlnx_low  = jnp.log(x[1] / x[0])
     dlnx_high = jnp.log(x[-1] / x[-2])
 
-    # The output shape is deliberately static, so padding is also added when the requested interval is narrower than the data interval.  
-    # In that case the raw span below is zero or negative.  
-    # Clamp it to one native log-spacing; 
+    # The output shape is deliberately static, so padding is also added when the requested interval is narrower than the data interval.
+    # In that case the raw span below is zero or negative.
+    # Clamp it to one native log-spacing;
     # otherwise x_low/x_high would run *into* the input interval (and x_high would be descending), violating the sorted-grid contract of spline.interp1d/searchsorted.
     s_low  = jnp.maximum(jnp.log(x[0] / xmin),  dlnx_low)
     s_high = jnp.maximum(jnp.log(xmax / x[-1]), dlnx_high)
 
     # Equal logarithmic steps across the requested span, so the padded nodes move
     # continuously with the endpoints instead of jumping when an integer step count changes.
-    t = jnp.arange(1, num_extrap + 1, dtype=x_dtype) / jnp.asarray(num_extrap, x_dtype)
+    t = jnp.arange(1, num + 1, dtype=dtype) / jnp.asarray(num, dtype)
 
     x_low  = (x[0]  * jnp.exp(-s_low * t))[::-1]   # ascending; x_low[0] sits at xmin (or one native spacing below x[0])
     x_high = x[-1] * jnp.exp(s_high * t)
-
-    # Exponents measured in units of the native endpoint log-spacing, so the
-    # power-law slope convention matches the unpadded data.
-    n_low  = (-s_low  * t[::-1] / dlnx_low).astype(y_dtype)
-    n_high = ( s_high * t       / dlnx_high).astype(y_dtype)
-
-    def _low_true(_):
-        den   = jnp.where(y[0] == 0, jnp.inf, y[0])
-        ratio = y[1] / den
-        ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)  # log(1)=0
-        growth = jnp.exp(jnp.log(ratio) * n_low)
-        return y[0] * growth
-
-    def _low_false(_):
-        return jnp.zeros((num_extrap,), dtype=y_dtype)
-
-    y_low = jax.lax.cond(y[0] > 0, _low_true, _low_false, operand=None)
-
-    def _high_true(_):
-        den   = jnp.where(y[-2] == 0, jnp.inf, y[-2])
-        ratio = y[-1] / den
-        ratio = jnp.where(ratio <= 0, jnp.asarray(1.0, y_dtype), ratio)
-        growth = jnp.exp(jnp.log(ratio) * n_high)
-        return y[-1] * growth
-
-    def _high_false(_):
-        return jnp.zeros((num_extrap,), dtype=y_dtype)
-
-    y_high = jax.lax.cond(y[-1] > 0, _high_true, _high_false, operand=None)
-
-    x_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
-    y_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
-    return x_extrap, y_extrap
+    return x_low, x_high
 
 def cross_bias_factor(bias_pow, bias_a, bias_b):
     """

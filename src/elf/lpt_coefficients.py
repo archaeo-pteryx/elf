@@ -18,10 +18,9 @@ def _rising_half_integer(x: Fraction, order: int) -> Fraction:
 def generate_g00_coefficient(ell: int) -> np.ndarray:
     """Return the exact-rational Appendix-G coefficient matrix for one ell.
 
-    The returned float64 values implement Eq. (70) of
-    ``docs/JAX_EFT_power_spectrum.pdf``.  Exact arithmetic is used only during
-    model construction; the cached result is converted to the model's JAX
-    dtype afterwards.
+    The returned float64 values implement Eq. (70) of the paper.  
+    Exact arithmetic is used only during model construction; 
+    the cached result is converted to the model's JAX dtype afterwards.
     """
     if isinstance(ell, (bool, np.bool_)) or not isinstance(ell, (int, np.integer)):
         raise TypeError("ell must be a non-negative integer")

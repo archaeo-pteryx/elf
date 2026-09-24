@@ -13,7 +13,7 @@ from . import fftlog
 from . import pt_coeff
 from . import pt_matrix
 from . import utils
-from .utils import get_pk, get_pk_int, get_pk_int2, eval_power_coeffs
+from .utils import get_pk, eval_power_coeffs
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_for_ap
 from .eft_terms import Counterterms, stochasticity
 
@@ -26,7 +26,7 @@ class EPT:
     def __init__(self,
                  do_irres=True,
                  r_bao=110.,
-                 k_IR=0.2,
+                 lambda_ir=0.2,
                  irres_method='DST',
                  counterterm_base=None,
                  subtract_k0_limit=False,
@@ -34,27 +34,75 @@ class EPT:
                  kmin_fft=1e-5,
                  kmax_fft=1e2,
                  nfft=512,
-                 hankel_nu=1.1,
-                 hankel_forward_mode='pld',
-                 hankel_forward_pld_nu=-0.3,
-                 hankel_forward_pld_nu_n0=-1.5,
-                 hankel_window_factor=None,
-                 hankel_npad_factor=0.5,
-                 hankel_forward_pad_mode='power-law',
-                 hankel_backward_pad_mode='smooth-zero-pad',
-                 hankel_p22_final_mode='block',
+                 pad_mode='zero-pad',
+                 fftlog_settings=None,
                  ngauss=4,
                  ):
+        """One-loop Eulerian-PT galaxy power spectrum in redshift space.
+
+        Parameters
+        ----------
+        do_irres : bool, default True
+            Switch IR resummation (wiggle/no-wiggle split plus BAO damping) on
+            or off for the tree-level and one-loop pieces.
+        r_bao : float, default 110.
+            BAO scale entering the damping factor, in Mpc/h.
+        lambda_ir : float, default 0.2
+            Upper limit of the k integral of the BAO damping Sigma^2 (and
+            delta Sigma^2), in h/Mpc: only modes below it are resummed.
+        irres_method : {'DST', 'SG', 'WH'}, default 'DST'
+            Wiggle/no-wiggle split used to build P_nw -- discrete sine
+            transform, Savitzky-Golay filter, or the Wallisch fitting form.
+        counterterm_base : {None, 'linear', 'linear_ir_resum'}, default None
+            Spectrum multiplying the counterterms.  ``None`` means
+            ``'linear_ir_resum'`` if ``do_irres`` else ``'linear'``; the
+            ``'zeldovich'`` base exists only in the LPT backend.
+        subtract_k0_limit : bool, default False
+            Subtract the k -> 0 constant of P22, i.e. the b2^2 shot-noise-like
+            term, so that the loop contribution vanishes at k = 0.
+        method : {'hankel', 'hybrid', 'matrix'}, default 'hankel'
+            'hankel' evaluates both P22 and P13 by FFTlog; 'hybrid' keeps FFTlog
+            for P22 and uses the power-law-decomposition matrices for P13;
+            'matrix' uses the matrices for both.  The matrices are accurate only
+            for k in [3e-3, 3] h/Mpc.
+        kmin_fft, kmax_fft : float, defaults 1e-5 and 1e2
+            Ends of the internal logarithmic k grid, in h/Mpc.
+        nfft : int, default 512
+            Number of nodes on that grid.  Must be even: the FFTlog pipeline
+            uses rfft/irfft with an implicit even length.
+        pad_mode : {'zero-pad', 'power-law'}, default 'zero-pad'
+            Model of the input P(k) outside the tabulated range.  'zero-pad' is
+            the band-limited model: P is taken to be exactly zero outside
+            [k_min, k_max], and the k_min and k_max nodes enter the FFTlog sum
+            with the trapezoid end weight 1/2 (see ``fftlog.trapezoid_weights``).
+            'power-law' is the continued model: P is carried across the padded
+            band by its endpoint log-slopes, and the end weights sit on the
+            padded corners instead (where they have no measurable effect, the
+            continued P being negligible there).  The two models differ by a
+            counterterm-shaped piece -- k^2 P_lin(k) times a polynomial in
+            mu^2 -- whose coefficients are four orders of magnitude below
+            typical counterterm values, so the choice is a model statement, not
+            an accuracy one.
+        fftlog_settings : fftlog.FFTlogSettings or None, default None
+            Numerical constants of the FFTlog pipeline (biases, width of the
+            padded band, m = 0 P22 blend scale); ``None`` means the validated
+            defaults ``FFTlogSettings()``.
+        ngauss : int, default 4
+            Number of Gauss-Legendre points on mu in [0, 1] used for the
+            multipole projection.
+        """
 
         if method not in ('matrix', 'hankel', 'hybrid'):
             raise ValueError(f"method must be 'matrix', 'hankel', or 'hybrid', got {method!r}")
         if nfft % 2:
-            raise ValueError("nfft must be even: the FFTLog pipeline uses rfft/irfft with an implicit even length")
+            raise ValueError("nfft must be even: the FFTlog pipeline uses rfft/irfft with an implicit even length")
+        if pad_mode not in fftlog.INPUT_SUPPORT:
+            raise ValueError("pad_mode must be 'zero-pad' or 'power-law'")
 
         # --- IR resummation configuration ---
         self.do_irres = do_irres
         self.r_bao = r_bao
-        self.k_IR = k_IR
+        self.lambda_ir = lambda_ir
         self.irres_method = irres_method
         if counterterm_base is None:
             counterterm_base = 'linear_ir_resum' if do_irres else 'linear'
@@ -69,60 +117,26 @@ class EPT:
         # --- Gauss-Legendre quadrature for mu integration ---
         self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss)
 
-        # --- FFTLog grid and transform parameters ---
+        # --- FFTlog grid and transform parameters ---
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
-        self._nu_hankel = hankel_nu
-        # Backward FFTLog bias for the P22 residual kernel j_0(x)-1.
-        # This residual kernel has a different convergence strip from ordinary j_\ell.
-        self._hankel_p22_residual_backward_nu = -1.7
-        # High-k handling of the m=0 P22 blocks B(k)-B(0).  
-        # Two FFTLog estimates of the same quantity have complementary accuracy:
-        #   * the j_0-1 residual kernel is accurate where |B(k)-B(0)| is small (low k): 
-        #     its absolute error is tiny there but grows steeply at high k (the kernel's non-decaying -1 tail makes the transform sensitive to the full-range integral B(0));
-        #   * the ordinary j_0 transform has a near-constant (small) absolute error, 
-        #     so reconstructing B(k)-B(0) as D(k)-D(0) is accurate where |B(k)-B(0)| is comparable to |B(0)| (high k) but loses precision where it is tiny (low k).
-        # We blend the two per block on the DIMENSIONLESS, cosmology-independent
-        # ratio r = |B(k)-B(0)|/|B(0)| (estimated from the direct transform):
-        #   w(r) = 1/(1+(r/rstar)^p),  w->1 (residual) as r->0, w->0 (direct) as r->O(1).  
-        self._p22_m0_blend_rstar = 0.03
-        self._p22_m0_blend_pow = 2.0
-        if hankel_forward_mode not in ('direct', 'pld'):
-            raise ValueError("hankel_forward_mode must be 'direct' or 'pld'")
-        self._hankel_forward_mode = hankel_forward_mode
-        self._nu_hankel_forward_pld = hankel_forward_pld_nu
-        self._nu_hankel_forward_pld_n0 = hankel_forward_pld_nu_n0
-        self._hankel_window_factor = hankel_window_factor  # None -> no spatial window
-        self._hankel_npad_factor = hankel_npad_factor
-        if hankel_forward_pad_mode not in ('power-law', 'zero-pad', 'smooth-zero-pad'):
-            raise ValueError("hankel_forward_pad_mode must be 'power-law', 'zero-pad', or 'smooth-zero-pad'")
-        if hankel_backward_pad_mode not in ('power-law', 'zero-pad', 'smooth-zero-pad'):
-            raise ValueError("hankel_backward_pad_mode must be 'power-law', 'zero-pad', or 'smooth-zero-pad'")
-        if hankel_p22_final_mode not in ('block', 'matrix'):
-            raise ValueError("hankel_p22_final_mode must be 'block' or 'matrix'")
-        self._hankel_forward_pad_mode = hankel_forward_pad_mode
-        self._hankel_backward_pad_mode = hankel_backward_pad_mode
-        self._hankel_p22_final_mode = hankel_p22_final_mode
+        self.fftlog_settings = fftlog.FFTlogSettings() if fftlog_settings is None else fftlog_settings
+        self._pad_mode = pad_mode
+
         # --- internal grids ---
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._mu = jnp.linspace(0., 1., 51)
 
-        # nu for P22 matrix groups: choose \nu > -3/2 so FFTLog naturally evaluates I(k)-I(0) via analytic continuation.
-        # Convergence strip is -3 < \nu < -3/2 for all bias-operator P22 blocks (b2, bG2 terms); 
-        # \nu=-1.0 is outside the strip for all.
-        # All bias blocks (mixed and b2^2-only) share the same nu, so they form one group.
-        self._nu_ept_22_bias_ac = -1.0
-        need_hybrid_pld = self.method == 'hybrid'
-        need_p22_matrix_backend = self._hankel_p22_final_mode == 'matrix'
-        self._pld_xpow_nu1 = self._get_pld_xpow(-0.3) if (need_hybrid_pld or need_p22_matrix_backend) else None
-        self._pld_xpow_nu2 = self._get_pld_xpow(-1.6) if need_hybrid_pld else None
-        self._pld_xpow_22_bias_ac = (
-            self._get_pld_xpow(self._nu_ept_22_bias_ac) if need_p22_matrix_backend else None
-        )
+        # ``x^{nu_m}`` tables of the power-law decomposition for the hybrid P13
+        # blocks, built once (the matrix method builds them per call).
+        if self.method == 'hybrid':
+            fs = self.fftlog_settings
+            self._pld_xpow_matter = fftlog.power_law_basis(self._k, fs.nu_matrix_matter)
+            self._pld_xpow_p13_bias = fftlog.power_law_basis(self._k, fs.nu_matrix_p13_bias)
 
         self._initialize_loop_coeff()
-        if self.method != 'hankel' or self._hankel_p22_final_mode == 'matrix':
+        if self.method != 'hankel':
             self._initialize_loop_matrix()
 
     @property
@@ -130,25 +144,8 @@ class EPT:
         """Counterterm base fixed at construction time."""
         return self._counterterms.base
 
-    def _get_pld_xpow(self, nu):
-        """Tabulate k^{nu_m} for the power-law decomposition on the unpadded grid."""
-        nu_m = nu + 1j * fftlog.LogGrid(self._k, 0).eta_full
-        return fftlog.power_law_xpow(nu_m, self._k)
-
-    def _get_decomp_pq_from_xpow(self, nu, xpow, fx):
-        """Power-law decomposition of ``fx`` against a precomputed ``k^{nu_m}`` table."""
-        c_m, _ = fftlog.full_spectrum(
-            fftlog.mellin_coefficients(fx, self._k, nu, norm='forward'), self._k, nu)
-        return fftlog.power_law_terms(c_m, xpow)
-
-    def _get_decomp_pq(self, nu, fx):
-        """Power-law decomposition of ``fx`` with the ``k^{nu_m}`` table built inline."""
-        c_m, nu_m = fftlog.full_spectrum(
-            fftlog.mellin_coefficients(fx, self._k, nu, norm='forward'), self._k, nu)
-        return fftlog.power_law_terms(c_m, fftlog.power_law_xpow(nu_m, self._k))
-    
     def _initialize_loop_coeff(self):
-        # store the names of 1-loop terms calculated with the FFTLog-based method
+        # store the names of 1-loop terms calculated with the FFTlog-based method
         fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_coeff/22*.txt'))
         self.pkmu_coeff_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_coeff/13*.txt'))
@@ -208,110 +205,107 @@ class EPT:
         self._set_hankel(lmax)
 
     def _set_hankel(self, lmax):
+        """Grids, kernels and static support weights of the FFTlog chain.
+
+        The chain is ``P(k) -> xi_l^n(q) -> P22/P13(k)``.  The input ``P(k)`` is
+        padded once (``pad_mode``); the forward output ``xi_l^n`` stays on its
+        padded per-l q grid and is handed to the backward transforms directly.
+
+        * Forward transforms: one rfft of the padded input per bias group
+          (``nu_pld`` for the n != 0 rows, ``nu_pld_n0`` for the n = 0 rows) is
+          shared by all (l, n) rows; row (l, n) uses the kernel ``g_l`` at the
+          bias ``nu_eff = nu_pld + n + 3`` (the ``k^{n+3}`` factor is absorbed
+          into the bias) and the low-ringing phase of the ordinary bias ``nu``,
+          so it lands on the per-l grid ``_q_padded[l]``.
+        * Backward transforms: kernel ``g_l`` at ``nu`` with the same per-l
+          phase, so a source on ``_q_padded[l]`` lands exactly on
+          ``_k_padded`` (the conjugate grid relation); the ``m = 0`` P22 blocks
+          additionally use the residual kernel ``j_0 - 1`` at ``nu_residual``
+          on its own grid ``_q_p22_residual_padded``.
+        * Support weights: the input carries the trapezoid end weights of its
+          model (``_end_weights_input``); the forward output is restricted to
+          its support ``'lower_and_core'`` (``_mask_xi``: the lower part of the
+          padded band is the physical q -> 0 plateau, the upper part is the
+          rounding floor of an already-decayed transform); the backward
+          sources built from it (P13: ``q^2 xi_l^n``, P22: ``q^3 (xi_l^n)^2``)
+          carry the end weights of that support (``_end_weights_xi``), so the
+          backward transforms' m = 0 coefficient is a trapezoid sum.
+        """
+        fs = self.fftlog_settings
         l_list = jnp.arange(lmax + 1)
 
-        # Mellin argument for the low-ringing condition and u_m. 
-        # The k^n factor is absorbed into fx, so nu does not change with n.
-        _mellin_arg = self._nu_hankel
-
-        self._npad = max(1, int(self._hankel_npad_factor * self._nfft))
+        self._npad = max(1, int(fs.npad_factor * self._nfft))
         self._grid = fftlog.LogGrid.from_core(self._k, self._npad)
         self._k_padded = self._grid.x
 
-        n_window = 0 if self._hankel_window_factor is None else int(self._hankel_window_factor * self._nfft)
-        self._w_m = fftlog.window(n_window, self._k_padded)
-
+        # Ordinary kernels: the k^n factor is absorbed into fx, so nu does not
+        # change with n.
         lnxy = jnp.array([
-            fftlog.low_ringing_phase(l, _mellin_arg, self._grid) for l in l_list
+            fftlog.low_ringing_phase(l, fs.nu, self._grid) for l in l_list
         ])
-        self._lnxy = lnxy  # stored for PLD u_m construction
         self._q_padded = jnp.array([
             fftlog.output_grid(self._grid, lnxy[l]) for l in l_list
         ])
-        self._q = self._grid.crop(self._q_padded)
-
         self._u_m = jnp.array([
-            fftlog.hankel_kernel(l, _mellin_arg, self._grid, lnxy[l]) for l in l_list
+            fftlog.hankel_kernel(l, fs.nu, self._grid, lnxy[l]) for l in l_list
         ])
 
-        self._set_hankel_forward_pld_kernel()
-        self._set_hankel_p22_residual()
-
-    def _set_hankel_forward_pld_kernel(self):
-        # PLD forward Hankel via irfft:
-        #   c_m = rfft(P(k)*k^{-\nu_pld}/(2\pi^2)) once per \nu group (on padded grid)
-        #   u_m[l,n] = exp(lnxy_std[l])^{-i\eta} * g_l(\nu_pld+n+3+i\eta)   (uses standard q-grid)
-        #   xi_l^n(q) = irfft(conj(c_m * u_m[l,n])) * q_padded[l]^{-(\nu_pld+n+3)}
-        # This shares one rfft across all (l,n) with the same \nu, giving the same q-grid as standard FFTLog (self._q[l]).
-        if self._hankel_forward_mode != 'pld':
-            self._xi_pld_u_m = None
-            self._xi_pld_q_factor = None
-            self._xi_pld_u_m_n0 = None
-            self._xi_pld_q_factor_n0 = None
-            self._xi_pld_n0_mask = None
-            return
-
-        def _build_pld_arrays(nu):
+        # Forward kernels of the shared-rfft (PLD) form:
+        #   c_m = rfft(P(k)/(2 pi^2) * k_padded^{-nu_pld}) once per bias group
+        #   u_m[l, n] = e^{-i eta lnxy[l]} g_l(nu_pld + n + 3 + i eta)
+        #   xi_l^n(q) = irfft(conj(c_m u_m[l, n])) * q_padded[l]^{-(nu_pld + n + 3)}
+        def build_forward(nu):
             u_ms, q_factors = [], []
-            for l, n in self._ln_list:
-                l_int, n_int = int(l), int(n)
-                nu_eff = nu + n_int + 3
-                # Low-ring phase from the standard \nu, kernel bias from \nu_eff
-                u_m = fftlog.hankel_kernel(
-                    l_int, nu_eff, self._grid, self._lnxy[l_int])
-                q_factor = self._q_padded[l_int] ** (-nu_eff)  # (nfft_pad,)
-                u_ms.append(u_m)
-                q_factors.append(q_factor)
-            return (jnp.stack(u_ms, axis=0),       # (n_ln, nrfft)
-                    jnp.stack(q_factors, axis=0))   # (n_ln, nfft_pad)
+            for l, n in self._ln_list_static:
+                nu_eff = nu + n + 3
+                # Low-ring phase from the ordinary nu, kernel bias from nu_eff
+                u_ms.append(fftlog.hankel_kernel(l, nu_eff, self._grid, lnxy[l]))
+                q_factors.append(self._q_padded[l] ** (-nu_eff))
+            return jnp.stack(u_ms, axis=0), jnp.stack(q_factors, axis=0)
 
-        self._xi_pld_u_m, self._xi_pld_q_factor = _build_pld_arrays(self._nu_hankel_forward_pld)
-        self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0 = _build_pld_arrays(self._nu_hankel_forward_pld_n0)
+        self._xi_pld_u_m, self._xi_pld_q_factor = build_forward(fs.nu_pld)
+        self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0 = build_forward(fs.nu_pld_n0)
         self._xi_pld_n0_mask = jnp.array(
-            [int(n) == 0 for _, n in self._ln_list], dtype=bool
+            [n == 0 for _, n in self._ln_list_static], dtype=bool
         )
 
-    def _set_hankel_p22_residual(self):
-        nu = self._hankel_p22_residual_backward_nu
+        # Residual kernel j_0 - 1 of the m = 0 P22 blocks.  It has a different
+        # convergence strip from the ordinary j_l, hence its own bias.
+        lnxy_res = fftlog.low_ringing_phase(0, fs.nu_residual, self._grid)
+        self._q_p22_residual_padded = fftlog.output_grid(self._grid, lnxy_res)
+        self._u_m_p22_residual = fftlog.hankel_kernel(0, fs.nu_residual, self._grid, lnxy_res)
 
-        lnxy = fftlog.low_ringing_phase(0, nu, self._grid)
-        q_padded = fftlog.output_grid(self._grid, lnxy)
-        q = self._grid.crop(q_padded)
-        u_m = fftlog.hankel_kernel(0, nu, self._grid, lnxy)
+        # Static support weights (see the docstring).
+        self._end_weights_input = fftlog.trapezoid_weights(
+            fftlog.INPUT_SUPPORT[self._pad_mode], self._nfft, self._npad, self._grid.dln)
+        self._end_weights_xi = fftlog.trapezoid_weights(
+            'lower_and_core', self._nfft, self._npad, self._grid.dln)
+        self._mask_xi = jnp.where(self._end_weights_xi > 0, 1.0, 0.0)
 
-        self._q_p22_residual_padded = q_padded
-        self._q_p22_residual = q
-        self._u_m_p22_residual = u_m
-    
     def _initialize_loop_matrix(self):
-        # store the names of 1-loop terms calculated with the FFTLog-based method
+        # store the names of 1-loop terms calculated with the FFTlog-based method
         fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/22*.txt'))
         self.pkmu_term_names_22 = [re.split('/', fname)[-1][:-4] for fname in fnames]
         fnames = sorted(glob.glob(os.path.dirname(__file__)+'/pt_matrix/13*.txt'))
         self.pkmu_term_names_13 = [re.split('/', fname)[-1][:-4] for fname in fnames]
 
-        # nu group tags: matter (-0.3) vs bias (-1.6), used to assign index subsets.
-        nus_22 = [utils.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_22]
-        nus_13 = [utils.get_nu_group_tag_from_name(name) for name in self.pkmu_term_names_13]
+        # Group tags: matter vs bias-operator blocks, used to assign index
+        # subsets; the decomposition bias of each group is set by
+        # ``fftlog_settings`` (see ``_set_matrix``).
+        matter = utils._NU_GROUP_MATTER_TAG
+        is_matter_22 = [utils.get_nu_group_tag_from_name(name) == matter for name in self.pkmu_term_names_22]
+        is_matter_13 = [utils.get_nu_group_tag_from_name(name) == matter for name in self.pkmu_term_names_13]
 
-        # bias P22 blocks must use nu=-1.0 (outside the convergence strip -3 < nu < -3/2)
-        # so the FFTLog evaluates I(k)-I(0) via analytic continuation for every block.
-        nu_override = {
-            name: self._nu_ept_22_bias_ac
-            for name, nu in zip(self.pkmu_term_names_22, nus_22)
-            if abs(nu + 1.6) < 1e-12
-        }
-
-        # precompute the PT matrices with correct nu for each block
-        matrix = self._set_matrix(self.pkmu_term_names_22 + self.pkmu_term_names_13, nu_override)
+        # precompute the PT matrices with the right nu for each block
+        matrix = self._set_matrix(self.pkmu_term_names_22 + self.pkmu_term_names_13)
 
         self.matrices_22 = jnp.array([matrix[name] for name in self.pkmu_term_names_22])
         self.matrices_13 = jnp.array([matrix[name] for name in self.pkmu_term_names_13])
 
-        self._idx_22_nu1 = jnp.array([i for i, nu in enumerate(nus_22) if abs(nu + 0.3) < 1e-12], dtype=jnp.int32)
-        self._idx_22_nu2 = jnp.array([i for i, nu in enumerate(nus_22) if abs(nu + 1.6) < 1e-12], dtype=jnp.int32)
-        self._idx_13_nu1 = jnp.array([i for i, nu in enumerate(nus_13) if abs(nu + 0.3) < 1e-12], dtype=jnp.int32)
-        self._idx_13_nu2 = jnp.array([i for i, nu in enumerate(nus_13) if abs(nu + 1.6) < 1e-12], dtype=jnp.int32)
+        self._idx_22_nu1 = jnp.array([i for i, m in enumerate(is_matter_22) if m], dtype=jnp.int32)
+        self._idx_22_nu2 = jnp.array([i for i, m in enumerate(is_matter_22) if not m], dtype=jnp.int32)
+        self._idx_13_nu1 = jnp.array([i for i, m in enumerate(is_matter_13) if m], dtype=jnp.int32)
+        self._idx_13_nu2 = jnp.array([i for i, m in enumerate(is_matter_13) if not m], dtype=jnp.int32)
 
         self.matrices_22_nu1 = self.matrices_22[self._idx_22_nu1]
         self.matrices_22_nu2 = self.matrices_22[self._idx_22_nu2]
@@ -328,7 +322,16 @@ class EPT:
         self.degrees_22 = jnp.array([get_degree_vector(name) for name in self.pkmu_term_names_22])
         self.degrees_13 = jnp.array([get_degree_vector(name) for name in self.pkmu_term_names_13])
 
-    def _set_matrix(self, names=[], nu_override={}):
+    def _set_matrix(self, names):
+        """PT matrices of the given blocks at the decomposition bias of their group.
+
+        Matter blocks use ``nu_matrix_matter``; bias-operator blocks use
+        ``nu_matrix_p22_bias`` for P22 -- above -3/2, outside the convergence
+        strip -3 < nu < -3/2 of those blocks, so that the decomposition
+        evaluates I(k) - I(0) by analytic continuation -- and
+        ``nu_matrix_p13_bias`` for P13.
+        """
+        fs = self.fftlog_settings
         mat = {}
         for name in names:
             mat_file = glob.glob(os.path.dirname(__file__)+'/pt_matrix/%s.txt' % (name))[0]
@@ -344,7 +347,12 @@ class EPT:
         matrix = {}
 
         for name in names:
-            nu = nu_override.get(name, utils.get_nu_group_tag_from_name(name))
+            if utils.get_nu_group_tag_from_name(name) == utils._NU_GROUP_MATTER_TAG:
+                nu = fs.nu_matrix_matter
+            elif name in self.pkmu_term_names_22:
+                nu = fs.nu_matrix_p22_bias
+            else:
+                nu = fs.nu_matrix_p13_bias
 
             if '22' in name:
                 nu_m = -0.5 * (nu + eta_m * 1j)
@@ -449,10 +457,10 @@ class EPT:
     def get_pkmu_terms_22(self, p_q_1, p_q_2):
         """Compute per-block P22 terms on the internal k-grid.
 
-        p_q_1: PLD data at nu=-0.3 (nu1 group: matter blocks)
-        p_q_2: PLD data at nu=-1.0 (nu2 group: all bias-operator blocks)
-        Both groups use nu > -3/2 so the FFTLog evaluates I(k)-I(0) via analytic continuation, 
-        so no explicit DC subtraction is needed.
+        p_q_1: PLD data at ``nu_matrix_matter`` (nu1 group: matter blocks)
+        p_q_2: PLD data at ``nu_matrix_p22_bias`` (nu2 group: all bias-operator blocks)
+        Both groups use nu > -3/2 so the decomposition evaluates I(k)-I(0) via
+        analytic continuation, so no explicit DC subtraction is needed.
         Per-k cost: O(N^2) per term
         """
         k = self._k
@@ -498,8 +506,7 @@ class EPT:
         
         Z1Z3_UV = (Z1_a * Z3_UV_b + Z1_b * Z3_UV_a) / 2
 
-        pk_data = jnp.stack([k, pk], axis=0)
-        pk_int = get_pk_int(pk_data)
+        pk_int = self._get_grid_pk_int(pk)
         pkmu = jnp.outer(k**2 * pk * pk_int, Z1Z3_UV)
 
         return pkmu
@@ -511,7 +518,7 @@ class EPT:
 
         pkmu = jnp.sum(coeffs[:, None, None] * pkmu_terms[:, :, None] * mu_powers[:, None, :], axis=0)
 
-        # The b2^2-only term was computed with \nu > -3/2 (nu3 group), so the FFTLog naturally gives I_{d2d2}(k) - I_{d2d2}(0).  
+        # The b2^2-only term was computed with \nu > -3/2 (nu3 group), so the FFTlog naturally gives I_{d2d2}(k) - I_{d2d2}(0).  
         # When subtract_k0_limit=False, add back I_{d2d2}(0) = 2 * k0_pk via the Parseval identity, which restores the full I_{d2d2}(k).
         # The contribution to P22 is b2^2/4 * I_{d2d2}(0) = b2^2/4 * 2·k0_pk = b2^2/2 * k0_pk.
         if not self.subtract_k0_limit:
@@ -531,13 +538,14 @@ class EPT:
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_pld(self, pk, f, bias_a, bias_b):
-        # nu=-0.3: P22 nu1 group and P13 nu1 group
-        p_q_1 = self._get_decomp_pq(-0.3, pk)
-        # nu=-1.0: P22 nu2 (bias-operator blocks) and nu3 (b2^2-only) groups.
-        # nu > -3/2 -> FFTLog evaluates I(k)-I(0) for all blocks via analytic continuation.
-        p_q_2 = self._get_decomp_pq(self._nu_ept_22_bias_ac, pk)
-        # nu=-1.6: P13 nu2 group only (P13 convergence strip requires this nu)
-        p_q_3 = self._get_decomp_pq(-1.6, pk)
+        fs = self.fftlog_settings
+        # matter group: P22 nu1 group and P13 nu1 group
+        p_q_1 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_matter)
+        # P22 bias-operator blocks (including b2^2): nu > -3/2, so the
+        # decomposition evaluates I(k)-I(0) for all blocks via analytic continuation.
+        p_q_2 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p22_bias)
+        # P13 bias-operator blocks only (their convergence strip requires this nu)
+        p_q_3 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p13_bias)
 
         pkmu_terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
         pkmu_terms_13 = self.get_pkmu_terms_13(p_q_1, p_q_3, pk)
@@ -546,113 +554,110 @@ class EPT:
         pkmu_13 = self.get_pkmu_13_pld(pkmu_terms_13, pk, f, bias_a, bias_b)
 
         return pkmu_22 + pkmu_13 # shape: (nk, nmu)
-    
-    def _get_xi_ln_direct(self, l, n, array):
-        fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = fftlog.hankel(
-            self._nu_hankel,
-            fx,
-            self._k_padded,
-            self._q_padded[l],
-            self._u_m[l],
-            self._npad,
-            self._w_m,
-            self._hankel_forward_pad_mode,
-        )
-        return xi_ln
+
+    def _pad_input(self, array):
+        """Padded, end-weighted copy of a core-grid input array.
+
+        This is the array the forward FFTlog actually transforms, and it is
+        also the array whose zero-lag moments define the ``pk_int``-type
+        constants (see :meth:`_get_grid_pk_int`), which is why it is factored
+        out here rather than inlined in the rfft.
+
+        ``_end_weights_input`` carries the trapezoid end weights of the input
+        model: 1/2 on the k_min and k_max nodes for the band-limited
+        ('zero-pad') model, 1/2 on the padded corners for the continued
+        ('power-law') one.
+        """
+        return fftlog.pad(array, self._npad, self._pad_mode, x=self._k) * self._end_weights_input
+
+    def _get_grid_pk_int(self, pk):
+        """``(1/2 pi^2) int dk P(k)`` as the zero-lag moment of the FFTlog input.
+
+        The constant is the ``m = 0`` coefficient of the discrete transform of
+        the *same* padded, end-weighted array that feeds the forward FFTlog
+        (:meth:`_pad_input`), i.e. ``sum_j dln k_j P_j / (2 pi^2)``, instead of
+        an integral of a separately extrapolated copy of ``P`` over a k range
+        unrelated to the FFTlog band.  That keeps the constant and the
+        k-dependent loop terms consistent.  The same value is used on the
+        ``method='matrix'`` path, which shares the band-limited definition.
+        """
+        return fftlog.grid_moment(
+            self._pad_input(pk), self._k_padded, self._grid.dln, 1
+        ) / (2 * jnp.pi**2)
+
+    def _get_grid_pk_int2(self, pk):
+        """``(1/2 pi^2) int dk k^2 P^2(k)`` on the same band as the FFTlog input.
+
+        Same band-limited definition as :meth:`_get_grid_pk_int`, i.e.
+        ``sum_j dln k_j^3 P_j^2 / (2 pi^2)``.  The trapezoid end weights belong
+        to the input ``P`` and are applied once, not once per factor, so the
+        weighted array is formed as ``w * (pad P)^2`` rather than
+        ``(pad P * w)^2``.
+        """
+        padded = fftlog.pad(pk, self._npad, self._pad_mode, x=self._k)
+        return fftlog.grid_moment(
+            self._end_weights_input * padded**2, self._k_padded, self._grid.dln, 3
+        ) / (2 * jnp.pi**2)
 
     def get_xi_ln(self, l, n, array):
-        if self._hankel_forward_mode == 'pld':
-            return self._get_xi_ln_pld(l, n, array)
-        return self._get_xi_ln_direct(l, n, array)
+        """Forward FFTlog of ``P(k) k^{n+3}`` against ``j_l`` (shared-rfft form).
 
-    def get_pk_ln(self, l, n, array):
-        fx = array * self._q[l]**(n + 3)
-        pk_ln = fftlog.hankel(
-            self._nu_hankel,
-            fx,
-            self._q_padded[l],
-            self._k_padded,
-            self._u_m[l],
-            self._npad,
-            self._w_m,
-            self._hankel_backward_pad_mode,
-        )
-        return pk_ln
-
-    def get_pk_ln_p22_residual(self, array):
-        fx = array * self._q_p22_residual**3
-        pk_ln = fftlog.hankel(
-            self._hankel_p22_residual_backward_nu,
-            fx,
-            self._q_p22_residual_padded,
-            self._k_padded,
-            self._u_m_p22_residual,
-            self._npad,
-            self._w_m,
-            self._hankel_backward_pad_mode,
-        )
-        return pk_ln
-
-    def _get_xi_ln_array_direct(self, array):
-        def compute_ln(ln):
-            l, n = ln
-            return self._get_xi_ln_direct(l, n, array)
-
-        xis = jax.vmap(compute_ln)(self._ln_list)  # (n_ln, nq)
-        xi_ln = jnp.zeros((5, 3, len(self._q[0])))
-        ls = self._ln_list[:, 0]
-        ns = self._ln_list[:, 1]
-        xi_ln = xi_ln.at[ls, ns].set(xis)
-        return xi_ln
-
-    def _get_forward_pld_rfft(self, nu, array):
-        """Padded rfft for PLD: rfft(array/(2 pi^2) * k_padded^{-nu} * window)."""
-        fx_pad = fftlog.pad(array / (2 * jnp.pi**2), self._npad, mode=self._hankel_forward_pad_mode)
-        return fftlog.mellin_coefficients(fx_pad, self._k_padded, nu, window=self._w_m)
-
-    def _apply_pld_batch(self, c_m, u_m_batch, q_factor_batch):
-        """Batched irfft for all (l,n) pairs -> shape (n_ln, nfft).
-
-        Each row has its own output grid and bias, so the row-wise
-        ``q_padded[l]**(-nu_eff)`` factors are precomputed once at construction
-        and handed to ``hankel_transform`` as ``y_pow``.
+        ``array`` is given on the core k grid; the result is ``xi_l^n`` on the
+        padded per-l grid ``_q_padded[l]``, restricted to its support (the
+        lower part of the padded band is the q -> 0 plateau and is kept, the
+        upper part is zeroed; see ``_set_hankel``).
         """
-        return fftlog.hankel_transform(
-            c_m, u_m_batch, None, None, self._npad, y_pow=q_factor_batch)
-
-    def _get_xi_ln_pld(self, l, n, array):
+        fs = self.fftlog_settings
         idx = self._ln_index[(int(l), int(n))]
         if int(n) == 0:
-            c_m = self._get_forward_pld_rfft(self._nu_hankel_forward_pld_n0, array)
-            u_m = self._xi_pld_u_m_n0[idx]
-            q_factor = self._xi_pld_q_factor_n0[idx]
+            nu, u_m, q_factor = fs.nu_pld_n0, self._xi_pld_u_m_n0[idx], self._xi_pld_q_factor_n0[idx]
         else:
-            c_m = self._get_forward_pld_rfft(self._nu_hankel_forward_pld, array)
-            u_m = self._xi_pld_u_m[idx]
-            q_factor = self._xi_pld_q_factor[idx]
-        return fftlog.hankel_transform(
-            c_m, u_m, None, None, self._npad, y_pow=q_factor)
+            nu, u_m, q_factor = fs.nu_pld, self._xi_pld_u_m[idx], self._xi_pld_q_factor[idx]
+        xi = fftlog.hankel(nu, self._pad_input(array / (2 * jnp.pi**2)), self._k_padded,
+                           None, u_m, self._npad, crop=False, y_pow=q_factor)
+        return xi * self._mask_xi
 
-    def _get_xi_ln_array_pld(self, array):
-        c_m = self._get_forward_pld_rfft(self._nu_hankel_forward_pld, array)
-        xis = self._apply_pld_batch(c_m, self._xi_pld_u_m, self._xi_pld_q_factor)
-        c_m_n0 = self._get_forward_pld_rfft(self._nu_hankel_forward_pld_n0, array)
-        xis_n0 = self._apply_pld_batch(c_m_n0, self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0)
-        xis = jnp.where(self._xi_pld_n0_mask[:, None], xis_n0, xis)
-        xi_ln = jnp.zeros((5, 3, self._nfft))
+    def get_xi_ln_array(self, array):
+        """All cached ``(l, n)`` forward transforms of ``array`` as ``xi_ln[l, n]``.
+
+        Same transform as :meth:`get_xi_ln`, batched: one rfft of the padded
+        input per bias group (``nu_pld``, ``nu_pld_n0``) serves every row; each
+        row has its own output grid and bias, whose ``q_padded[l]**(-nu_eff)``
+        factors are precomputed in ``_set_hankel``.
+        """
+        fs = self.fftlog_settings
+        fx = self._pad_input(array / (2 * jnp.pi**2))
+        xis = fftlog.hankel(fs.nu_pld, fx, self._k_padded, None, self._xi_pld_u_m,
+                            self._npad, crop=False, y_pow=self._xi_pld_q_factor)
+        xis_n0 = fftlog.hankel(fs.nu_pld_n0, fx, self._k_padded, None, self._xi_pld_u_m_n0,
+                               self._npad, crop=False, y_pow=self._xi_pld_q_factor_n0)
+        xis = jnp.where(self._xi_pld_n0_mask[:, None], xis_n0 * self._mask_xi, xis * self._mask_xi)
+        xi_ln = jnp.zeros((5, 3, xis.shape[-1]))
         ls = self._ln_list[:, 0]
         ns = self._ln_list[:, 1]
         return xi_ln.at[ls, ns].set(xis)
 
-    def get_xi_ln_array(self, array):
-        if self._hankel_forward_mode == 'pld':
-            return self._get_xi_ln_array_pld(array)
-        return self._get_xi_ln_array_direct(array)
-    
+    def get_pk_ln(self, l, n, array):
+        """Backward FFTlog of a q-space source back onto the core k grid.
+
+        ``array`` lives on the padded per-l q grid ``_q_padded[l]`` (it is a
+        forward output, or a product of forward outputs); the source carries
+        the trapezoid end weights ``_end_weights_xi`` of its
+        ``'lower_and_core'`` support.
+        """
+        fx = array * self._q_padded[l]**(n + 3) * self._end_weights_xi
+        return fftlog.hankel(self.fftlog_settings.nu, fx, self._q_padded[l], self._k_padded,
+                             self._u_m[l], self._npad, crop=True)
+
+    def get_pk_ln_p22_residual(self, array):
+        """:meth:`get_pk_ln` with the residual kernel ``j_0 - 1`` (m = 0 P22 blocks)."""
+        fx = array * self._q_p22_residual_padded**3 * self._end_weights_xi
+        return fftlog.hankel(self.fftlog_settings.nu_residual, fx, self._q_p22_residual_padded,
+                             self._k_padded, self._u_m_p22_residual, self._npad, crop=True)
+
     @partial(jit, static_argnames=['self'])
     def get_pkmu_1loop_hankel(self, pk, f, bias_a, bias_b):
-        """Compute 1-loop P22 + P13 using the FFTLog-Hankel method (or hybrid for P13)."""
+        """Compute 1-loop P22 + P13 using the FFTlog-Hankel method (or hybrid for P13)."""
         xi_ln = self.get_xi_ln_array(pk)
         pkmu_22 = self.get_pkmu_22_hankel(xi_ln, pk, f, bias_a, bias_b)
 
@@ -660,8 +665,11 @@ class EPT:
             pkmu_13 = self.get_pkmu_13_hankel(xi_ln, pk, f, bias_a, bias_b)
         else:
             # hybrid: PLD for P13
-            p_q_1 = self._get_decomp_pq_from_xpow(-0.3, self._pld_xpow_nu1, pk)
-            p_q_2 = self._get_decomp_pq_from_xpow(-1.6, self._pld_xpow_nu2, pk)
+            fs = self.fftlog_settings
+            p_q_1 = fftlog.power_law_decomposition(
+                pk, self._k, fs.nu_matrix_matter, xpow=self._pld_xpow_matter)
+            p_q_2 = fftlog.power_law_decomposition(
+                pk, self._k, fs.nu_matrix_p13_bias, xpow=self._pld_xpow_p13_bias)
             pkmu_13 = self.get_pkmu_13_pld(
                 self.get_pkmu_terms_13(p_q_1, p_q_2, pk), pk, f, bias_a, bias_b
             )
@@ -670,15 +678,7 @@ class EPT:
 
     def _get_pkmu_22_k0_limit(self, pk, bias_a, bias_b):
         b2_a, b2_b = bias_a[1], bias_b[1]
-        pk_data = jnp.stack([self._k, pk], axis=0)
-        return (b2_a * b2_b) / 2. * get_pk_int2(pk_data)
-
-    def get_pkmu_22_matrix_backend(self, pk, f, bias_a, bias_b):
-        """Evaluate P22 with the PLD/matrix backend from a Hankel or hybrid run."""
-        p_q_1 = self._get_decomp_pq_from_xpow(-0.3, self._pld_xpow_nu1, pk)
-        p_q_2 = self._get_decomp_pq_from_xpow(self._nu_ept_22_bias_ac, self._pld_xpow_22_bias_ac, pk)
-        terms_22 = self.get_pkmu_terms_22(p_q_1, p_q_2)
-        return self.get_pkmu_22_pld(terms_22, pk, f, bias_a, bias_b)
+        return (b2_a * b2_b) / 2. * self._get_grid_pk_int2(pk)
 
     def get_pkmu_22_hankel(self, xi_ln, pk, f, bias_a, bias_b):
         """P22 from per-block Hankel transforms (same structure as get_pkmu_13_hankel).
@@ -686,31 +686,45 @@ class EPT:
         m=0 blocks contain a genuine k->0 constant, so the quantity summed is the
         residual B_i(k)-B_i(0).  It is evaluated two ways and blended on the
         dimensionless ratio r = |B(k)-B(0)|/|B(0)|: the j0-1 kernel (accurate at
-        low k) and the ordinary j0 transform minus its DC (accurate at high k);
-        see the constructor comment.  m>0 blocks are k^m B_i(k) and use the
-        ordinary transform only.  The two groups are split at construction so
-        no transform is computed and discarded.
+        low k) and the ordinary j0 transform minus its DC (accurate at high k).
+        m>0 blocks are k^m B_i(k) and use the ordinary transform only.  The two
+        groups are split at construction so no transform is computed and
+        discarded.
+
+        Why the blend, and why a Gaussian weight: the j0-1 residual kernel is
+        accurate where |B(k)-B(0)| is small (low k), its absolute error is tiny
+        there but grows like k^2 at high k (the kernel's non-decaying -1 tail
+        makes the transform sensitive to the full-range integral B(0); this is
+        the rounding floor of the residual kernel at bias ``nu_residual``).  The
+        ordinary j0 transform has a near-constant small absolute error, so
+        D(k)-D(k_min) is accurate where |B(k)-B(0)| is comparable to |B(0)|
+        (high k; flat at the 1e-6 level for k >~ 0.1) but loses precision where
+        it is tiny.  The weight on the residual estimate must vanish exactly at
+        large r: the former rational form 1/(1+(r/r*)^2) only saturated at
+        1/(1+(1/r*)^2) = 9e-4 and so still multiplied the k^2 error of the
+        residual kernel into the blend (5e-2 of B(0) at l=4, k=30).  The
+        Gaussian ``w(r) = exp(-(r/blend_rstar)^2)`` agrees with the rational form
+        to second order at small r and is exactly negligible for r >~ 0.3.
+        Verified 2026-09-21 (notes/ept_ja.pdf section 2026-09-20 ~ 21 in the
+        ps_1loop_jax repo).
         """
-        if self._hankel_p22_final_mode == 'matrix':
-            return self.get_pkmu_22_matrix_backend(pk, f, bias_a, bias_b)
+        rstar = self.fftlog_settings.blend_rstar
 
         def get_pk_lnm_22(term):
             # ordinary j0 kernel
             l, n, m = term
             xi = xi_ln[l, n]
-            source = spline.interp1d(jnp.log(self._q[0]), jnp.log(self._q[l]), xi * xi)
+            source = spline.interp1d(jnp.log(self._q_padded[0]),
+                                     jnp.log(self._q_padded[l]), xi * xi)
             pk_ln =  4 * jnp.pi * self.get_pk_ln(0, 0, source)
             return (self._k ** m) * pk_ln
 
         def get_pk_lnm_22_m0(term):
-            # m=0 blocks contain a genuine k->0 constant, so the quantity used in the sum is the residual B_i(k)-B_i(0). 
-            # We evaluate it two ways and combine: 
-            # the j0-1 kernel (accurate at low k) and the ordinary j0 transform minus its DC (accurate at high k).
-
             # Low-k accurate form: B_i(k)-B_i(0) from the j0-1 residual kernel.
             l, n, _ = term
             xi = xi_ln[l, n]
-            source = spline.interp1d(jnp.log(self._q_p22_residual), jnp.log(self._q[l]), xi * xi)
+            source = spline.interp1d(jnp.log(self._q_p22_residual_padded),
+                                     jnp.log(self._q_padded[l]), xi * xi)
             pk_ln_j0m1 = 4 * jnp.pi * self.get_pk_ln_p22_residual(source)
 
             # High-k accurate form: full B_i(k) from the ordinary j0 transform,
@@ -721,7 +735,7 @@ class EPT:
             # Per-block dimensionless crossover r = |B(k)-B(0)|/|B(0)| (B(0) is the k->0 value of the ordinary j0 transform); blend the j0-1 (at low k) and j0 (at high k) results.
             denom = jnp.maximum(jnp.abs(pk_ln[:1]), jnp.finfo(pk_ln.real.dtype).tiny)
             r_ratio = jnp.abs(pk_ln_j0) / denom
-            w = 1.0 / (1.0 + (r_ratio / self._p22_m0_blend_rstar) ** self._p22_m0_blend_pow)
+            w = jnp.exp(-(r_ratio / rstar) ** 2)
 
             return w * pk_ln_j0m1 + (1.0 - w) * pk_ln_j0
 
@@ -800,8 +814,8 @@ class EPT:
         pk_w = pk - pk_nw
 
         # BAO damping factor in redshift space
-        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.k_IR)
-        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.k_IR)
+        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.lambda_ir)
+        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.lambda_ir)
         Sigma2_s = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
         damp_fac = jnp.outer(k**2, Sigma2_s)
 
@@ -835,9 +849,10 @@ class EPT:
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk4 = get_pk(self._k, jnp.stack([k, pk_ells[2]], axis=0), kmin=self._kmin, kmax=self._kmax)
 
-        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q[0]), self.get_xi_ln(0, 0, pk0))
-        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q[2]), -self.get_xi_ln(2, 0, pk2))
-        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q[4]), self.get_xi_ln(4, 0, pk4))
+        # ``get_xi_ln`` returns xi_l on the padded per-l grid ``_q_padded[l]``.
+        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q_padded[0]), self.get_xi_ln(0, 0, pk0))
+        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q_padded[2]), -self.get_xi_ln(2, 0, pk2))
+        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q_padded[4]), self.get_xi_ln(4, 0, pk4))
 
         xi_ells = jnp.stack([xi0, xi2, xi4], axis=0)
         return xi_ells

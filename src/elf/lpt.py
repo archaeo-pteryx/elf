@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from . import fftlog
 from . import spline
 
-from .utils import get_pk, get_pk_int, get_pk_int2, cross_bias_factor
+from .utils import get_pk, cross_bias_factor
 from .utils_lpt import (
     make_G00_coeffs,
     get_lpt_moments,
@@ -91,63 +91,100 @@ class LPT:
                  kmin_fft=1e-5,
                  kmax_fft=1e2,
                  nfft=512,
-                 hankel_nu=1.1,
-                 hankel_npad_factor=0.5,
-                 hankel_forward_pad_mode='zero-pad',
-                 hankel_backward_pad_mode='zero-pad',
-                 lpt_source_forward_pad_mode='zero-pad',
-                 hankel_forward_mode='pld',
+                 pad_mode='zero-pad',
+                 fftlog_settings=None,
                  lmax=5,
                  ngauss=4,
                  counterterm_base='linear_ir_resum',
-                 counterterm_irres_method='DST',
-                 counterterm_r_bao=110.0,
-                 counterterm_k_IR=0.2,
+                 irres_method='DST',
+                 r_bao=110.0,
+                 lambda_ir=0.2,
                  bias_basis='bG2',
                  subtract_k0_limit=False,
-                 lpt_tidal_zero_dc_residual=True,
                  ):
+        """One-loop Lagrangian-PT galaxy power spectrum in redshift space.
 
-        if hankel_forward_mode not in ('fftlog', 'pld'):
-            raise ValueError("hankel_forward_mode must be 'fftlog' or 'pld'")
+        Parameters
+        ----------
+        kmin_fft, kmax_fft : float, defaults 1e-5 and 1e2
+            Ends of the internal logarithmic k grid, in h/Mpc.
+        nfft : int, default 512
+            Number of nodes on that grid.  Must be even: the FFTlog pipeline
+            uses rfft/irfft with an implicit even length.
+        pad_mode : {'zero-pad', 'power-law'}, default 'zero-pad'
+            Model of the input P(k) outside the tabulated range.
+
+            'zero-pad' is the band-limited model: P is exactly zero outside
+            [k_min, k_max], and the k_min and k_max nodes enter the forward
+            FFTlog sum with the trapezoid end weight 1/2 (see
+            ``fftlog.trapezoid_weights``).  Consistently with that, the physical
+            supports of the Q/R sources -- [k_min, 2 k_max] for the
+            mode-coupling rows Q and [k_min, k_max] for the rows R that carry
+            an explicit P_lin(k) factor -- also carry the half weight at their
+            end nodes.
+
+            'power-law' is a hybrid model: only the P -> xi transform is
+            computed from the P continued across the padded band by its
+            endpoint log-slopes, while the sources Q and R are still cut at the
+            same places (2 k_max and k_max).  That cut is part of the model
+            definition: the tail beyond it is ~1e-3 of the zero-lag constants.
+        fftlog_settings : fftlog.FFTlogSettings or None, default None
+            Numerical constants of the FFTlog pipeline (bias ``nu``, width of
+            the padded band, node ``q_star`` at which the zero-lag constants
+            are read); ``None`` means the validated defaults
+            ``FFTlogSettings()``.
+        lmax : int, default 5
+            Order of the angular-moment expansion of the final (k, mu)
+            integral.  The truncation error at the default is ~5e-4 (P0) and
+            ~2e-3 (P2, P4) for k <= 0.2 h/Mpc, growing to ~6e-3 and ~1.4e-2 at
+            k = 0.3 h/Mpc; use lmax >= 8 if k = 0.3 h/Mpc must be accurate.
+        ngauss : int, default 4
+            Number of Gauss-Legendre points on mu in [0, 1] used for the
+            multipole projection.
+        counterterm_base : {'linear_ir_resum', 'linear', 'zeldovich'}, default 'linear_ir_resum'
+            Spectrum multiplying the k^2 and k^4 counterterms.  'zeldovich' is
+            fused into the same final q integral as the rest of the model
+            rather than being computed separately.
+        irres_method : {'DST', 'SG', 'WH'}, default 'DST'
+            Wiggle/no-wiggle split of the IR-resummed linear counterterm base.
+            In LPT it is used only when ``counterterm_base='linear_ir_resum'``.
+        r_bao : float, default 110.0
+            BAO scale of that IR resummation, in Mpc/h.  In LPT it is used only
+            when ``counterterm_base='linear_ir_resum'``.
+        lambda_ir : float, default 0.2
+            Upper limit of the k integral of the BAO damping Sigma^2 (and
+            delta Sigma^2) of that IR resummation, in h/Mpc.  In LPT it is used
+            only when ``counterterm_base='linear_ir_resum'``; it affects the
+            linear counterterm base only, never the LPT body.  Not to be
+            confused with the ``k_IR`` argument of the methods (the scale of the
+            split ``P = P e^{-(k/k_IR)^2} + ...`` inside the LPT body).
+        bias_basis : {'bG2', 'bs2'}, default 'bG2'
+            Convention of the second-order tidal bias in the ``bias`` vector;
+            'bs2' is converted to the 'bG2' basis internally.
+        subtract_k0_limit : bool, default False
+            Subtract the k -> 0 constant of the b2^2 term, i.e. its
+            shot-noise-like piece.
+        """
+
+        if pad_mode not in fftlog.INPUT_SUPPORT:
+            raise ValueError("pad_mode must be 'zero-pad' or 'power-law'")
         if nfft % 2:
             raise ValueError(
-                "nfft must be even: the FFTLog pipeline uses rfft/irfft with an "
+                "nfft must be even: the FFTlog pipeline uses rfft/irfft with an "
                 "implicit even length"
             )
         if bias_basis not in ('bG2', 'bs2'):
             raise ValueError("bias_basis must be 'bG2' or 'bs2'")
-        valid_pad_modes = ("power-law", "zero-pad", "smooth-zero-pad")
-        self._hankel_forward_pad_mode = hankel_forward_pad_mode
-        self._hankel_backward_pad_mode = hankel_backward_pad_mode
-        self._lpt_source_forward_pad_mode = lpt_source_forward_pad_mode
-        for name, mode in (
-            ("hankel_forward_pad_mode", self._hankel_forward_pad_mode),
-            ("hankel_backward_pad_mode", self._hankel_backward_pad_mode),
-            ("lpt_source_forward_pad_mode", self._lpt_source_forward_pad_mode),
-        ):
-            if mode not in valid_pad_modes:
-                raise ValueError(f"{name} must be one of {valid_pad_modes}")
-        if self._hankel_backward_pad_mode == 'power-law':
-            # The q-space sources change sign, so a geometric continuation over
-            # the guard band overflows and every multipole comes out NaN.
-            raise ValueError(
-                "hankel_backward_pad_mode='power-law' is not supported for the LPT "
-                "backward transforms; use 'zero-pad' (default) or 'smooth-zero-pad'"
-            )
 
         self.lmax = lmax
         self._counterterms = Counterterms(counterterm_base)
-        if counterterm_irres_method not in ('DST', 'SG', 'WH'):
-            raise ValueError("counterterm_irres_method must be 'DST', 'SG', or 'WH'")
-        self.counterterm_irres_method = counterterm_irres_method
-        self.counterterm_r_bao = counterterm_r_bao
-        self.counterterm_k_IR = counterterm_k_IR
+        if irres_method not in ('DST', 'SG', 'WH'):
+            raise ValueError("irres_method must be 'DST', 'SG', or 'WH'")
+        self.irres_method = irres_method
+        self.r_bao = r_bao
+        self.lambda_ir = lambda_ir
         self.bias_basis = bias_basis
         self._subtract_k0_limit = subtract_k0_limit
-        self._lpt_tidal_zero_dc_residual = lpt_tidal_zero_dc_residual
-
-        self._hankel_forward_mode = hankel_forward_mode
 
         # preparation for Gauss-Legendre quadrature
         self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss)
@@ -156,8 +193,8 @@ class LPT:
         self._kmin = kmin_fft
         self._kmax = kmax_fft
         self._nfft = nfft
-        self._nu_hankel = hankel_nu
-        self._hankel_npad_factor = hankel_npad_factor
+        self.fftlog_settings = fftlog.FFTlogSettings() if fftlog_settings is None else fftlog_settings
+        self._pad_mode = pad_mode
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._initialize_lpt()
 
@@ -177,73 +214,162 @@ class LPT:
         self._set_hankel(lmax)
 
     def _set_hankel(self, lmax):
+        """Grids, kernels, static support weights and the node ``q_star``.
+
+        The chain of transforms and the support rules are described above
+        :meth:`_get_xi_ln`.  Support weights (``fftlog.trapezoid_weights``):
+
+        * ``_end_weights_input``: the input model (``pad_mode``) -- 1/2 on
+          k_min and k_max for 'zero-pad', on the padded corners for
+          'power-law'.  The FFTlog's m = 0 coefficient is the rectangle rule
+          over the padded grid, so the node at which the input's support ends
+          must carry weight 1/2, or an O(dln) Euler-Maclaurin endpoint term
+          survives in every correlator.
+        * ``_mask_xi`` / ``_end_weights_xi``: the P -> xi outputs, restricted
+          to ``'lower_and_core'`` (the lower part of the padded band is the
+          physical q -> 0 plateau, the upper part is the rounding floor of an
+          already-decayed transform).  The plain mask is applied to the
+          outputs; the end weights only to the copies that are transformed
+          again (the Q/R source inputs and the b2^2 residual source): that
+          support ends at the interior node q_max, and for the n = -1 rows
+          (xi_1^{-1}, xi_3^{-1}) the transformed function q^2 xi does not
+          decay, so the end node would carry the full O(dln) term (verified
+          2026-09-23: the backward pk_1m1 / pk_3m1 errors against an exact
+          reference for the transform alone drop from 2.5e-5 / 1.2e-4 to
+          2.7e-7 / 2.0e-6).
+        * ``_end_weights_Q`` / ``_end_weights_R``: the physical supports of the
+          sources -- [k_min, 2 k_max] for the mode-coupling rows Q and
+          [k_min, k_max] for the rows R, whose explicit P_lin(k) factor is what
+          cuts them.
+        * ``_end_weights_q_core``: the source of the final q -> k transform,
+          which lives on the core q grid and is zero-padded (support
+          [q_min, q_max]).  With the half weights the transform's m = 0
+          coefficient is the same trapezoid sum as the chi/zeta DC constant
+          (``_get_qspace_dc_integral``), so the k -> 0 limit of those templates
+          cancels exactly.
+
+        ``q_star`` is the node at which the zero-lag moment
+        ``M = lim_{q->0} D_0(q)`` is read off the *padded* forward output: the
+        node of ``_q_padded`` closest to ``q_min * q_star_factor`` (one decade
+        inside the core edge by default).  This is far enough from the padded
+        corner (where the ``q^{-nu}`` unbiasing amplifies the FFT floor and
+        ``D_0`` is still in its transition) and close enough to ``q = 0`` that
+        the ``q*^2`` and ``q*^4`` Taylor terms in ``_get_zero_lag_constant``
+        recover the zero-lag value to ~1e-9.  A scan of the reading against an
+        independent reference (2026-09-19) showed the corner-based rule
+        (``q* k_supp = 6e-3``, ``k_supp = 2 kmax_fft``) sat on an accidental
+        zero crossing.
+        """
+        fs = self.fftlog_settings
         l_list = list(range(lmax + 1))
 
-        self._npad = max(1, int(self._hankel_npad_factor * self._nfft))
+        self._npad = max(1, int(fs.npad_factor * self._nfft))
         self._grid = fftlog.LogGrid.from_core(self._k, self._npad)
         self._k_padded = self._grid.x
-
-        # Spatial window disabled: analytic residualization handles the large-q tail.
-        self._w_m = fftlog.window(0, self._k_padded)
+        dln = self._grid.dln
+        self._dln_k = float(dln)
 
         # Low-ringing output phase per ell
         lnxy = jnp.array([
-            fftlog.low_ringing_phase(l, self._nu_hankel, self._grid)
+            fftlog.low_ringing_phase(l, fs.nu, self._grid)
             for l in l_list
         ])
+        self._lnxy_hankel = lnxy
 
         # Ell-specific forward output grids (used for xi_ln forward transforms)
         self._q_xi_padded = jnp.array([
             fftlog.output_grid(self._grid, lnxy[l]) for l in l_list
         ])
-        self._q_xi = self._grid.crop(self._q_xi_padded)
 
         # Common q-grid (ell=0) for backward transforms and all q-space products
-        self._q_padded = self._q_xi_padded[0]   # shape (nfft_padded,)
-        self._q = self._q_xi[0]                  # shape (nfft,)
+        self._q_padded = self._q_xi_padded[0]           # shape (nfft_padded,)
+        self._q = self._grid.crop(self._q_padded)       # shape (nfft,)
         self._ell_indices = jnp.arange(self.lmax + 1, dtype=self._q.dtype)
         self._q_inv_pows = self._q[None, :] ** (-self._ell_indices[:, None])
         # Precomputed constants used inside JIT-compiled methods
         self._4pi_q3 = 4.0 * jnp.pi * self._q**3
+        self._4pi_q3_padded = 4.0 * jnp.pi * self._q_padded**3
         self._logk_fft = jnp.log(self._k)
+        self._log_q_padded = jnp.log(self._q_padded)
+        self._log_q_xi_padded = jnp.log(self._q_xi_padded)
 
         # Forward kernels: ell-specific output phase, ell-specific G_l kernel
         self._u_m_xi = jnp.array([
-            fftlog.hankel_kernel(l, self._nu_hankel, self._grid, lnxy[l]) for l in l_list
+            fftlog.hankel_kernel(l, fs.nu, self._grid, lnxy[l]) for l in l_list
         ])
         # Backward kernels: ell=0 output phase, ell-specific G_l kernel
         self._u_m = jnp.array([
-            fftlog.hankel_kernel(l, self._nu_hankel, self._grid, lnxy[0]) for l in l_list
+            fftlog.hankel_kernel(l, fs.nu, self._grid, lnxy[0]) for l in l_list
         ])
+        # Mellin bias of the forward transform of row (l, n) of ``ln_list``:
+        # the k^{n+3} factor of xi_l^n is absorbed into the bias, the output
+        # is unbiased with q^{-nu}.
+        self._nu_xi_rows = fs.nu - (self.ln_list[:, 1] + 3).astype(jnp.float64)
 
-        self._set_hankel_forward_pld_groups()
+        # Static support weights (see the docstring).
+        self._end_weights_input = fftlog.trapezoid_weights(
+            fftlog.INPUT_SUPPORT[self._pad_mode], self._nfft, self._npad, dln)
+        self._end_weights_xi = fftlog.trapezoid_weights('lower_and_core', self._nfft, self._npad, dln)
+        self._mask_xi = jnp.where(self._end_weights_xi > 0, 1.0, 0.0)
+        self._end_weights_Q = fftlog.trapezoid_weights('core_to_2kmax', self._nfft, self._npad, dln)
+        self._end_weights_R = fftlog.trapezoid_weights('core', self._nfft, self._npad, dln)
+        self._end_weights_q_core = fftlog.trapezoid_weights('core', self._nfft, 0, dln)
+
+        # Node at which the zero-lag constants are read (see the docstring).
+        q_target = float(self._q[0]) * fs.q_star_factor
+        iq = int(_np.argmin(_np.abs(
+            _np.log(_np.asarray(self._q_padded)) - _np.log(q_target))))
+        self._iq_star = iq
+        self._q_star = float(self._q_padded[iq])
+
+        # R sources: which (l, n) rows of ``ln_list`` they are, and the
+        # order l of the backward kernel each one uses.  They are transformed
+        # on their *own* P -> xi output grid ``_q_xi_padded[l]`` with the
+        # low-ringing phase of their own order (``_u_m_xi[l]``); the conjugate
+        # grid relation then lands every row on the common ``_k_padded`` with
+        # no interpolation anywhere in the chain (the same construction the EPT
+        # P13 blocks use).  The assertion below is that relation:
+        # ``output_grid(output_grid(k, lnxy_l), lnxy_l) == k``.
+        r_ln = [(0, 0), (2, 0), (4, 0), (1, -1), (3, -1)]
+        ln_np = _np.asarray(self.ln_list)
+        self._R_source_rows = jnp.asarray(
+            [int(_np.flatnonzero((ln_np[:, 0] == l) & (ln_np[:, 1] == n))[0])
+             for l, n in r_ln], dtype=jnp.int32)
+        self._R_source_ells = jnp.asarray([l for l, _ in r_ln], dtype=jnp.int32)
+        k_ref = _np.asarray(self._k_padded)
+        for l, _n in r_ln:
+            k_back = _np.asarray(fftlog.output_grid(
+                self._q_xi_padded[l], self._lnxy_hankel[l]))
+            assert _np.allclose(k_back, k_ref, rtol=1e-12), (
+                f'R-source backward output grid for ell={l} is not the common '
+                'k grid; the conjugate relation of the low-ringing phase is '
+                'broken')
+
         self._set_pk_select_kernel()
 
-    def _set_hankel_forward_pld_groups(self):
-        ln_np = _np.asarray(self.ln_list)
-        group_ns = _np.asarray(sorted(set(ln_np[:, 1].tolist())), dtype=_np.int32)
-        self._xi_pld_group_ns = jnp.asarray(group_ns)
-        group_lookup = {int(n): i for i, n in enumerate(group_ns)}
-        self._xi_pld_group_ids = jnp.asarray(
-            [group_lookup[int(n)] for n in ln_np[:, 1]],
-            dtype=jnp.int32,
-        )
-
     def _set_pk_select_kernel(self):
-        if self._hankel_backward_pad_mode == 'power-law':
-            self._pk_select_kernel = None
-            return
+        """Kernel of the final q -> k transform, one column per core q node.
 
-        basis = jnp.eye(self._q.shape[0], dtype=self._q.dtype)
+        ``_pk_select_kernel[l, k, j]`` is the transform of the unit source at
+        q node j, so ``sum_j g_j K[l, :, j]`` is the transform of ``g``.  The
+        source lives on the core q grid and is zero-padded; the columns are
+        scaled by the trapezoid end weights ``_end_weights_q_core`` here, once,
+        so every caller of :meth:`get_pk_batched_interp` transforms the
+        end-weighted source at no extra cost.
+        """
+        basis = fftlog.pad(jnp.eye(self._q.shape[0], dtype=self._q.dtype), self._npad, 'zero-pad')
 
         def build_one(u_m):
             pk = fftlog.hankel(
-                self._nu_hankel, basis, self._q_padded, self._k_padded,
-                u_m, self._npad, self._w_m, self._hankel_backward_pad_mode,
+                self.fftlog_settings.nu, basis, self._q_padded, self._k_padded,
+                u_m, self._npad,
             )
             return pk.T
 
-        self._pk_select_kernel = jax.vmap(build_one)(self._u_m[:self.lmax + 1])
+        self._pk_select_kernel = (
+            jax.vmap(build_one)(self._u_m[:self.lmax + 1])
+            * self._end_weights_q_core
+        )
 
     def _get_qspace_dc_integral(self, corr):
         """Compute 4*pi*int q^2 corr(q) dq on the internal log-q grid."""
@@ -261,18 +387,53 @@ class LPT:
         dc = self._get_qspace_dc_integral(corr)
         return jnp.broadcast_to(-dc, self._k.shape)
 
+    def _get_grid_pk_int(self, pk_lin):
+        """``(1/2 pi^2) int dk P(k)`` as the zero-lag moment of the FFTlog input.
+
+        The constant is the ``m = 0`` coefficient of the discrete transform of
+        the *same* padded, end-weighted array that feeds the forward FFTlog
+        (``_pad_input``), i.e. ``sum_j dln k_j P_j / (2 pi^2)``.  Reading it off
+        that array -- rather than integrating an independently extrapolated
+        copy of ``P`` over an unrelated k range -- keeps the constant and the
+        q-dependent part of the tree correlators consistent: ``X_lin,lt(q->0)``
+        is then the physical ``q^2 M_2 / 15`` instead of a negative offset left
+        over from the band mismatch.
+        """
+        return fftlog.grid_moment(
+            self._pad_input(pk_lin), self._k_padded, self._grid.dln, 1
+        ) / (2 * jnp.pi**2)
+
     def _get_grid_pk_int2(self, pk_lin):
-        """Compute (1/2*pi^2) int k^2 P^2(k) dk on the internal k-grid."""
-        return get_pk_int2(
-            jnp.stack([self._k, pk_lin], axis=0), kmin=self._kmin, kmax=self._kmax)
+        """``(1/2 pi^2) int dk k^2 P^2(k)`` on the same band as the FFTlog input.
+
+        Same band-limited definition as :meth:`_get_grid_pk_int`, i.e.
+        ``sum_j dln k_j^3 P_j^2 / (2 pi^2)`` over the padded input model.  The
+        trapezoid end weights belong to the input ``P`` and are applied once,
+        not once per factor, so the weighted array is formed as
+        ``w * (pad P)^2`` rather than ``(pad P * w)^2``.
+        """
+        padded = fftlog.pad(pk_lin, self._npad, self._pad_mode, x=self._k)
+        return fftlog.grid_moment(
+            self._end_weights_input * padded**2, self._k_padded, self._grid.dln, 3
+        ) / (2 * jnp.pi**2)
 
     def _get_lpt_b2sq_residual_pk(self, xi_lin, pk_lin):
-        """Return H_0[0.5 xi^2](k) - I0 and I0 for the b2^2 DC split."""
+        """Return H_0[0.5 xi^2](k) - I0 and I0 for the b2^2 DC split.
+
+        ``xi_lin`` is ``xi_0^0`` on the padded common q grid (the
+        ``'lower_and_core'`` forward output: the lower part of the padded band
+        kept, the upper part zeroed).  The source ``4 pi q^3 xi^2 / 2`` carries
+        the trapezoid end weights of that support (``_end_weights_xi``), so the
+        transform's m = 0 coefficient is a trapezoid sum, and the lower part of
+        the padded band supplies the q < q_min part of the integral -- the same
+        treatment as the EPT P22 m = 0 blocks.
+        """
         source = 0.5 * xi_lin**2
-        direct = self.get_pk_batched(
-            self._4pi_q3[None, :] * source[None, :],
-            self._u_m[:1],
-        )[0]
+        direct = fftlog.hankel(
+            self.fftlog_settings.nu,
+            self._4pi_q3_padded * source * self._end_weights_xi,
+            self._q_padded, self._k_padded, self._u_m[0], self._npad, crop=True,
+        )
         dc = 0.5 * self._get_grid_pk_int2(pk_lin)
         return direct - dc, dc
 
@@ -295,10 +456,6 @@ class LPT:
     def get_pk_batched_interp(self, arrays, i0, t):
         arrays = jnp.asarray(arrays)
         L = arrays.shape[-2]
-        if self._pk_select_kernel is None:
-            pk_ffts = self.get_pk_batched(arrays, self._u_m[:L])
-            return self._interp_k_array(pk_ffts, i0, t)
-
         idx = jnp.clip(i0 + jnp.arange(-1, 3), 0, self._k.shape[0] - 1)
         kernel_rows = jnp.take(self._pk_select_kernel[:L], idx, axis=1)
         linear = (1.0 - t) * kernel_rows[:, 1, :] + t * kernel_rows[:, 2, :]
@@ -320,122 +477,443 @@ class LPT:
     def _get_lpt_weights(self, k_i):
         return ((-2.0 / k_i) ** self._ell_indices)[:, None] * self._q_inv_pows
 
-    def get_xi_ln(self, l, n, array, pad_mode=None):
-        if pad_mode is None:
-            pad_mode = self._hankel_forward_pad_mode
-        fx = array * self._k**(n + 3) / (2 * jnp.pi**2)
-        xi_ln = fftlog.hankel(
-            self._nu_hankel,
-            fx,
-            self._k_padded,
-            self._q_xi_padded[l],
-            self._u_m_xi[l],
-            self._npad,
-            self._w_m,
-            pad_mode,
-        )
-        xi_ln = spline.interp1d(jnp.log(self._q), jnp.log(self._q_xi[l]), xi_ln)
-        return xi_ln
+    def _pad_input(self, array):
+        """Padded, end-weighted copy of a core-grid input array.
 
-    def get_xi_ln_batched(self, ells, ns, arrays, pad_mode=None):
-        if pad_mode is None:
-            pad_mode = self._hankel_forward_pad_mode
+        This is the array the forward FFTlog actually transforms, and it is
+        also the array whose zero-lag moment defines the ``pk_int``-type
+        constants (see :meth:`_get_grid_pk_int`), which is why it is factored
+        out here rather than inlined in the rfft.
+
+        ``_end_weights_input`` carries the trapezoid end weights of the input
+        model: 1/2 on the k_min and k_max nodes for the band-limited
+        ('zero-pad') model, 1/2 on the padded corners for the continued
+        ('power-law') one.  The array may carry leading batch axes.
+        """
+        return fftlog.pad(array, self._npad, self._pad_mode, x=self._k) * self._end_weights_input
+
+    # ------------------------------------------------------------------
+    # The chain of FFTlog transforms
+    # ------------------------------------------------------------------
+    # The three chained transforms are
+    #   the P -> xi transform (the linear correlation functions):
+    #       P(k)             -> xi_l^n(q)       (forward,  k -> q)
+    #   the Q/R sources (backward transforms of xi products and of q^2 xi):
+    #       xi combinations  -> Q(k), R(k)      (backward, q -> k)
+    #   the k -> q transforms of the sources (the correlator rows):
+    #       Q/R combinations -> D_l^n(q)        (forward,  k -> q)
+    # Only the input P(k) is padded (``pad_mode``); each transform hands its
+    # full padded output to the next one, restricted to the support of the
+    # quantity it represents by the static weights of ``_set_hankel`` (see
+    # ``fftlog.trapezoid_weights``).
+    #
+    # Output-grid rule: every transform uses the low-ringing phase of its own
+    # order l, so its output lives on that order's grid; outputs are brought
+    # together either through the conjugate grid relation (free, exact) or by
+    # resampling (a sub-node cubic interpolation).  Concretely
+    #   * the P -> xi transform produces xi_l^n on the per-l grid
+    #     ``_q_xi_padded[l]``;
+    #   * the R sources are transformed straight off that grid with the
+    #     same per-l phase, which by ``output_grid(output_grid(k, lnxy_l),
+    #     lnxy_l) == k`` lands them back on the common ``_k_padded`` with no
+    #     interpolation at all -- the same chain the EPT P13 blocks use;
+    #   * the Q sources are *products* of xi's of different l, so they do
+    #     need one common q grid, and use the resampled xi copy;
+    #   * the source -> correlator transforms again go per l and resample the
+    #     D_l^n onto the common q grid, and the final (k, mu) evaluation
+    #     interpolates the selected rows off the l = 0 grid.
+
+    def _resample_to_common_q_padded(self, ells, rows):
+        """Move ell-specific padded forward outputs onto the common padded q grid.
+
+        The ell-specific grids differ from the common one only by the constant
+        low-ringing phase ``exp(lnxy[l] - lnxy[0]) < e^{dln}``, so this is an
+        interpolation by less than one node; the outermost node is extrapolated
+        by the same cubic.
+        """
+        log_q = self._log_q_padded
+
+        def interp_one(ell, row):
+            return spline.interp1d(log_q, self._log_q_xi_padded[ell], row)
+
+        return jax.vmap(interp_one)(ells, rows)
+
+    def _get_xi_ln(self, arrays):
+        """The P -> xi transform on the padded grid, returned on both grid layouts.
+
+        ``arrays`` is ``(n_arrays, nfft)`` on the core k grid.  Returns
+        ``(xi_ln_common, xi_ln_own_grid)`` where
+
+        * ``xi_ln_common`` is ``(n_arrays, 5, 5, n_padded)`` indexed as
+          ``xi_ln[i, l, n]`` on the *common* padded q grid ``_q_padded``
+          (the l = 0 low-ringing grid), obtained by resampling; it is what the
+          pointwise rows and the Q products need, because those combine
+          different l at the same q;
+        * ``xi_ln_own_grid`` is ``(n_arrays, n_ln, n_padded)``, one row per
+          entry of ``ln_list``, each still on *its own* forward output grid
+          ``_q_xi_padded[l]`` -- no interpolation has touched it.  The R
+          sources are transformed straight off these grids.
+
+        Every input row is padded once with ``pad_mode`` and carries the
+        trapezoid end weights of that model (:meth:`_pad_input`).  Row (l, n)
+        of ``ln_list`` is the transform of ``P k^{n+3} / (2 pi^2)`` with the
+        ``k^{n+3}`` factor absorbed into the Mellin bias
+        (``_nu_xi_rows = nu - (n + 3)``) and the output unbiased with
+        ``q^{-nu}``.  Both outputs keep the lower part of their padded band
+        (the physical ``q -> 0`` plateau, rule (i)) while the upper part is
+        zeroed (rule (ii)); that mask is index-based, so the same one applies
+        to the per-l rows.
+
+        The returned arrays carry the plain ``'lower_and_core'`` mask, *not*
+        the trapezoid end weights of that support: ``xi_ln_common`` is cropped
+        to the core for the pointwise (tree, chi/zeta) rows, where a halved
+        q_max node would be wrong.  The end weights ``_end_weights_xi`` (also
+        index-based) are applied by the caller to the copies that are handed to
+        :meth:`_get_Qs_Rs`, i.e. only to the arrays that are transformed
+        again.
+        """
+        arrays = jnp.atleast_2d(jnp.asarray(arrays))
+        ells = self.ln_list[:, 0]
+        ns = self.ln_list[:, 1]
+
+        fx = self._pad_input(arrays / (2 * jnp.pi**2))          # (n_arrays, n_padded)
+        raw = fftlog.hankel(
+            self._nu_xi_rows[:, None], fx[:, None, :], self._k_padded, None,
+            self._u_m_xi[ells], self._npad, crop=False,
+            y_pow=self._q_xi_padded[ells] ** (-self.fftlog_settings.nu),
+        )                                                          # (n_arrays, n_ln, n_padded)
+
+        xis = jax.vmap(lambda row: self._resample_to_common_q_padded(ells, row))(raw)
+        xis = xis * self._mask_xi
+        raw = raw * self._mask_xi
+        xi_ln = jnp.zeros((arrays.shape[0], 5, 5, self._k_padded.shape[0]))
+        return xi_ln.at[:, ells, ns].set(xis), raw
+
+    def _get_Qs_Rs(self, xi_ln_common, xi_ln_own_grid, pk_lin_padded):
+        """The Q/R sources on the padded k grid: Q1,Q2,Q5 and R1,R2,F_G2.
+
+        The Q rows keep their physical support ``[k_min, 2 k_max]`` and drop
+        the lower part of the padded band (rule (iii)); the R rows carry an
+        explicit factor ``P_lin(k)``, which is zero outside the core, so they
+        need no extra mask.
+
+        The two groups take their xi input in different layouts.  The Q
+        rows are pointwise products of ``xi_l^n`` of different l and therefore
+        need them tabulated at the same q: they use ``xi_ln_common``, the
+        resampled copy on the common grid ``_q_padded``.  The R rows transform
+        one ``q^2 xi_l^n`` each, so they can stay on the per-l forward grid:
+        they use ``xi_ln_own_grid`` (rows of ``ln_list``, each on
+        ``_q_xi_padded[l]``) with the backward kernel of that same order and
+        phase, ``_u_m_xi[l]``, whose conjugate output grid is exactly the common
+        ``_k_padded``.  That is the interpolation-free chain the EPT P13 blocks
+        use; for l = 0 it is identical to a transform on the common grid with
+        the common phase, so ``pk_00`` is unchanged bit for bit.
+
+        Both supports end at an interior node of the padded grid, so both carry
+        the trapezoid end weights of :func:`fftlog.trapezoid_weights`:
+        ``_end_weights_Q`` (1/2 at k_min and at 2 k_max, and zero outside) and
+        ``_end_weights_R`` (1/2 at k_min and k_max), applied to the R rows
+        through their common ``P_lin(k)`` factor.
+
+        ``xi_ln_common`` and ``xi_ln_own_grid`` are expected to carry the end
+        weights ``_end_weights_xi`` of their own support (the lower part of the
+        padded band plus the core) already; the caller applies them, because
+        the unweighted P -> xi output is also used pointwise on the core.  They
+        matter for the n = -1 rows, whose ``q^2 xi`` does not decay at q_max
+        (verified 2026-09-23: pk_1m1 / pk_3m1 errors against an exact reference
+        for the transform alone, 2.5e-5 / 1.2e-4 -> 2.7e-7 / 2.0e-6).
+        """
+        nu = self.fftlog_settings.nu
+        integrands = jnp.stack([
+            8/15 * xi_ln_common[0,0]**2 - 16/21 * xi_ln_common[2,0]**2
+            + 8/35 * xi_ln_common[4,0]**2,
+            xi_ln_common[1,-1]**2 - xi_ln_common[3,-1]**2,
+        ], axis=0)
+        res = fftlog.hankel(
+            nu, self._4pi_q3_padded * integrands, self._q_padded,
+            self._k_padded, self._u_m[0], self._npad, crop=False,
+        )
+        res = res * self._end_weights_Q
+        Q1 = res[0]
+        Q2 = Q1 - 2/5 * self._k_padded**2 * res[1]
+        Q5 = (Q1 + Q2) / 2
+        Qs = jnp.stack([Q1, Q2, Q5], axis=0)
+
+        ells = self._R_source_ells
+        q_l = self._q_xi_padded[ells]
+        xis = xi_ln_own_grid[self._R_source_rows]
+        pk_list = fftlog.hankel(
+            nu, q_l**2 * xis, q_l,
+            self._k_padded, self._u_m_xi[ells], self._npad, crop=False,
+        ) * (pk_lin_padded * self._end_weights_R)
+        pk_00, pk_20, pk_40, pk_1m1, pk_3m1 = pk_list
+        k = self._k_padded
+        R1 = k**2 * (8/15*pk_00 - 16/21*pk_20 + 8/35*pk_40)
+        R3 = (k**2 * (2/5*pk_00 - 6/7*pk_20 + 16/35*pk_40)
+              + k**3 * (2/5*pk_1m1 - 2/5*pk_3m1))
+        R2 = R3 - R1
+        F_G2_raw = -32/21 * k**2 * (pk_00 - 10/7*pk_20 + 3/7*pk_40)
+        Rs = jnp.stack([R1, R2, F_G2_raw], axis=0)
+        return Qs, Rs
+
+    def _get_xi_ln_batched(self, ells, ns, sources):
+        """k -> q transforms of padded sources: D_l^n(q) on the common padded q grid.
+
+        ``sources`` already live on the padded k grid and vanish outside their
+        physical support, so no padding is applied here.
+        """
         ells = jnp.asarray(ells, dtype=jnp.int32)
         ns = jnp.asarray(ns)
-        arrays = jnp.asarray(arrays)
-
-        fx = arrays * self._k[None, :] ** (ns[:, None] + 3) / (2 * jnp.pi**2)
-        xi_ln = fftlog.hankel(
-            self._nu_hankel,
-            fx,
-            self._k_padded,
-            self._q_xi_padded[ells],
-            self._u_m_xi[ells],
-            self._npad,
-            self._w_m,
-            pad_mode,
+        fx = sources * self._k_padded[None, :] ** (ns[:, None] + 3) / (2 * jnp.pi**2)
+        d = fftlog.hankel(
+            self.fftlog_settings.nu, fx, self._k_padded, self._q_xi_padded[ells],
+            self._u_m_xi[ells], self._npad, crop=False,
         )
-        def interp_to_common_q(ell, xi):
-            return spline.interp1d(jnp.log(self._q), jnp.log(self._q_xi[ell]), xi)
+        return self._resample_to_common_q_padded(ells, d)
 
-        return jax.vmap(interp_to_common_q)(ells, xi_ln)
+    def _get_zero_lag_constant(self, source, D0):
+        """Zero-lag moment of a Q/R source, read from the same discrete operator.
 
-    def get_pk_ln(self, l, n, array):
-        fx = array * self._q**(n + 3)
-        pk_ln = fftlog.hankel(
-            self._nu_hankel, fx, self._q_padded, self._k_padded, self._u_m[l],
-            self._npad, self._w_m, self._hankel_backward_pad_mode,
+        With ``D_0(q) = int dlnk k S(k) j_0(kq) / (2 pi^2)`` and
+        ``j_0(x) = 1 - x^2/6 + x^4/120 - x^6/5040 + ...``,
+
+            M = lim_{q->0} D_0(q) = D_0(q*) + q*^2 M_2 / 6 - q*^4 M_4 / 120 + O(q*^6)
+            M_2 = sum_k dln k^3 S(k) / (2 pi^2)
+            M_4 = sum_k dln k^5 S(k) / (2 pi^2).
+
+        Reading ``D_0`` at ``q*`` (on its ``q -> 0`` plateau, see
+        ``_set_hankel``) instead of quadrating ``S`` separately keeps the
+        constant and the ``q``-dependent rows consistent to machine precision,
+        since both come out of the same transform.
+
+        Returns ``(M_hat, D0_at_q_star, M_2, M_4, remainder_bound)`` with
+        ``remainder_bound = q*^6 / (5040 * 2 pi^2) * sum_k dln k^7 |S(k)|``, a
+        modulus bound on the first neglected (sixth-order) Taylor term.  The
+        sums run over the whole padded k grid: the source is already zero
+        outside its physical support, so a log-trapezoid there is the
+        trapezoid over that support.
+        """
+        k = self._k_padded
+        dln = self._dln_k
+        two_pi_sq = 2 * jnp.pi**2
+        y2 = k**3 * source / two_pi_sq
+        y4 = k**5 * source / two_pi_sq
+        M_2 = dln * (jnp.sum(y2, axis=-1) - 0.5 * (y2[..., 0] + y2[..., -1]))
+        M_4 = dln * (jnp.sum(y4, axis=-1) - 0.5 * (y4[..., 0] + y4[..., -1]))
+        D0_star = D0[..., self._iq_star]
+        q_star = self._q_star
+        M_hat = D0_star + q_star**2 * M_2 / 6.0 - q_star**4 * M_4 / 120.0
+        remainder = (q_star**6 / 5040.0) * dln * jnp.sum(
+            k**7 * jnp.abs(source) / two_pi_sq, axis=-1)
+        return M_hat, D0_star, M_2, M_4, remainder
+
+    def _get_corrs_matter_1loop(self, Qs, Rs):
+        """X22/Y22/X13/Y13/V1/V3/T rows from the padded Q/R sources.
+
+        Returns ``(corrs, moments)``: the q -> 0 constants of X22 and X13 are
+        read off the padded transform (:meth:`_get_zero_lag_constant`), and
+        ``moments`` holds their breakdown for :meth:`get_corrs_diagnostics`.
+        """
+        Q1, Q2 = Qs[0], Qs[1]
+        R1, R2 = Rs[0], Rs[1]
+
+        source_22 = 9/98 * Q1
+        source_13 = 5/21 * R1
+        xi_A = self._get_xi_ln_batched(
+            jnp.array([0, 2, 0, 2]),
+            jnp.array([-2, -2, -2, -2]),
+            jnp.stack([source_22, source_22, source_13, source_13], axis=0),
         )
-        return pk_ln
+        moment_22 = self._get_zero_lag_constant(source_22, xi_A[0])
+        moment_13 = self._get_zero_lag_constant(source_13, xi_A[2])
+        xi_ln_22_0m2, xi_ln_22_2m2, xi_ln_13_0m2, xi_ln_13_2m2 = self._grid.crop(xi_A)
 
-    def get_pk_batched(self, arrays, u_m):
-        pks = fftlog.hankel(
-            self._nu_hankel, arrays, self._q_padded, self._k_padded, u_m,
-            self._npad, self._w_m, self._hankel_backward_pad_mode,
+        X22 = 2/3 * (moment_22[0] - xi_ln_22_0m2 - xi_ln_22_2m2)
+        Y22 = 2 * xi_ln_22_2m2
+        X13 = 2/3 * (moment_13[0] - xi_ln_13_0m2 - xi_ln_13_2m2)
+        Y13 = 2 * xi_ln_13_2m2
+
+        xi_W = self._grid.crop(self._get_xi_ln_batched(
+            jnp.array([3, 1, 1]),
+            jnp.array([-3, -3, -3]),
+            jnp.stack([
+                -3/7 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2),
+                3/35 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2),
+                -3/35 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2),
+            ], axis=0),
+        ))
+        T = xi_W[0]
+        V1 = xi_W[1] - 0.2 * T
+        V3 = xi_W[2] - 0.2 * T
+
+        corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
+        moments = {'S22': (source_22,) + moment_22, 'S13': (source_13,) + moment_13}
+        return corrs, moments
+
+    def _get_corrs_bias(self, Qs, Rs, xi_ln):
+        """Bias rows from the padded Q/R sources and the core P -> xi output.
+
+        ``xi_ln`` is the *core* P -> xi output: every row built from it (U20,
+        X/Y_Upsilon, chi, zeta, V12) is a purely algebraic q-space combination.
+        Returns ``(corrs, moments)`` like :meth:`_get_corrs_matter_1loop`.
+        """
+        Q1, Q2, Q5 = Qs[0], Qs[1], Qs[2]
+        R1, R2, F_G2_raw = Rs[0], Rs[1], Rs[2]
+
+        source_10a = 2/7 * (Q5 + 2 * R2)
+        source_10b = 1/7 * (2 * Q5 + 3 * R1 + 4 * R2)
+        xi_bias_padded = self._get_xi_ln_batched(
+            jnp.array([1, 1, 0, 2, 1, 1, 0]),
+            jnp.array([-1, -1, -2, -2, -1, -1, 0]),
+            jnp.stack([
+                -5/21 * R1,
+                -6/7 * (R1 + R2),
+                source_10a,
+                source_10b,
+                3/7 * Q1,
+                -2/5 * F_G2_raw,
+                2/5 * F_G2_raw,
+            ], axis=0),
         )
-        return pks
+        # The X10 constant is the q -> 0 limit of the same ell=0 transform whose
+        # q-dependent part is subtracted below, so that X10(q -> 0) = 0 holds by
+        # construction.
+        moment_10 = self._get_zero_lag_constant(source_10a, xi_bias_padded[2])
+        xi_bias = self._grid.crop(xi_bias_padded)
 
-    def get_xi_ln_array(self, array):
-        if self._hankel_forward_mode == 'pld':
-            return self.get_xi_ln_array_pld(array)
-        ls = self.ln_list[:, 0]
-        ns = self.ln_list[:, 1]
-        arrays = jnp.broadcast_to(array, (self.ln_list.shape[0], array.shape[0]))
-        xis = self.get_xi_ln_batched(ls, ns, arrays)
-        xi_ln = jnp.zeros((5, 5, self._nfft))
-        xi_ln = xi_ln.at[ls, ns].set(xis)
-        return xi_ln
+        U3, U11 = xi_bias[0], xi_bias[1]
+        xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[2], xi_bias[3]
+        X10 = moment_10[0] - xi_ln_A10_0m2 - xi_ln_A10_2m2
+        Y10 = 3 * xi_ln_A10_2m2
 
-    def get_xi_ln_array_pld(self, array):
-        c_m_by_n = self._get_forward_pld_rfft_batch(array, self._hankel_forward_pad_mode)
-        c_m = c_m_by_n[self._xi_pld_group_ids]  # (n_ln, nfft//2+1)
-        ells = self.ln_list[:, 0]
-        xis = self._apply_forward_pld_group(c_m, ells)  # (n_ln, nq)
-        xi_ln = jnp.zeros((5, 5, self._nfft))
-        ls, ns = self.ln_list[:, 0], self.ln_list[:, 1]
-        return xi_ln.at[ls, ns].set(xis)
+        # U20 from Ulin via Schmittfull-Vlah identity
+        U_lin = -xi_ln[1, -1]
+        U20 = self._get_U20_from_Ulin(U_lin)
 
-    def get_xi_ln_arrays(self, arrays):
-        arrays = jnp.asarray(arrays)
-        if arrays.ndim == 1:
-            return self.get_xi_ln_array(arrays)[None, ...]
-        if self._hankel_forward_mode != 'pld':
-            return jax.vmap(self.get_xi_ln_array)(arrays)
+        # X_Upsilon, Y_Upsilon from J2/J3 algebraic identities
+        J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
+        J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
+        X_Upsilon = 4 * J3**2
+        Y_Upsilon = 12 * J2**2 - 4 * J3**2 - (4.0/3.0) * U_lin**2
 
-        c_m_by_n = jax.vmap(
-            lambda array: self._get_forward_pld_rfft_batch(
-                array, self._hankel_forward_pad_mode
+        V10 = xi_bias[4]
+        V12 = self._get_V12_G2_from_V10(V10, xi_ln)
+        chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2)
+        zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2)
+
+        Ub3 = xi_bias[5]
+        theta = xi_bias[6]
+
+        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon,
+                           chi, zeta, Ub3, theta], axis=0)
+        return corrs, {'S10': (source_10a,) + moment_10}
+
+    @partial(jit, static_argnames=['self'])
+    def get_corrs(self, pk_data, k_IR=0.2):
+        """The 32 q-space rows (``corrs``) the final (k, mu) integral needs.
+
+        ``k_IR`` (h/Mpc) is the scale of the split of the linear spectrum into
+        ``P_lt = P e^{-(k/k_IR)^2}`` and the rest, which is kept exponentiated
+        and expanded respectively inside the LPT body.  It is a different
+        quantity from ``lambda_ir``, the upper limit of the Sigma^2 integral of
+        the IR-resummed linear counterterm base.
+
+        Rows: 0-7 tree (X/Y_lin, X/Y_lin_lt, X/Y_lin_gt, xi_lin, U_lin), 8-14
+        matter one-loop, 15-27 bias, 28/29 chi/zeta DC corrections, 30 the b2^2
+        residual ``H_0[xi^2/2](k) - I0``, 31 the constant ``I0``; all on the
+        core q grid (the DC rows on the core k grid).
+        """
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pk_lin_lt = pk_lin * jnp.exp(-(self._k / k_IR)**2)
+
+        # Band-limited zero-lag moments of the very arrays the forward FFTlog
+        # transforms; see ``_get_grid_pk_int``.
+        pk_int = self._get_grid_pk_int(pk_lin)
+        pk_int_lt = self._get_grid_pk_int(pk_lin_lt)
+
+        # The P -> xi transform.  Both rows use the same input model
+        # (``pad_mode``) and the same trapezoid end weights.
+        xi_ln_padded, xi_raw_padded = self._get_xi_ln(
+            jnp.stack([pk_lin, pk_lin_lt], axis=0))
+        xi_ln = self._grid.crop(xi_ln_padded[0])
+        xi_ln_lt = self._grid.crop(xi_ln_padded[1])
+
+        corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt, pk_int, pk_int_lt)
+
+        # The Q/R sources and their k -> q transforms.  The arrays handed to
+        # the source construction additionally carry the trapezoid end weights
+        # ``_end_weights_xi`` of their own support (the lower part of the
+        # padded band plus the core): that support ends at the interior node
+        # q_max, and for the n = -1 rows q^2 xi does not decay there, so
+        # without the half weight the end node leaves an O(Delta) term in every
+        # source moment.  The weights belong to the arrays that are
+        # *transformed*, hence they are applied here and not to the cropped
+        # core rows ``xi_ln`` / ``xi_ln_lt`` above, which are only ever used
+        # pointwise.  ``_end_weights_xi`` is index-based, so the same array
+        # weights the common-grid copy (used by the Q products) and the per-l
+        # raw rows (used by the R transforms).
+        Qs, Rs = self._get_Qs_Rs(xi_ln_padded[0] * self._end_weights_xi,
+                                 xi_raw_padded[0] * self._end_weights_xi,
+                                 fftlog.pad(pk_lin, self._npad, 'zero-pad'))
+        corrs_matter_1loop, _ = self._get_corrs_matter_1loop(Qs, Rs)
+        corrs_bias, _ = self._get_corrs_bias(Qs, Rs, xi_ln)
+
+        chi = corrs_bias[9]
+        zeta = corrs_bias[10]
+
+        chi_dc_correction = self._get_lpt_dc_correction(chi)
+        zeta_dc_correction = self._get_lpt_dc_correction(zeta)
+
+        # b2^2 residual from the padded xi_0^0 (lower part of the padded band
+        # kept), like the EPT P22 m = 0 blocks; ``corrs_tree[6]`` is its core
+        # crop.
+        b2sq_residual_pk, b2sq_dc = self._get_lpt_b2sq_residual_pk(
+            xi_ln_padded[0][0, 0], pk_lin)
+        b2sq_dc_arr = jnp.broadcast_to(b2sq_dc, self._k.shape)
+
+        return jnp.concatenate([
+            corrs_tree, corrs_matter_1loop, corrs_bias,
+            chi_dc_correction[None, :],
+            zeta_dc_correction[None, :],
+            b2sq_residual_pk[None, :],
+            b2sq_dc_arr[None, :],
+        ], axis=0)
+
+    def get_corrs_diagnostics(self, pk_data):
+        """Breakdown of the zero-lag constants of the loop correlators.
+
+        For each of the three Q/R sources whose ``q -> 0`` constant enters
+        X22 / X13 / X10 (``'S22'``, ``'S13'``, ``'S10'``), the returned dict
+        holds ``M_hat`` (the adopted value), ``D0_at_q_star``, ``M_2``,
+        ``M_4`` and ``remainder_bound`` (bound on the neglected sixth-order
+        Taylor term); see :meth:`_get_zero_lag_constant`.  ``q_star`` and
+        ``i_q_star`` give the reading node.  The constants do not depend on
+        ``k_IR``.  Not jitted: this is a diagnostic.
+        """
+        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        xi_ln_padded, xi_raw_padded = self._get_xi_ln(pk_lin[None, :])
+        Qs, Rs = self._get_Qs_Rs(xi_ln_padded[0] * self._end_weights_xi,
+                                 xi_raw_padded[0] * self._end_weights_xi,
+                                 fftlog.pad(pk_lin, self._npad, 'zero-pad'))
+        _, moments = self._get_corrs_matter_1loop(Qs, Rs)
+        moments.update(self._get_corrs_bias(Qs, Rs, self._grid.crop(xi_ln_padded[0]))[1])
+
+        out = {}
+        for name, (source, M_hat, D0_star, M_2, M_4, remainder) in moments.items():
+            out[name] = dict(
+                M_hat=M_hat,
+                D0_at_q_star=D0_star,
+                M_2=M_2,
+                M_4=M_4,
+                remainder_bound=remainder,
             )
-        )(arrays)
-        c_m = c_m_by_n[:, self._xi_pld_group_ids]
-        ells = self.ln_list[:, 0]
-        xis = jax.vmap(lambda c_m_i: self._apply_forward_pld_group(c_m_i, ells))(c_m)
-        xi_ln = jnp.zeros((arrays.shape[0], 5, 5, self._nfft))
-        ls, ns = self.ln_list[:, 0], self.ln_list[:, 1]
-        return xi_ln.at[:, ls, ns].set(xis)
-
-    def _get_forward_pld_rfft_batch(self, array, pad_mode):
-        fx_pad = fftlog.pad(array / (2 * jnp.pi**2), self._npad, mode=pad_mode)
-        nu_n = self._nu_hankel - (self._xi_pld_group_ns + 3).astype(jnp.float64)
-        return fftlog.mellin_coefficients(
-            fx_pad[None, :], self._k_padded, nu_n[:, None], window=self._w_m)
-
-    def _apply_forward_pld_group(self, c_m, ells):
-        c_m = jnp.atleast_2d(c_m)
-        xi = fftlog.hankel_transform(
-            c_m, self._u_m_xi[ells], self._q_xi_padded[ells], self._nu_hankel, self._npad)
-        log_q = jnp.log(self._q)
-        def interp_to_common_q(ell, row):
-            return spline.interp1d(log_q, jnp.log(self._q_xi[ell]), row)
-        return jax.vmap(interp_to_common_q)(ells, xi)
+        out['q_star'] = self._q_star
+        out['i_q_star'] = self._iq_star
+        return out
 
     def _get_lpt_dc_terms(self, corrs):
-        if self._lpt_tidal_zero_dc_residual:
-            chi_dc_correction = corrs[28]
-            zeta_dc_correction = corrs[29]
-        else:
-            chi_dc_correction = jnp.zeros_like(self._k)
-            zeta_dc_correction = jnp.zeros_like(self._k)
+        chi_dc_correction = corrs[28]
+        zeta_dc_correction = corrs[29]
         b2sq_residual_pk = corrs[30]
         b2sq_dc = corrs[31, 0]
         return chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc
@@ -444,9 +922,8 @@ class LPT:
         self, pkmu_vals, i0, t, chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc,
         chi_index, zeta_index, b2sq_index,
     ):
-        if self._lpt_tidal_zero_dc_residual:
-            pkmu_vals = pkmu_vals.at[chi_index].add(self._interp_k_array(chi_dc_correction, i0, t))
-            pkmu_vals = pkmu_vals.at[zeta_index].add(self._interp_k_array(zeta_dc_correction, i0, t))
+        pkmu_vals = pkmu_vals.at[chi_index].add(self._interp_k_array(chi_dc_correction, i0, t))
+        pkmu_vals = pkmu_vals.at[zeta_index].add(self._interp_k_array(zeta_dc_correction, i0, t))
         pkmu_vals = pkmu_vals.at[b2sq_index].add(self._interp_k_array(b2sq_residual_pk, i0, t))
         if not self._subtract_k0_limit:
             pkmu_vals = pkmu_vals.at[b2sq_index].add(b2sq_dc)
@@ -454,9 +931,8 @@ class LPT:
 
     def _get_lpt_dc_scalar(self, bias_facs, i0, t, chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc):
         val = jnp.array(0.0, dtype=self._k.dtype)
-        if self._lpt_tidal_zero_dc_residual:
-            val = val + bias_facs[8] * self._interp_k_array(chi_dc_correction, i0, t)
-            val = val + bias_facs[9] * self._interp_k_array(zeta_dc_correction, i0, t)
+        val = val + bias_facs[8] * self._interp_k_array(chi_dc_correction, i0, t)
+        val = val + bias_facs[9] * self._interp_k_array(zeta_dc_correction, i0, t)
         val = val + bias_facs[5] * self._interp_k_array(b2sq_residual_pk, i0, t)
         if not self._subtract_k0_limit:
             val = val + bias_facs[5] * b2sq_dc
@@ -669,6 +1145,11 @@ class LPT:
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_components(self, k, mu, pk_data, f, k_IR=0.2):
+        """The 24 named LPT components on the (k, mu) grid (diagnostic).
+
+        ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
+        LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
+        """
         if self._counterterms.needs_kspace_base:
             raise ValueError(
                 "get_pkmu_components exposes the fused Zel'dovich counterterm component only; "
@@ -836,6 +1317,11 @@ class LPT:
         return jnp.transpose(pkmu_terms, (2, 0, 1))       # (ncomp, nk, nmu)
 
     def get_pkmu_terms(self, k, mu, pk_data, f, k_IR=0.2, alpha_perp=1.0, alpha_para=1.0):
+        """Bias-independent templates from ``pk_data`` (see :meth:`get_pkmu_terms_from_corrs`).
+
+        ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
+        LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
+        """
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pkmu_terms_from_corrs(k, mu, corrs, f, alpha_perp, alpha_para)
 
@@ -889,14 +1375,14 @@ class LPT:
             return pk
 
         # wiggly-non-wiggly decomposition
-        pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.counterterm_irres_method)
+        pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
         pk_nw = get_pk(k, pk_nw_data, kmin=self._kmin, kmax=self._kmax)
         pk_w = pk - pk_nw
 
         # BAO damping factor in redshift space
         f = params.f
-        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR)
-        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.counterterm_r_bao, self.counterterm_k_IR)
+        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.lambda_ir)
+        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.lambda_ir)
         Sigma2_s = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
 
         return pk_nw + jnp.exp(-k**2 * Sigma2_s) * pk_w
@@ -979,6 +1465,11 @@ class LPT:
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+        """P(k, mu) at the requested (k, mu), AP distortion included.
+
+        ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
+        LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
+        """
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pkmu_from_corrs(
             k, mu, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
@@ -994,57 +1485,15 @@ class LPT:
         return pk_ells
 
     def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
-        """
-        Legendre multipoles.
+        """Legendre multipoles P_0, P_2, P_4, shape (3, nk).
+
+        ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
+        LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
         """
         corrs = self.get_corrs(pk_data, k_IR)
         return self.get_pk_ells_from_corrs(
             k, corrs, params, alpha_perp, alpha_para, pk_data=pk_data
         )
-
-    @partial(jit, static_argnames=['self'])
-    def get_corrs(self, pk_data, k_IR=0.2):
-        pk_lin = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-        pk_lin_lt = pk_lin * jnp.exp(-(self._k / k_IR)**2)
-
-        # integrals of pk
-        pk_int = get_pk_int(pk_data)
-        pk_data_lt = jnp.stack([self._k, pk_lin_lt], axis=0)
-        pk_int_lt = get_pk_int(pk_data_lt)
-
-        # generalized correlation functions
-        xi_ln, xi_ln_lt = self.get_xi_ln_arrays(jnp.stack([pk_lin, pk_lin_lt], axis=0))
-
-        # tree-level terms
-        corrs_tree = self.get_corrs_tree(xi_ln, xi_ln_lt, pk_int, pk_int_lt)
-
-        # one-loop terms
-        Qs = self.get_Qs(xi_ln)
-        Rs = self.get_Rs(xi_ln, pk_lin)
-        corrs_matter_1loop = self.get_corrs_matter_1loop(Qs, Rs)
-        corrs_bias = self.get_corrs_bias(Qs, Rs, xi_ln)
-
-        chi = corrs_bias[9]
-        zeta = corrs_bias[10]
-
-        if self._lpt_tidal_zero_dc_residual:
-            chi_dc_correction = self._get_lpt_dc_correction(chi)
-            zeta_dc_correction = self._get_lpt_dc_correction(zeta)
-        else:
-            chi_dc_correction = jnp.zeros_like(self._k)
-            zeta_dc_correction = jnp.zeros_like(self._k)
-
-        b2sq_residual_pk, b2sq_dc = self._get_lpt_b2sq_residual_pk(corrs_tree[6], pk_lin)
-        b2sq_dc_arr = jnp.broadcast_to(b2sq_dc, self._k.shape)
-
-        corrs = jnp.concatenate([
-            corrs_tree, corrs_matter_1loop, corrs_bias,
-            chi_dc_correction[None, :],
-            zeta_dc_correction[None, :],
-            b2sq_residual_pk[None, :],
-            b2sq_dc_arr[None, :],
-        ], axis=0)
-        return corrs
 
     def get_corrs_tree(self, xi_ln, xi_ln_lt, pk_int, pk_int_lt):
         # X_lin = 2/3 * (xi_ln[0,-2][0] - xi_ln[0,-2] - xi_ln[2,-2])
@@ -1063,130 +1512,6 @@ class LPT:
 
         corrs = jnp.stack([X_lin, Y_lin, X_lin_lt, Y_lin_lt,
                            X_lin_gt, Y_lin_gt, xi_lin, U_lin], axis=0)
-        return corrs
-
-    def get_Qs(self, xi_ln):
-        # Compute Q1, Q2, Q5 using the original basis (backward Hankel of xi^2).
-        # The UV-safe k^4 factoring amplifies FFTLog numerical noise at large k,
-        # contaminating int Q1 k^2 dk / (2*pi^2) used in get_corrs_matter_1loop.
-        integrands = jnp.stack([
-            8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2,
-            xi_ln[1,-1]**2 - xi_ln[3,-1]**2,
-        ], axis=0)
-        res = self.get_pk_batched(self._4pi_q3 * integrands, self._u_m[0])
-        Q1 = res[0]
-        Q2 = Q1 - 2/5 * self._k**2 * res[1]
-        Q5 = (Q1 + Q2) / 2
-        return jnp.stack([Q1, Q2, Q5], axis=0)
-
-    def get_Rs(self, xi_ln, pk_lin):
-        ells = jnp.array([0, 2, 4, 1, 3], dtype=jnp.int32)
-        xis = jnp.stack([xi_ln[0,0], xi_ln[2,0], xi_ln[4,0], xi_ln[1,-1], xi_ln[3,-1]], axis=0)
-        pk_list = self.get_pk_batched(self._q**2 * xis, self._u_m[ells]) * pk_lin
-        pk_00, pk_20, pk_40, pk_1m1, pk_3m1 = pk_list
-        k = self._k
-        R1 = k**2 * (8/15*pk_00 - 16/21*pk_20 + 8/35*pk_40)
-        R3 = (k**2 * (2/5*pk_00 - 6/7*pk_20 + 16/35*pk_40)
-              + k**3 * (2/5*pk_1m1 - 2/5*pk_3m1))
-        R2 = R3 - R1
-        F_G2_raw = -32/21 * k**2 * (pk_00 - 10/7*pk_20 + 3/7*pk_40)
-        return jnp.stack([R1, R2, F_G2_raw], axis=0)
-
-    def get_corrs_matter_1loop(self, Qs, Rs):
-        Q1 = Qs[0]
-        Q2 = Qs[1]
-        R1 = Rs[0]
-        R2 = Rs[1]
-
-        # X, Y for 1-loop A_{ij}
-        xi_A = self.get_xi_ln_batched(
-            jnp.array([0, 2, 0, 2]),
-            jnp.array([-2, -2, -2, -2]),
-            jnp.stack([9/98 * Q1, 9/98 * Q1, 5/21 * R1, 5/21 * R1], axis=0),
-            pad_mode=self._lpt_source_forward_pad_mode,
-        )
-        xi_ln_22_0m2, xi_ln_22_2m2, xi_ln_13_0m2, xi_ln_13_2m2 = xi_A
-
-        pk_data = jnp.stack([self._k, 9/98 * Q1], axis=0)
-        xi_ln_22_q0 = get_pk_int(pk_data)
-        # X22 = 2/3 * (xi_ln_22_0m2[0] - xi_ln_22_0m2 - xi_ln_22_2m2)
-        X22 = 2/3 * (xi_ln_22_q0 - xi_ln_22_0m2 - xi_ln_22_2m2)
-        Y22 = 2 * xi_ln_22_2m2
-
-        pk_data = jnp.stack([self._k, 5/21 * R1], axis=0)
-        xi_ln_13_q0 = get_pk_int(pk_data)
-        # X13 = 2/3 * (xi_ln_13_0m2[0] - xi_ln_13_0m2 - xi_ln_13_2m2)
-        X13 = 2/3 * (xi_ln_13_q0 - xi_ln_13_0m2 - xi_ln_13_2m2)
-        Y13 = 2 * xi_ln_13_2m2
-
-        # V1, V3, T for W_{ijk}
-        xi_W = self.get_xi_ln_batched(
-            jnp.array([3, 1, 1]),
-            jnp.array([-3, -3, -3]),
-            jnp.stack([
-                -3/7 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2),
-                3/35 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2),
-                -3/35 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2),
-            ], axis=0),
-            pad_mode=self._lpt_source_forward_pad_mode,
-        )
-        T = xi_W[0]
-        V1 = xi_W[1] - 0.2 * T
-        V3 = xi_W[2] - 0.2 * T
-
-        corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
-        return corrs
-
-    def get_corrs_bias(self, Qs, Rs, xi_ln):
-        Q1 = Qs[0]
-        Q2 = Qs[1]
-        Q5 = Qs[2]
-        R1 = Rs[0]
-        R2 = Rs[1]
-        F_G2_raw = Rs[2]
-
-        # A10
-        pk_data = jnp.stack([self._k, 2/7 * R1], axis=0)
-        xi_ln_A10_q0 = get_pk_int(pk_data)
-
-        xi_bias = self.get_xi_ln_batched(
-            jnp.array([1, 1, 0, 2, 1, 1, 0]),
-            jnp.array([-1, -1, -2, -2, -1, -1, 0]),
-            jnp.stack([
-                -5/21 * R1,
-                -6/7 * (R1 + R2),
-                2/7 * (Q5 + 2 * R2),
-                1/7 * (2 * Q5 + 3 * R1 + 4 * R2),
-                3/7 * Q1,
-                -2/5 * F_G2_raw,
-                2/5 * F_G2_raw,
-            ], axis=0),
-            pad_mode=self._lpt_source_forward_pad_mode,
-        )
-        U3, U11 = xi_bias[0], xi_bias[1]
-        xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[2], xi_bias[3]
-        X10 = xi_ln_A10_q0 - xi_ln_A10_0m2 - xi_ln_A10_2m2
-        Y10 = 3 * xi_ln_A10_2m2
-
-        # U20 from Ulin via Schmittfull-Vlah identity
-        U_lin = -xi_ln[1, -1]
-        U20 = self._get_U20_from_Ulin(U_lin)
-
-        # X_Upsilon, Y_Upsilon from J2/J3 algebraic identities
-        J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        X_Upsilon = 4 * J3**2
-        Y_Upsilon = 12 * J2**2 - 4 * J3**2 - (4.0/3.0) * U_lin**2
-
-        V10 = xi_bias[4]
-        V12 = self._get_V12_G2_from_V10(V10, xi_ln)
-        chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2)
-        zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2)
-
-        Ub3 = xi_bias[5]
-        theta = xi_bias[6]
-
-        corrs = jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta], axis=0)
         return corrs
 
     def _to_bG2_basis(self, bias):
@@ -1243,6 +1568,11 @@ class LPT:
 
     @partial(jit, static_argnames=['self'])
     def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=0.2):
+        """Approximate configuration-space multipoles xi_0, xi_2, xi_4 at ``r``.
+
+        ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
+        LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
+        """
         r = jnp.atleast_1d(r)
 
         # This helper is an approximate configuration-space projection.
@@ -1255,10 +1585,15 @@ class LPT:
         pk2 = get_pk(self._k, jnp.stack([k, pk_ells[1]], axis=0), kmin=self._kmin, kmax=self._kmax)
         pk4 = get_pk(self._k, jnp.stack([k, pk_ells[2]], axis=0), kmin=self._kmin, kmax=self._kmax)
 
-        # get_xi_ln resamples to the common q-grid (self._q); use that as source.
-        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(0, 0, pk0))
-        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q), -self.get_xi_ln(2, 0, pk2))
-        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q), self.get_xi_ln(4, 0, pk4))
+        # The multipoles on the core k grid are the zero-padded source of the
+        # k -> q transform; the result is resampled onto the common q grid.
+        xi_ln = self._grid.crop(self._get_xi_ln_batched(
+            jnp.array([0, 2, 4]), jnp.array([0, 0, 0]),
+            fftlog.pad(jnp.stack([pk0, pk2, pk4], axis=0), self._npad, 'zero-pad'),
+        ))
+        xi0 = spline.interp1d(jnp.log(r), jnp.log(self._q), xi_ln[0])
+        xi2 = spline.interp1d(jnp.log(r), jnp.log(self._q), -xi_ln[1])
+        xi4 = spline.interp1d(jnp.log(r), jnp.log(self._q), xi_ln[2])
 
         xi_ells = jnp.stack([xi0, xi2, xi4], axis=0)
         return xi_ells
