@@ -26,10 +26,10 @@ def _check_shape(name, value, expected, layout_doc):
         )
 
 def _check_ctr_layout(ctr):
-    """Reject a counterterm vector that is not in the shared five-slot layout."""
+    """Reject a counterterm vector that is not in the shared seven-slot layout."""
     if jnp.shape(ctr)[-1] != N_COUNTERTERM_COEFFICIENTS:
         raise ValueError(
-            "ctr must have 5 entries (c0, c2, c4, c6, c_nlo), got shape "
+            "ctr must have 7 entries (c0, c2, c4, c6, c44, c46, c48), got shape "
             f"{jnp.shape(ctr)}"
         )
 
@@ -38,7 +38,7 @@ def _check_ctr_layout(ctr):
 class Params:
     cosmo: jnp.ndarray  # shape (2,)   [f, h]
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    ctr:   jnp.ndarray  # shape (5,)   [c0, c2, c4, c6, c_nlo]  (shared layout)
+    ctr:   jnp.ndarray  # shape (7,)   [c0, c2, c4, c6, c44, c46, c48]  (shared layout)
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
     # Second tracer's bias for a cross spectrum; ``None`` selects the auto
     # spectrum.  ``ctr`` and ``stoch`` are then the cross spectrum's own
@@ -74,7 +74,7 @@ def make_params(*, f, h, bias, ctr, stoch, bias2=None, dtype=None):
     bias2 = None if bias2 is None else _as_param_array(bias2, dtype)
     _check_shape('cosmo', cosmo, (2,), '[f, h]')
     _check_shape('bias',  bias,  (4,), '[b1, b2, bG2, bGamma3]')
-    _check_shape('ctr',   ctr,   (N_COUNTERTERM_COEFFICIENTS,), '[c0, c2, c4, c6, c_nlo]')
+    _check_shape('ctr',   ctr,   (N_COUNTERTERM_COEFFICIENTS,), '[c0, c2, c4, c6, c44, c46, c48]')
     _check_shape('stoch', stoch, (3,), '[P_shot, a0, a2]')
     if bias2 is not None:
         _check_shape('bias2', bias2, (4,), '[b1, b2, bG2, bGamma3]')

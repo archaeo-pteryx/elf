@@ -966,7 +966,7 @@ class LPT:
     def _lpt_moment_coefficient_parts(
         self, k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
-        """Coefficient of each moment in each of the 24 named sub-integrands.
+        """Coefficient of each moment in each of the 23 named sub-integrands.
 
         This is the single definition of the LPT integrand algebra.  Each
         sub-integrand is *linear* in the nine moment arrays returned by
@@ -1071,25 +1071,19 @@ class LPT:
         # pk_data paths, not from a bare corrs array.
         CTR = {MQ0: 1.0 - 0.5 * Ksq * X_lin_gt, MQ2: -0.5 * Ksq * Y_lin_gt}
 
-        # b1^1 piece of the Zel'dovich (tree) spectrum: integrand_b1_tree =
-        # -2*K*mq1*U_lin, the U_lin-only part of integrand_U10 (which keeps the
-        # full U_lin + U3 combination that the b1 bias template needs).
-        # Appended last so indices 0..22 are unchanged.
-        B1_TREE = {MQ1: -2.0 * K * U_lin}
-
         return (ZA, AA, A22, A13, W112, U10, A_U, A10, XI, A_XI, U_U, U11p,
                 U20p, XI_U, XI_XI, UPS, V10p, V12p, CHI, ZETA, UB3, THETA,
-                CTR, B1_TREE)
+                CTR)
 
     def _lpt_template_coefficients(self, parts):
-        """Group the 24 coefficient dictionaries into the 15 templates.
+        """Group the 23 coefficient dictionaries into the 13 templates.
 
         Same grouping as the ``(L, nq)`` form used to apply, but performed on
         the coefficients, so a caller that only wants a weighted sum of the
         templates never builds a single ``(L, nq)`` array per template.
         """
         (ZA, AA, A22, A13, W112, U10, A_U, A10, XI, A_XI, U_U, U11, U20, XI_U,
-         XI_XI, UPS, V10, V12, CHI, ZETA, UB3, THETA, CTR, B1_TREE) = parts
+         XI_XI, UPS, V10, V12, CHI, ZETA, UB3, THETA, CTR) = parts
         return (
             _sum_coeffs([ZA, AA, A22, A13, W112]),   #  0  1
             _sum_coeffs([U10, A_U, A10]),            #  1  b1
@@ -1103,17 +1097,13 @@ class LPT:
             ZETA,                                    #  9  bG2^2
             UB3,                                     # 10  bGamma3
             THETA,                                   # 11  b1 bGamma3
-            # Tree (Zel'dovich) templates, carrying the counterterms:
-            # P_tree = t[12] + b1 t[13] + b1^2 t[14].
-            CTR,                                     # 12  tree b1^0
-            B1_TREE,                                 # 13  tree b1^1
-            XI,                                      # 14  tree b1^2
+            CTR,                                     # 12  counterterm base (Zel'dovich)
         )
 
     def _get_lpt_sub_integrands(
         self, k_i, mu_j, f, V_mu, corrs_tree, corrs_matter_1loop, corrs_bias
     ):
-        """Return the 24 named sub-integrands as a plain tuple of (L, nq) arrays.
+        """Return the 23 named sub-integrands as a plain tuple of (L, nq) arrays.
 
         Thin wrapper around ``_lpt_moment_coefficient_parts``: it contracts each
         part's coefficients with the moments.  Only the diagnostic component
@@ -1131,29 +1121,28 @@ class LPT:
 
     @staticmethod
     def _get_lpt_template_weights(bias_facs, ctr_k2_shape, nlo_shape):
-        """Weights for the 15 templates, shared by the fused and template paths.
+        """Weights for the 13 templates, shared by the fused and template paths.
 
-        The 12 bias monomials, then the three tree templates: the k^2
-        counterterm rides on template 12 alone, the k^4 FoG operator on the
-        Lagrangian-biased tree ``t12 + b1 t13 + b1^2 t14``.
+        The 12 bias monomials, then the counterterm base: both the leading
+        ``k^2`` and the NLO ``k^4`` shapes ride on the same template 12.
         """
-        return [bias_facs[i] for i in range(12)] + [
-            ctr_k2_shape + nlo_shape * bias_facs[0],
-            nlo_shape * bias_facs[1],
-            nlo_shape * bias_facs[2],
-        ]
+        return [bias_facs[i] for i in range(12)] + [ctr_k2_shape + nlo_shape]
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu_components(self, k, mu, pk_data, f, k_IR=0.2):
-        """The 24 named LPT components on the (k, mu) grid (diagnostic).
+        """The 23 named LPT components on the (k, mu) grid (diagnostic).
 
         ``k_IR`` is the scale of the lt/gt split of the linear spectrum inside the
         LPT body (see :meth:`get_corrs`), not the Sigma^2 limit ``lambda_ir``.
         """
         if self._counterterms.needs_kspace_base:
             raise ValueError(
-                "get_pkmu_components exposes the fused Zel'dovich counterterm component only; "
-                "use get_pkmu/get_pk_ells for a linear-family counterterm base"
+                "the counterterm component (index 22) is the Zel'dovich base, which is "
+                f"not the counterterm of counterterm_base={self.counterterm_base!r}: that "
+                "one lives in k space and needs the raw pk_data, not corrs.  Build a "
+                "separate LPT(counterterm_base='zeldovich') for this diagnostic (the "
+                "other 23 components do not depend on the choice), or use "
+                "get_pkmu/get_pk_ells for the full spectrum."
             )
         k  = jnp.atleast_1d(k)
         mu = jnp.abs(jnp.atleast_1d(mu))  # P even in mu; moments need mu >= 0
@@ -1230,10 +1219,10 @@ class LPT:
         a single ``(L, nq)`` integrand inside the per-(k, mu) function.
 
         Exactly the same algebra as the template path, but carried out on the
-        moment coefficients: the 15 templates are folded with their bias /
+        moment coefficients: the 13 templates are folded with their bias /
         counterterm weights into at most nine ``(nq,)`` coefficient vectors, and
         only then contracted with the ``(L, nq)`` moments.  Neither the
-        ``(15, L, nq)`` stack of ``_get_lpt_weighted_term_integrands`` nor the
+        ``(13, L, nq)`` stack of ``_get_lpt_weighted_term_integrands`` nor the
         24 individual sub-integrands are ever materialised, so the per-(k, mu)
         integrand costs at most nine multiply-adds on ``(L, nq)`` arrays instead
         of one per sub-integrand.
@@ -1269,7 +1258,9 @@ class LPT:
         if self._counterterms.needs_kspace_base:
             raise ValueError(
                 "bare corrs do not contain the raw linear spectrum required by "
-                f"counterterm_base={self.counterterm_base!r}"
+                f"counterterm_base={self.counterterm_base!r}.  Use "
+                "LPT(counterterm_base='zeldovich') for the template path, or "
+                "get_pkmu/get_pk_ells, which take pk_data."
             )
         self._require_corrs_rows(corrs)
         k = jnp.atleast_1d(k)
@@ -1328,7 +1319,12 @@ class LPT:
     @partial(jit, static_argnames=['self'])
     def combine_pkmu_terms(self, k, mu, pkmu_terms, params, alpha_perp=1.0, alpha_para=1.0):
         if self._counterterms.needs_kspace_base:
-            raise ValueError("combine_pkmu_terms currently accepts the fused Zel'dovich template only")
+            raise ValueError(
+                "the counterterm template (index 12) is the Zel'dovich base, which is "
+                f"not the counterterm of counterterm_base={self.counterterm_base!r}.  Use "
+                "LPT(counterterm_base='zeldovich') for the template path, or "
+                "get_pkmu/get_pk_ells, which take pk_data."
+            )
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
@@ -1341,20 +1337,13 @@ class LPT:
 
         pkmu = jnp.tensordot(bias_facs, pkmu_terms[:12], axes=(0, 0))   # (nk, nmu)
 
-        # Counterterms.  The k^2 operator rides on the Zel'dovich matter
-        # spectrum (template 12); the k^4 FoG operator rides on the
-        # Lagrangian-biased Zel'dovich tree, templates 12..14 contracted with
-        # (1, (b1_a+b1_b)/2, b1_a b1_b) = bias_facs[0:3].
+        # Counterterms: both the leading k^2 and the NLO k^4 shapes ride on the
+        # Zel'dovich base (template 12).
         pkmu_ctr = self._counterterms.leading(
             k_true, mu_true, f, params.ctr, pkmu_terms[12]
         )
-        tree_pk = (
-            bias_facs[0] * pkmu_terms[12]
-            + bias_facs[1] * pkmu_terms[13]
-            + bias_facs[2] * pkmu_terms[14]
-        )
         pkmu_ctr = pkmu_ctr + self._counterterms.nlo(
-            k_true, mu_true, f, params.ctr, tree_pk
+            k_true, mu_true, f, params.ctr, pkmu_terms[12]
         )
         pkmu = pkmu + pkmu_ctr
 
@@ -1400,7 +1389,7 @@ class LPT:
 
         f = params.f
         bias_facs = self._get_lpt_bias_factors(params.bias, params.bias_b)
-        ctr_leading, c_nlo = Counterterms.split_coefficients(params.ctr)
+        ctr_leading, ctr_nlo = Counterterms.split_coefficients(params.ctr)
         corrs_tree, corrs_matter_1loop, corrs_bias = corrs[0:8], corrs[8:15], corrs[15:28]
         chi_dc_correction, zeta_dc_correction, b2sq_residual_pk, b2sq_dc = self._get_lpt_dc_terms(corrs)
 
@@ -1430,7 +1419,7 @@ class LPT:
                     nlo_shape = jnp.zeros_like(k_i)
                 else:
                     ctr_k2_shape = self._counterterms.leading_shape(k_i, mu_j, f, ctr_leading)
-                    nlo_shape = Counterterms.nlo_shape(k_i, mu_j, f, c_nlo)
+                    nlo_shape = Counterterms.nlo_shape(k_i, mu_j, f, ctr_nlo)
                 # Fast path: the bias factors and both counterterms are folded
                 # into the moment coefficients, so this builds one (L, nq)
                 # integrand and never a per-template stack.
@@ -1458,8 +1447,7 @@ class LPT:
         if self._counterterms.needs_kspace_base:
             base_pk = self._get_kspace_counterterm_base(k_true, mu_true, pk_data, params)
             pkmu = pkmu + self._counterterms.leading(k_true, mu_true, f, params.ctr, base_pk)
-            tree_pk = self._get_lpt_nlo_tree_factor(f, mu_true, params.bias, params.bias_b) * base_pk
-            pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params.ctr, tree_pk)
+            pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params.ctr, base_pk)
 
         return pkmu / (alpha_perp**2 * alpha_para)
 
@@ -1525,23 +1513,6 @@ class LPT:
         if self.bias_basis == 'bs2':
             b2 = b2 + (4.0 / 3.0) * btidal
         return jnp.stack([b1, b2, btidal, bGamma3])
-
-    def _get_lpt_nlo_tree_factor(self, f, mu, bias_a, bias_b):
-        """Factor turning the counterterm base into the tree galaxy spectrum.
-
-        ``Counterterms.nlo`` multiplies whatever ``tree_pk`` it is given, so the
-        caller supplies the full tree spectrum -- the EPT backend passes
-        ``(b1_a + f mu^2)(b1_b + f mu^2) P_lin``.  Two things differ here:
-
-        * ``b1`` is Lagrangian in this backend, so the Kaiser factor is
-          ``Z1 = 1 + b1 + f mu^2`` (verified against the k -> 0 limit);
-        * only the linear-family bases go through here.  The ``'zeldovich'``
-          base does not rescale a matter spectrum at all: it uses the genuine
-          Lagrangian-biased Zel'dovich tree assembled from templates 12..14
-          (see ``_get_lpt_bias_combined_integrand`` and ``combine_pkmu_terms``).
-        """
-        kaiser = 1.0 + f * mu**2
-        return (kaiser + bias_a[0]) * (kaiser + bias_b[0])
 
     def _get_lpt_bias_factors(self, bias_a, bias_b=None):
         """Bias monomials for the 12 LPT term templates.

@@ -387,7 +387,7 @@ class EPT:
             else:
                 pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
             pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         else:
             pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
@@ -404,7 +404,7 @@ class EPT:
             else:
                 pk_ctr_base = pk[:, None]
             pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, bias_a, bias_b, ctr)
+            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, ctr)
             pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
         
         pkmu_stoch = self.get_pkmu_stoch(self._k, self._mu, stoch)
@@ -826,11 +826,10 @@ class EPT:
             self._k[:, None], self._mu[None, :], f, ctr, pk
         )
 
-    def get_pkmu_ctr_k4(self, pk, f, bias_a, bias_b, ctr):
-        b1_a, b1_b = bias_a[0], bias_b[0]
-        mu = self._mu[None, :]
-        tree_pk = (b1_a + f * mu**2) * (b1_b + f * mu**2) * pk
-        return self._counterterms.nlo(self._k[:, None], mu, f, ctr, tree_pk)
+    def get_pkmu_ctr_k4(self, pk, f, ctr):
+        return self._counterterms.nlo(
+            self._k[:, None], self._mu[None, :], f, ctr, pk
+        )
 
     def get_pkmu_stoch(self, k, mu, stoch):
         k  = jnp.atleast_1d(k)

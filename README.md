@@ -35,7 +35,7 @@ pk_data = jnp.stack([d[:, 0], d[:, 1]], axis=0)      # (2, nk): k and P_lin(k)
 params = ps_params.make_params(
     f=0.578, h=0.6736,
     bias=jnp.array([2.0, -0.5, -0.2, 0.5]),          # b1, b2, bG2, bGamma3
-    ctr=jnp.array([5.0, 10.0, -5.0, 0.0, 100.0]),    # c0, c2, c4, c6, c_nlo
+    ctr=jnp.array([5.0, 10.0, -5.0, 0.0, 30.0, 20.0, -10.0]),   # c0, c2, c4, c6, c44, c46, c48
     stoch=jnp.array([3333.0, 0.0, 0.0]),             # P_shot, a0, a2
 )
 
@@ -52,12 +52,17 @@ Both EPT and LPT use the same three groups:
 | group | entries |
 |---|---|
 | `bias` | `b1, b2, bG2, bGamma3` |
-| `ctr` | `c0, c2, c4, c6, c_nlo` |
+| `ctr` | `c0, c2, c4, c6, c44, c46, c48` |
 | `stoch` | `P_shot, a0, a2` |
 
 **`bias` is Eulerian in `EPT` and Lagrangian in `LPT`**.
 
-The first four `ctr` entries multiply the leading `k^2` counterterm and `c_nlo` the next-to-leading `k^4` term.
+The first four `ctr` entries multiply the leading `k^2` counterterm and the last three the next-to-leading `k^4` one; both ride on the same base spectrum `P_base(k, mu)` selected by `counterterm_base`:
+
+```
+P_ctr = -2 (c0 + c2 f mu^2 + c4 f^2 mu^4 + c6 f^3 mu^6) k^2       P_base(k, mu)
+        -2 (c44 + c46 f mu^2 + c48 f^2 mu^4) (k mu f)^4           P_base(k, mu)
+```
 
 The stochastic contribution is `P_shot + (a0 + a2 mu^2) k^2`, i.e. `stoch` carries the shot noise in `(Mpc/h)^3` directly.
 
@@ -81,7 +86,7 @@ params_ab = ps_params.make_params(
     f=0.578, h=0.6736,
     bias=jnp.array([2.0, -0.5, -0.2, 0.5]),
     bias2=jnp.array([1.4, -0.5, 0.05, -0.1]),        # second tracer
-    ctr=jnp.array([4.0, 8.0, -3.0, 0.0, 70.0]),      # counterterms of the cross spectrum
+    ctr=jnp.array([4.0, 8.0, -3.0, 0.0, 20.0, 15.0, -8.0]),   # counterterms of the cross spectrum
     stoch=jnp.array([0.0, 0.0, 0.0]),                # cross shot noise (0 for disjoint samples)
 )
 

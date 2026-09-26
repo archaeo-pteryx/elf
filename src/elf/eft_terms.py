@@ -17,18 +17,19 @@ _VALID_COUNTERTERM_BASES = frozenset(("linear", "linear_ir_resum", "zeldovich"))
 
 
 #: Number of entries in the shared ``ctr`` coefficient vector.
-N_COUNTERTERM_COEFFICIENTS = 5
+N_COUNTERTERM_COEFFICIENTS = 7
 
 
 @dataclass(frozen=True)
 class Counterterms:
     """Immutable counterterm policy and shared coefficient contractions.
 
-    Both backends use the same five-slot coefficient vector
+    Both backends use the same seven-slot coefficient vector
 
-        ``ctr = (c0, c2, c4, c6, c_nlo)``
+        ``ctr = (c0, c2, c4, c6, c44, c46, c48)``
 
-    in the paper convention: the first four multiply the leading ``k^2`` shape and the fifth is the ``k^4`` FoG coefficient.  
+    in the paper convention: the first four multiply the leading ``k^2`` shape and the last three the NLO ``k^4`` fingers-of-God shape.  
+    Both shapes ride on the same base spectrum ``P_base(k, mu)``, selected by ``counterterm_base``.  
     The slot layout is identical for EPT and LPT so that a coefficient vector never changes meaning when it is handed to the other backend; 
     Both backends implement both operators; each supplies its own tree spectrum to ``Counterterms.nlo`` (see ``Counterterms.leading`` and ``Counterterms.nlo``).  
     Mapping Eulerian coefficients to their Lagrangian counterparts is deliberately the caller's responsibility.
@@ -53,7 +54,7 @@ class Counterterms:
 
     @staticmethod
     def split_coefficients(ctr):
-        """Split ``ctr`` into ``((c0, c2, c4, c6), c_nlo)``.
+        """Split ``ctr`` into ``((c0, c2, c4, c6), (c44, c46, c48))``.
 
         The length is validated eagerly.  ``ctr.shape`` is static even under ``jax.jit``, 
         so a wrong layout fails at trace time rather than silently reinterpreting a slot.
@@ -61,10 +62,10 @@ class Counterterms:
         ctr = jnp.asarray(ctr)
         if ctr.shape[-1] != N_COUNTERTERM_COEFFICIENTS:
             raise ValueError(
-                "ctr must have 5 entries (c0, c2, c4, c6, c_nlo), got shape "
+                "ctr must have 7 entries (c0, c2, c4, c6, c44, c46, c48), got shape "
                 f"{ctr.shape}"
             )
-        return ctr[..., :4], ctr[..., 4]
+        return ctr[..., :4], ctr[..., 4:7]
 
     @staticmethod
     def leading_shape(k, mu, f, leading_coefficients):
@@ -80,24 +81,31 @@ class Counterterms:
 
     @classmethod
     def leading(cls, k, mu, f, ctr, base_pk):
-        """Leading ``k^2`` counterterm from the full five-slot ``ctr`` vector."""
+        """Leading ``k^2`` counterterm from the full seven-slot ``ctr`` vector."""
         leading_coefficients, _ = cls.split_coefficients(ctr)
         return cls.leading_shape(k, mu, f, leading_coefficients) * base_pk
 
     @staticmethod
-    def nlo_shape(k, mu, f, c_nlo):
-        """Return the common k^4 FoG factor multiplying a backend tree spectrum."""
-        return -c_nlo * k**4 * f**4 * mu**4
+    def nlo_shape(k, mu, f, nlo_coefficients):
+        """Return the NLO ``k^4`` fingers-of-God factor multiplying the base P(k, mu).
+
+        Same structure as :meth:`leading_shape`, one order higher in ``k mu f``:
+
+            ``-2 (c44 + c46 f mu^2 + c48 f^2 mu^4) (k mu f)^4``
+        """
+        c44, c46, c48 = nlo_coefficients
+        mu2 = mu**2
+        coefficient = c44 + c46 * f * mu2 + c48 * f**2 * mu2**2
+        return -2.0 * coefficient * (k * mu * f)**4
 
     @classmethod
-    def nlo(cls, k, mu, f, ctr, tree_pk):
-        """NLO ``k^4`` counterterm from the full five-slot ``ctr`` vector.
+    def nlo(cls, k, mu, f, ctr, base_pk):
+        """NLO ``k^4`` counterterm from the full seven-slot ``ctr`` vector.
 
-        ``tree_pk`` is the tree spectrum of the (auto or cross) pair, supplied
-        by the backend.
+        ``base_pk`` is the same base spectrum the leading counterterm rides on.
         """
-        _, c_nlo = cls.split_coefficients(ctr)
-        return cls.nlo_shape(k, mu, f, c_nlo) * tree_pk
+        _, nlo_coefficients = cls.split_coefficients(ctr)
+        return cls.nlo_shape(k, mu, f, nlo_coefficients) * base_pk
 
 
 def stochasticity(k, mu, stochastic_coefficients):
