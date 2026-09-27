@@ -365,60 +365,49 @@ class EPT:
         
         return matrix
     
-    def get_pkmu_grid(self, pk_data, params):
-        """Compute P(k, mu) on the internal (k, mu) grid including IR resummation and counterterms.
+    def get_pkmu_grid(self, pk_data, params, pk_nw_data=None):
+        """Perturbative body (tree + 1-loop) on the internal (k, mu) grid.
+
+        Counterterms and stochasticity are *not* included: they are analytic in
+        (k, mu) and are added by :meth:`get_pkmu` directly at the AP-mapped
+        coordinates, so they never go through the 2D spline.
         """
 
         f = params.f
         bias_a = params.bias
         bias_b = params.bias_b
-        ctr = params.ctr
-        stoch = params.stoch
-        
+
         if self.do_irres:
-            # tree + 1-loop
-            pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
-            pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
-            pkmu = self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias_a, bias_b)
-
-            # Counterterms use the constructor-selected base spectrum.
-            if self.counterterm_base == 'linear':
-                pk_ctr_base = (pk_nw + pk_w)[:, None]
-            else:
-                pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, ctr)
-            pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
-        else:
-            pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
-            # tree + 1-loop
-            pkmu_tree = self.get_pkmu_lin(self._k, self._mu, pk_data, f, bias_a, bias_b)
-            pkmu_1loop = self.get_pkmu_1loop(pk, f, bias_a, bias_b)
-            pkmu = pkmu_tree + pkmu_1loop
-
-            # Counterterms may request IR-resummed linear P even when the perturbative body itself is not IR resummed.
-            if self.counterterm_base == 'linear_ir_resum':
+            if pk_nw_data is None:
                 pk_nw_data = ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
-                pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
-                pk_ctr_base = pk_nw[:, None] + jnp.exp(-damp_fac) * pk_w[:, None]
-            else:
-                pk_ctr_base = pk[:, None]
-            pkmu_ctr_k2 = self.get_pkmu_ctr_k2(pk_ctr_base, f, ctr)
-            pkmu_ctr_k4 = self.get_pkmu_ctr_k4(pk_ctr_base, f, ctr)
-            pkmu = pkmu + pkmu_ctr_k2 + pkmu_ctr_k4
-        
-        pkmu_stoch = self.get_pkmu_stoch(self._k, self._mu, stoch)
-        pkmu = pkmu + pkmu_stoch
-        
-        return pkmu
+            pk_nw, pk_w, damp_fac = self._get_irres_components(pk_data, pk_nw_data, f)
+            return self.get_pkmu_irres_LO_NLO(pk_nw, pk_w, damp_fac, f, bias_a, bias_b)
+
+        pk = get_pk(self._k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        pkmu_tree = self.get_pkmu_lin(self._k, self._mu, pk_data, f, bias_a, bias_b)
+        pkmu_1loop = self.get_pkmu_1loop(pk, f, bias_a, bias_b)
+        return pkmu_tree + pkmu_1loop
     
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
-        """Compute P(k, mu) at arbitrary (k, mu) via 2D spline interpolation of the internal grid."""
+        """Compute P(k, mu) at arbitrary (k, mu), including the AP mapping.
+
+        Only the perturbative body goes through the 2D spline of the internal
+        grid.  The counterterms and the stochastic term are analytic in
+        (k, mu), so they are evaluated directly at the AP-mapped coordinates
+        and carry no interpolation error.
+        """
         k  = jnp.atleast_1d(k)
         mu = jnp.atleast_1d(mu)
 
-        pkmu_grid = self.get_pkmu_grid(pk_data, params)
+        f = params.f
+        needs_nw = self.do_irres or self.counterterm_base == 'linear_ir_resum'
+        pk_nw_data = (
+            ir_resum.get_pk_nw(pk_data, params.h, method=self.irres_method)
+            if needs_nw else None
+        )
+
+        pkmu_grid = self.get_pkmu_grid(pk_data, params, pk_nw_data)
 
         # mapping of (k, mu)
         k_true, mu_true = get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para)
@@ -426,13 +415,19 @@ class EPT:
         # so reflect negative mu_true here instead of letting interp2d clamp it to mu=0.
         mu_true = jnp.abs(mu_true)
 
-        # 2D interpolation
-        xq = jnp.log(k_true)
-        yq = mu_true[None, :]
-        pkmu = spline.interp2d(xq, yq, jnp.log(self._k), self._mu, pkmu_grid)
-        pkmu = pkmu / (alpha_perp**2 * alpha_para)
+        # 2D interpolation of the perturbative body
+        pkmu = spline.interp2d(
+            jnp.log(k_true), mu_true[None, :], jnp.log(self._k), self._mu, pkmu_grid
+        )
 
-        return pkmu
+        # counterterms and stochasticity, evaluated at (k_true, mu_true)
+        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
+        pk_ctr_base = self._get_ctr_base(k_true, mu_true, pk_data, pk_nw_data, f)
+        pkmu = pkmu + self._counterterms.leading(k_true, mu_true, f, params.ctr, pk_ctr_base)
+        pkmu = pkmu + self._counterterms.nlo(k_true, mu_true, f, params.ctr, pk_ctr_base)
+        pkmu = pkmu + stochasticity(k_true, mu_true, params.stoch)
+
+        return pkmu / (alpha_perp**2 * alpha_para)
 
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
@@ -820,22 +815,24 @@ class EPT:
         damp_fac = jnp.outer(k**2, Sigma2_s)
 
         return pk_nw, pk_w, damp_fac
+
+    def _get_pk_ir(self, k, mu, pk_data, pk_nw_data, f):
+        """IR-resummed linear power at arbitrary (k, mu); k and mu broadcast."""
+        pk_nw = get_pk(k, pk_nw_data, kmin=self._kmin, kmax=self._kmax)
+        pk_w = get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax) - pk_nw
+
+        Sigma2 = ir_resum.get_Sigma2(pk_nw_data, self.r_bao, self.lambda_ir)
+        dSigma2 = ir_resum.get_dSigma2(pk_nw_data, self.r_bao, self.lambda_ir)
+        Sigma2_rsd = (1 + mu**2 * f * (2 + f)) * Sigma2 + f**2 * mu**2 * (mu**2 - 1) * dSigma2
+
+        return pk_nw + jnp.exp(-k**2 * Sigma2_rsd) * pk_w
+
+    def _get_ctr_base(self, k, mu, pk_data, pk_nw_data, f):
+        """Counterterm base spectrum at arbitrary (k, mu), selected by ``counterterm_base``."""
+        if self.counterterm_base == 'linear':
+            return get_pk(k, pk_data, kmin=self._kmin, kmax=self._kmax)
+        return self._get_pk_ir(k, mu, pk_data, pk_nw_data, f)
     
-    def get_pkmu_ctr_k2(self, pk, f, ctr):
-        return self._counterterms.leading(
-            self._k[:, None], self._mu[None, :], f, ctr, pk
-        )
-
-    def get_pkmu_ctr_k4(self, pk, f, ctr):
-        return self._counterterms.nlo(
-            self._k[:, None], self._mu[None, :], f, ctr, pk
-        )
-
-    def get_pkmu_stoch(self, k, mu, stoch):
-        k  = jnp.atleast_1d(k)
-        mu = jnp.atleast_1d(mu)
-        return stochasticity(k[:, None], mu[None, :], stoch)
-
     @partial(jit, static_argnames=['self'])
     def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
         r = jnp.atleast_1d(r)
