@@ -16,12 +16,7 @@ def _rising_half_integer(x: Fraction, order: int) -> Fraction:
 
 @lru_cache(maxsize=None)
 def generate_g00_coefficient(ell: int) -> np.ndarray:
-    """Return the exact-rational Appendix-G coefficient matrix for one ell.
-
-    The returned float64 values implement Eq. (70) of the paper.  
-    Exact arithmetic is used only during model construction; 
-    the cached result is converted to the model's JAX dtype afterwards.
-    """
+    """Angular coefficient matrix ``[k, i]`` of order ``ell``, from exact rationals (read-only, cached)."""
     if isinstance(ell, (bool, np.bool_)) or not isinstance(ell, (int, np.integer)):
         raise TypeError("ell must be a non-negative integer")
     ell = int(ell)

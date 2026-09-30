@@ -1,46 +1,47 @@
 import jax.numpy as jnp
 import numpy as np
 
-def prepare_mu_gauleg(ngauss):
+
+def prepare_mu_gauleg(ngauss, ells=(0, 2, 4)):
+    """``(mu_positive, weights)``: the ``ngauss`` positive Gauss-Legendre nodes of [-1, 1] and
+    ``weights[i, j] = (2 l + 1)/2 w_j L_l(mu_j)`` on all ``2 ngauss`` nodes, ``l = ells[i]``.
+    """
+    ells = tuple(ells)
+    if not ells:
+        raise ValueError("ells must contain at least one non-negative even integer")
+    for ell in ells:
+        if int(ell) != ell or ell < 0 or ell % 2:
+            raise ValueError(f"ells must be non-negative even integers, got {ells!r}")
+    ells = tuple(int(ell) for ell in ells)
+    max_ell = max(ells)
+    if max_ell >= 2 * ngauss:
+        raise ValueError(
+            f"max(ells)={max_ell} requires ngauss>={max_ell // 2 + 1}, "
+            f"got ngauss={ngauss}"
+        )
 
     mu, ws = np.polynomial.legendre.leggauss(2 * ngauss)
-    leg0 = np.polynomial.legendre.Legendre((1))(mu)
-    leg2 = np.polynomial.legendre.Legendre((0,0,1))(mu)
-    leg4 = np.polynomial.legendre.Legendre((0,0,0,0,1))(mu)
-
     mu_positive = jnp.array(mu[ngauss:])
     legendre_weights = jnp.stack([
-        0.5 * ws * leg0,   # (2*nmu,)
-        2.5 * ws * leg2,
-        4.5 * ws * leg4
-    ], axis=0)  # (3, 2*nmu)
+        (2 * ell + 1) / 2 * ws * np.polynomial.legendre.Legendre([0] * ell + [1])(mu)
+        for ell in ells
+    ], axis=0)  # (len(ells), 2*nmu)
 
     return mu_positive, legendre_weights
+
 
 def get_legendre_multipoles(pkmu, weights):
     pkmu = pkmu.T
     pkmu = jnp.concatenate([jnp.flip(pkmu, axis=0), pkmu], axis=0)
-    pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (3, nk)
+    pk_ells = jnp.einsum("ln,nk->lk", weights, pkmu)  # (nells, nk)
     return pk_ells
-
-def get_k_mu_true_for_ap(k, mu, alpha_perp, alpha_para):
-    k = jnp.atleast_1d(k)
-    mu = jnp.atleast_1d(mu)
-
-    fac = jnp.sqrt(1 + mu**2 * ((alpha_perp / alpha_para)**2 - 1))
-    mu_true = mu * (alpha_perp / alpha_para) / fac
-    k_true = jnp.outer(k, fac) / alpha_perp
-
-    return k_true, mu_true
 
 
 def get_k_mu_true_sin_for_ap(k, mu, alpha_perp, alpha_para):
-    """AP map plus a derivative-regular transverse direction cosine.
+    """AP map plus ``sin_true``.
 
-    Computing ``sqrt(1 - mu_true**2)`` after the AP map creates the
-    indeterminate AD product ``inf * 0`` at ``|mu|=1``.  The algebraically
-    identical expression below takes the square root only of the observed
-    coordinate, which is constant when differentiating the AP parameters.
+    ``sin_true`` takes the root of the observed ``1 - mu^2``, not of ``1 - mu_true^2``,
+    which gives ``inf * 0`` in AD at ``|mu| = 1``.
     """
     k = jnp.atleast_1d(k)
     mu = jnp.atleast_1d(mu)

@@ -6,31 +6,15 @@ from jax.tree_util import register_pytree_node_class
 from .eft_terms import N_COUNTERTERM_COEFFICIENTS
 
 def _as_param_array(value, dtype):
-    """Convert to a JAX array, defaulting to the ambient precision.
-
-    ``dtype=None`` means "follow ``jax_enable_x64``", which is what this package runs in.  
-    Forcing float32 here would silently round every nuisance parameter to ~1e-8 relative accuracy and show up in derivatives.
-    """
+    """JAX array; ``dtype=None`` follows ``jax_enable_x64`` (do not force float32)."""
     return jnp.asarray(value) if dtype is None else jnp.array(value, dtype)
 
 def _check_shape(name, value, expected, layout_doc):
-    """Reject a parameter whose static shape is not exactly ``expected``.
-
-    Only ``jnp.shape`` is inspected, never the values, so this is safe under ``jit``:
-    ``jnp.shape`` returns a Python tuple for tracers as well as for concrete arrays.
-    """
+    """Reject a parameter whose static shape is not ``expected`` (safe under ``jit``)."""
     shape = jnp.shape(value)
     if shape != expected:
         raise ValueError(
             f"{name} must have shape {expected} {layout_doc}, got {shape}"
-        )
-
-def _check_ctr_layout(ctr):
-    """Reject a counterterm vector that is not in the shared seven-slot layout."""
-    if jnp.shape(ctr)[-1] != N_COUNTERTERM_COEFFICIENTS:
-        raise ValueError(
-            "ctr must have 7 entries (c0, c2, c4, c6, c44, c46, c48), got shape "
-            f"{jnp.shape(ctr)}"
         )
 
 @register_pytree_node_class
@@ -38,11 +22,9 @@ def _check_ctr_layout(ctr):
 class Params:
     cosmo: jnp.ndarray  # shape (2,)   [f, h]
     bias:  jnp.ndarray  # shape (4,)   [b1, b2, bG2, bGamma3]
-    ctr:   jnp.ndarray  # shape (7,)   [c0, c2, c4, c6, c44, c46, c48]  (shared layout)
+    ctr:   jnp.ndarray  # shape (7,)   [c0, c2, c4, c6, c44, c46, c48]
     stoch: jnp.ndarray  # shape (3,)   [P_shot, a0, a2]
-    # Second tracer's bias for a cross spectrum; ``None`` selects the auto
-    # spectrum.  ``ctr`` and ``stoch`` are then the cross spectrum's own
-    # coefficients (same functional form as the auto case, no symmetrisation).
+    # second tracer (None: auto); ctr and stoch are then the cross spectrum's own
     bias2: Optional[jnp.ndarray] = None  # shape (4,)   [b1, b2, bG2, bGamma3]
 
     def tree_flatten(self):
@@ -63,10 +45,7 @@ class Params:
         return self.bias if self.bias2 is None else self.bias2
 
 def make_params(*, f, h, bias, ctr, stoch, bias2=None, dtype=None):
-    """Build a :class:`Params` pytree, validating every entry's static shape.
-
-    Batches of parameters are handled with jax.vmap over Params, not by extra leading axes.
-    """
+    """Build a :class:`Params` pytree with shape checks (batch with ``jax.vmap``, not extra axes)."""
     cosmo = _as_param_array([f, h], dtype)
     bias  = _as_param_array(bias,  dtype)
     ctr   = _as_param_array(ctr,   dtype)
@@ -78,5 +57,4 @@ def make_params(*, f, h, bias, ctr, stoch, bias2=None, dtype=None):
     _check_shape('stoch', stoch, (3,), '[P_shot, a0, a2]')
     if bias2 is not None:
         _check_shape('bias2', bias2, (4,), '[b1, b2, bG2, bGamma3]')
-    _check_ctr_layout(ctr)
     return Params(cosmo, bias, ctr, stoch, bias2)
