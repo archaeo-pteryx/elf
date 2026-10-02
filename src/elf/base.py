@@ -38,7 +38,7 @@ class PowerSpectrum(ABC):
                  irres_method='DST',
                  r_bao=110.0,
                  lambda_ir=0.2,
-                 subtract_k0_limit=False,
+                 subtract_k0_const=False,
                  ):
         """Options shared by the EPT and LPT backends.
 
@@ -51,7 +51,7 @@ class PowerSpectrum(ABC):
         counterterm_base: 'linear_ir_resum', 'linear' or 'zeldovich' (LPT only).
         irres_method ('DST', 'SG', 'WH'), r_bao [Mpc/h], lambda_ir [h/Mpc]:
             wiggle/no-wiggle split and BAO damping (Sigma^2 integrated to lambda_ir).
-        subtract_k0_limit: drop the k -> 0 constant of the b2^2 term.
+        subtract_k0_const: drop the k -> 0 constant of the b2^2 term.
         """
         if nfft % 2:
             raise ValueError(
@@ -67,7 +67,7 @@ class PowerSpectrum(ABC):
         self.irres_method = irres_method
         self.r_bao = r_bao
         self.lambda_ir = lambda_ir
-        self.subtract_k0_limit = subtract_k0_limit
+        self.subtract_k0_const = subtract_k0_const
 
         ells = tuple(ells)
         self._mu_quad, self._legendre_weights = prepare_mu_gauleg(ngauss, ells)

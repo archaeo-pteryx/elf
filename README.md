@@ -24,7 +24,7 @@ params = elf.make_params(
     f=0.578, h=0.6736,
     bias=jnp.array([2.0, -0.5, -0.2, 0.5]),                   # b1, b2, bG2, bGamma3
     ctr=jnp.array([5.0, 10.0, -5.0, 0.0, 100.0, 0.0, 0.0]),   # c0, c2, c4, c6, c44, c46, c48
-    stoch=jnp.array([3333.0, 0.0, 0.0]),                      # P_shot, a0, a2
+    stoch=jnp.array([3333.0, 0.0, 0.0]),                      # e00, e20, e22
 )
 
 k = jnp.linspace(1e-3, 0.3, 100)
@@ -41,7 +41,7 @@ Both methods take the Alcock-Paczynski parameters as `alpha_perp=1.0, alpha_para
 |---|---|
 | `bias` | `b1, b2, bG2, bGamma3` (Eulerian in `EPT`, Lagrangian in `LPT`) |
 | `ctr` | `c0, c2, c4, c6, c44, c46, c48` |
-| `stoch` | `P_shot, a0, a2` |
+| `stoch` | `e00, e20, e22` |
 
 The counterterms are
 
@@ -50,7 +50,7 @@ P_ctr = [ -2 (c0 + c2 f mu^2 + c4 f^2 mu^4 + c6 f^3 mu^6) k^2
           -2 (c44 + c46 f mu^2 + c48 f^2 mu^4) (k mu f)^4 ] P_base(k, mu)
 ```
 
-with `P_base` set by the constructor argument `counterterm_base` (`'linear_ir_resum'` by default, `'linear'`, or `'zeldovich'` for `LPT`), and the stochastic term is `P_shot + (a0 + a2 mu^2) k^2`.
+with `P_base` set by the constructor argument `counterterm_base` (`'linear_ir_resum'` by default, `'linear'`, or `'zeldovich'` for `LPT`), and the stochastic term is `e00 + (e20 + e22 mu^2) k^2`.
 
 ### Changing the parameters
 
@@ -83,7 +83,7 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 | `ells` | `(0, 2, 4)` | multipoles returned by `get_pk_ells` |
 | `ngauss` | `4` | Gauss-Legendre points on `mu` in `[0, 1]` for the multipoles (needs `max(ells) < 2 ngauss`) |
 | `counterterm_base` | `'linear_ir_resum'` | base spectrum of the counterterms |
-| `subtract_k0_limit` | `False` | drop the constant `b2^2` term of `P_22` |
+| `subtract_k0_const` | `False` | drop the constant `b2^2` term of `P_22` |
 | `method` (`EPT`) | `'hankel'` | `'hankel'` or `'matrix'` (the latter valid for `k` in `[3e-3, 3]` h/Mpc) |
 | `do_irres` (`EPT`) | `True` | IR resummation of the BAO |
 | `lmax` (`LPT`) | `5` | order of the angular expansion of the LPT integral; increase for accuracy at high `k` |

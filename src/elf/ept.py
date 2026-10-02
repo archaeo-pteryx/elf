@@ -104,7 +104,7 @@ class EPT(PowerSpectrum):
                  irres_method='DST',
                  r_bao=110.0,
                  lambda_ir=0.2,
-                 subtract_k0_limit=False,
+                 subtract_k0_const=False,
                  do_irres=True,
                  method='hankel',
                  ):
@@ -112,7 +112,7 @@ class EPT(PowerSpectrum):
 
         ``Params.bias`` is (b1, b2, bG2, bGamma3); shared options as in
         :class:`base.PowerSpectrum` (``counterterm_base`` 'linear_ir_resum' or
-        'linear'; ``subtract_k0_limit`` drops the b2^2 k -> 0 constant).
+        'linear'; ``subtract_k0_const`` drops the b2^2 k -> 0 constant).
         ``do_irres`` switches the IR resummation of tree level and loop.
         ``method``: 'hankel' (FFTlog) or 'matrix' (power-law-decomposition
         matrices, valid only for k in [3e-3, 3] h/Mpc).
@@ -123,7 +123,7 @@ class EPT(PowerSpectrum):
         super().__init__(kmin_fft=kmin_fft, kmax_fft=kmax_fft, nfft=nfft, pad_mode=pad_mode,
                          fftlog_settings=fftlog_settings, ngauss=ngauss, ells=ells,
                          counterterm_base=counterterm_base, irres_method=irres_method,
-                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_limit=subtract_k0_limit)
+                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_const=subtract_k0_const)
         if self.counterterm_base == 'zeldovich':
             raise ValueError("EPT does not support counterterm_base='zeldovich'")
 
@@ -365,7 +365,7 @@ class EPT(PowerSpectrum):
             pkmu = pkmu + loop_nw + e_damp * (loop_full - loop_nw)
         else:
             pkmu = (Z1_a * Z1_b) * pk + loop_full
-        if not self.subtract_k0_limit:
+        if not self.subtract_k0_const:
             # added after the IR combination: a constant contact term must not be damped
             pkmu = pkmu + (bias_a[1] * bias_b[1]) / 2. * corrs.pk_int2
         return pkmu

@@ -86,7 +86,7 @@ _LINEAR_MATRIX = _np.array(
 
 # k-space rows of corrs added after the final transform (constants are read at k_min).
 _DC_ROWS = (
-    # part  row  factor  interpolated  k0_limit
+    # part  row  factor  interpolated  k0_const
     (18,    28,  1.0,    True,         False),   # CHI:   -int 4 pi q^2 chi dq
     (19,    29,  1.0,    True,         False),   # ZETA:  -int 4 pi q^2 zeta dq
     (14,    30,  1.0,    True,         False),   # XI_XI: H_0[xi^2 / 2](k) - I0
@@ -181,7 +181,7 @@ class LPT(PowerSpectrum):
                  irres_method='DST',
                  r_bao=110.0,
                  lambda_ir=0.2,
-                 subtract_k0_limit=False,
+                 subtract_k0_const=False,
                  lmax=5,
                  k_IR=0.2,
                  bias_basis='bG2',
@@ -207,7 +207,7 @@ class LPT(PowerSpectrum):
         super().__init__(kmin_fft=kmin_fft, kmax_fft=kmax_fft, nfft=nfft, pad_mode=pad_mode,
                          fftlog_settings=fftlog_settings, ngauss=ngauss, ells=ells,
                          counterterm_base=counterterm_base, irres_method=irres_method,
-                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_limit=subtract_k0_limit)
+                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_const=subtract_k0_const)
 
         self.lmax = lmax
         self.k_IR = k_IR
@@ -818,8 +818,8 @@ class LPT(PowerSpectrum):
                 g_o = ft.four_pi_q3 * g_o.at[0, :].subtract(g_o[0, -1])
                 out.append(jnp.sum(jnp.sum(g_o * kernel, axis=-1), axis=-1))
             out = jnp.stack(out) + lin * p_i
-            for part, row, factor, interpolated, k0_limit in _DC_ROWS:
-                if k0_limit and self.subtract_k0_limit:
+            for part, row, factor, interpolated, k0_const in _DC_ROWS:
+                if k0_const and self.subtract_k0_const:
                     continue
                 if interpolated:
                     value = spline.hermite(logk, self._logk_fft, dc_rows[row], dc_slopes[row])

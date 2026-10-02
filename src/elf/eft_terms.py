@@ -80,6 +80,6 @@ class Counterterms:
 
 
 def stochasticity(k, mu, stochastic_coefficients):
-    """``P_shot + (a0 + a2 mu^2) k^2`` (additive, not multiplied by any spectrum)."""
-    p_shot, a0, a2 = stochastic_coefficients
-    return (p_shot + (a0 + a2 * mu**2) * k**2)
+    """``e00 + (e20 + e22 mu^2) k^2`` (additive, not multiplied by any spectrum)."""
+    e00, e20, e22 = stochastic_coefficients
+    return (e00 + (e20 + e22 * mu**2) * k**2)
