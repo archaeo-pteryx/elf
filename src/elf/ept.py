@@ -285,8 +285,8 @@ class EPT(PowerSpectrum):
         hankel: P13 kernel = ``k^m H_l[q^2 xi_l^n]``, ``pk_int = None``; matrix:
         power-law decomposition, ``pk_int`` = constant of the P13 UV term.
         """
-        fs = self.fftlog_settings
         if self.method == 'matrix':
+            fs = self.fftlog_settings
             p_q_1 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_matter)
             # nu > -3/2 on purpose: the P22 bias blocks come out as I(k) - I(0) by analytic continuation
             p_q_2 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p22_bias)
@@ -298,13 +298,7 @@ class EPT(PowerSpectrum):
 
         xi_ln = self._get_xi_ln_array(pk)
         p22 = self._get_p22_blocks(xi_ln)
-
-        def get_p13_kernel(term):
-            l, n, m = term
-            pk_ln = self._get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
-            return (self._k ** m) * pk_ln
-
-        p13_kernel = jax.vmap(get_p13_kernel)(self._lnm_13)  # (nterms, nk)
+        p13_kernel = self._get_p13_kernel_blocks(xi_ln)
         return p22, p13_kernel, None
 
     def _pkmu_true(self, k_true, mu_true, sin_true, corrs, pk_data, params):
@@ -438,3 +432,12 @@ class EPT(PowerSpectrum):
         pk_ln, c0 = jax.vmap(block)(self._ln_22)      # (nterms, nk), (nterms,)
         m = self._m_22[:, None]                        # static
         return jnp.where(m == 0, pk_ln - c0[:, None], self._k ** m * pk_ln)
+
+    def _get_p13_kernel_blocks(self, xi_ln):
+        """P13 kernel blocks ``(nterms, nk)`` in ``_lnm_13`` order: ``k^m H_l[q^2 xi_l^n]``."""
+
+        def get_p13_kernel(term):
+            l, n, m = term
+            pk_ln = self._get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
+            return (self._k ** m) * pk_ln
+        return jax.vmap(get_p13_kernel)(self._lnm_13)  # (nterms, nk)
