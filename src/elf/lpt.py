@@ -572,7 +572,11 @@ class LPT(PowerSpectrum):
         Rows: 0-7 tree (X/Y_lin, X/Y_lin_lt, X/Y_lin_gt, xi_lin, U_lin), 8-14 matter
         (X22, Y22, X13, Y13, V1, V3, T), 15-27 bias (U3, U11, U20, X10, Y10, V10, V12,
         X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta) on the core q grid; 28-32 k-space
-        rows of :meth:`_get_dc_rows`.  ``h`` enters only the counterterm base.
+        rows of :meth:`_get_dc_rows`.
+
+        ``h`` enters only the 'linear_ir_resum' counterterm base; ``h=None`` skips it,
+        which is what the diagnostics pass (they never use it), so such a ``corrs``
+        cannot be fed to the spectrum methods under that base.
         """
         k_IR = self.k_IR if k_IR is None else k_IR
         hg = self._hankel
@@ -599,7 +603,7 @@ class LPT(PowerSpectrum):
                                     xi_ln_padded[0][0, 0], pk_lin)
         rows = jnp.concatenate([corrs_tree, corrs_matter_1loop, corrs_bias, dc_rows], axis=0)
 
-        if self.counterterm_base == 'linear_ir_resum':
+        if self.counterterm_base == 'linear_ir_resum' and h is not None:
             pk_nw_data, Sigma2, dSigma2 = self._get_ir_data(pk_data, h)
         else:
             pk_nw_data = Sigma2 = dSigma2 = None
@@ -741,13 +745,6 @@ class LPT(PowerSpectrum):
             _LPT_BIAS_DEGREES, to_bG2_basis(bias_a), to_bG2_basis(bias_b)
         )
 
-    def _require_zeldovich_base(self, method):
-        if self._counterterms.needs_kspace_base:
-            raise ValueError(
-                f"{method} needs counterterm_base='zeldovich' (the fused Zel'dovich counterterm "
-                f"template); use get_pkmu/get_pk_ells for counterterm_base={self.counterterm_base!r}"
-            )
-
     def _require_corrs_rows(self, corrs):
         if corrs.rows.shape[0] < N_CORRS_ROWS:
             raise ValueError(
@@ -876,7 +873,6 @@ class LPT(PowerSpectrum):
     @partial(jit, static_argnames=['self'])
     def get_pkmu_components(self, k, mu, pk_data, f, k_IR=None):
         """The 23 parts of ``_PARTS`` on the (k, mu) grid, ``(23, nk, nmu)`` (diagnostic, no AP)."""
-        self._require_zeldovich_base('get_pkmu_components')
         corrs = self.get_corrs(pk_data, None, k_IR)
         k_true, mu_true, sin_true = self._true_coordinates(k, mu, 1.0, 1.0)
         return self._evaluate(k_true, mu_true, sin_true, corrs.rows, f, pk_data, jnp.eye(N_PARTS))
@@ -885,10 +881,11 @@ class LPT(PowerSpectrum):
     def get_pkmu_terms_from_corrs(self, k, mu, corrs, pk_data, f, alpha_perp=1.0, alpha_para=1.0):
         """Bias-independent templates ``(13, nk, nmu)``: 12 bias monomials and the matter tree.
 
-        Contract with :meth:`combine_pkmu_terms` (which applies the volume factor);
-        ``pk_data`` must be the spectrum ``corrs`` was computed from.
+        ``pk_data`` must be the spectrum ``corrs`` was computed from.  Diagnostic
+        output: recombining these into P(k, mu) is the caller's job, and template 12 is
+        the Zel'dovich counterterm base (the other bases are k-space, so it does not
+        apply to them).  No volume factor ``1 / (alpha_perp^2 alpha_para)`` is applied.
         """
-        self._require_zeldovich_base('get_pkmu_terms_from_corrs')
         self._require_corrs_rows(corrs)
         k_true, mu_true, sin_true = self._true_coordinates(k, mu, alpha_perp, alpha_para)
         return self._evaluate(k_true, mu_true, sin_true, corrs.rows, f, pk_data,
@@ -896,17 +893,5 @@ class LPT(PowerSpectrum):
 
     def get_pkmu_terms(self, k, mu, pk_data, f, alpha_perp=1.0, alpha_para=1.0, k_IR=None):
         """Templates from ``pk_data`` (see :meth:`get_pkmu_terms_from_corrs`)."""
-        self._require_zeldovich_base('get_pkmu_terms')
         corrs = self.get_corrs(pk_data, None, k_IR)
         return self.get_pkmu_terms_from_corrs(k, mu, corrs, pk_data, f, alpha_perp, alpha_para)
-
-    @partial(jit, static_argnames=['self'])
-    def combine_pkmu_terms(self, k, mu, pkmu_terms, params, alpha_perp=1.0, alpha_para=1.0):
-        """P(k, mu) from the templates of :meth:`get_pkmu_terms_from_corrs` (template 12 is the counterterm base)."""
-        self._require_zeldovich_base('combine_pkmu_terms')
-        bias_facs = self._get_lpt_bias_factors(params.bias, params.bias_b)
-        k_true, mu_true, _ = self._true_coordinates(k, mu, alpha_perp, alpha_para)
-        mu_k = jnp.broadcast_to(mu_true, k_true.shape)                  # (nk, nmu)
-        pkmu = jnp.tensordot(bias_facs, pkmu_terms[:12], axes=(0, 0))   # (nk, nmu)
-        return self._add_stoch_ctr_volume(pkmu, k_true, mu_k, params, pkmu_terms[12],
-                                          alpha_perp, alpha_para)
