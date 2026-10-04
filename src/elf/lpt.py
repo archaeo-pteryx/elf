@@ -420,8 +420,8 @@ class LPT(PowerSpectrum):
         """Matter one-loop rows X22, Y22, X13, Y13, V1, V3, T; returns ``(corrs, M22)``.
 
         Zero-lag constant ``M = int dk S / (2 pi^2)``: the grid moment of the padded,
-        end-weighted source.  zero-pad identities: ``Y22 = (18/49) Y_lin^2 / q^2``,
-        ``M13 = (70/27) M22`` (power-law: Y22 transformed, M13 from its own source).
+        end-weighted source.  Identities:
+        ``Y22 = (18/49) Y_lin^2 / q^2``, ``M13 = (70/27) M22``.
         n = -3 rows from n = -2 pairs:
         ``T = (q/7)(H_2^{-2} + H_4^{-2})[W_T]``, ``H_1^{-3}[W] = (q/3)(H_0^{-2} + H_2^{-2})[W]``,
         ``V_i = H_1^{-3}[W_i] - T/5``.
@@ -447,17 +447,11 @@ class LPT(PowerSpectrum):
         D_pairs = crop(D_pairs_padded)
         moment = self._hankel.grid.moment
         M22 = moment(source_22, 1) / (2 * jnp.pi**2)
-        if self.pad_mode == 'power-law':
-            M13 = moment(source_13, 1) / (2 * jnp.pi**2)
-        else:
-            M13 = 70/27 * M22
+        M13 = 70/27 * M22
         xi_ln_22_0m2 = crop(D_22)
         (xi_ln_13_0m2, xi_ln_13_2m2), (H2_WT, H4_WT), (H0_W1, H2_W1), (H0_W3, H2_W3) = D_pairs
 
-        if self.pad_mode == 'power-law':
-            Y22 = 2 * crop(self._transform_sources(source_22, 2, -2))
-        else:
-            Y22 = 18/49 * Y_lin**2 / q**2
+        Y22 = 18/49 * Y_lin**2 / q**2
         X22 = 2/3 * (M22 - xi_ln_22_0m2 - 0.5 * Y22)
         X13 = 2/3 * (M13 - xi_ln_13_0m2 - xi_ln_13_2m2)
         Y13 = 2 * xi_ln_13_2m2
@@ -474,8 +468,8 @@ class LPT(PowerSpectrum):
     def _get_corrs_bias(self, Qs, Rs, xi_ln, M22):
         """Bias rows (corrs 15-27) from the Q/R sources and the core xi output ``xi_ln``.
 
-        zero-pad identities: ``M10 = (28/9) M22``, ``V10 = (24/35)((xi_1^{-1})^2 - (xi_3^{-1})^2)/q``
-        (power-law: M10 from its own source, V10 transformed); ``U20 = -(6/7) U_lin^2 / q``;
+        Identities: ``M10 = (28/9) M22``,
+        ``V10 = (24/35)((xi_1^{-1})^2 - (xi_3^{-1})^2)/q``, ``U20 = -(6/7) U_lin^2 / q``,
         ``Ub3 = -(24/5) U3``, ``theta = H_0^0[-(8/7) R1]`` (``F_G2 = -(20/7) R1``).
         """
         Q5 = Qs[2]
@@ -498,10 +492,7 @@ class LPT(PowerSpectrum):
         xi_bias = crop(xi_bias_padded)
         # separate call: batching theta with the rows above changes their FFT rounding
         theta = crop(self._transform_sources(-8/7 * R1, 0, 0))
-        if self.pad_mode == 'power-law':
-            M10 = self._hankel.grid.moment(source_10a, 1) / (2 * jnp.pi**2)
-        else:
-            M10 = 28/9 * M22
+        M10 = 28/9 * M22
 
         U3, U11 = xi_bias[0], xi_bias[1]
         xi_ln_A10_0m2, xi_ln_A10_2m2 = xi_bias[2], xi_bias[3]
@@ -516,10 +507,7 @@ class LPT(PowerSpectrum):
         X_Upsilon = 4 * J3**2
         Y_Upsilon = 12 * J2**2 - 4 * J3**2 - (4.0/3.0) * U_lin**2
 
-        if self.pad_mode == 'power-law':
-            V10 = crop(self._transform_sources(3/7 * Qs[0], 1, -1))
-        else:
-            V10 = 24/35 * (xi_ln[1,-1]**2 - xi_ln[3,-1]**2) / q
+        V10 = 24/35 * (xi_ln[1,-1]**2 - xi_ln[3,-1]**2) / q
         d_q_delta = (
             2.0 * xi_ln[3,-1] * (3.0*xi_ln[3,-1]/q - xi_ln[4,0])
             - 2.0 * xi_ln[1,-1] * (xi_ln[1,-1]/q - xi_ln[2,0])
