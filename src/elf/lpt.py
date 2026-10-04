@@ -194,7 +194,7 @@ class LPT(PowerSpectrum):
         ``r_bao``, ``lambda_ir`` only shape the 'linear_ir_resum' counterterm base.
         ``lmax`` (>= 2): order of the angular expansion of the final integral.
         ``k_IR``: split ``P_lt = P e^{-(k/k_IR)^2}`` inside the LPT body (not
-        ``lambda_ir``; overridable per call).  ``bias_basis``: 'bG2' or 'bs2'.
+        ``lambda_ir``).  ``bias_basis``: 'bG2' or 'bs2'.
         """
 
         if bias_basis not in ('bG2', 'bs2'):
@@ -566,8 +566,8 @@ class LPT(PowerSpectrum):
         ], axis=0)
 
     @partial(jit, static_argnames=['self'])
-    def get_corrs(self, pk_data, h, k_IR=None):
-        """The :class:`Corrs` of ``pk_data`` (``k_IR=None``: the constructor's value).
+    def get_corrs(self, pk_data, h):
+        """The :class:`Corrs` of ``pk_data``.
 
         Rows: 0-7 tree (X/Y_lin, X/Y_lin_lt, X/Y_lin_gt, xi_lin, U_lin), 8-14 matter
         (X22, Y22, X13, Y13, V1, V3, T), 15-27 bias (U3, U11, U20, X10, Y10, V10, V12,
@@ -578,10 +578,9 @@ class LPT(PowerSpectrum):
         which is what the diagnostics pass (they never use it), so such a ``corrs``
         cannot be fed to the spectrum methods under that base.
         """
-        k_IR = self.k_IR if k_IR is None else k_IR
         hg = self._hankel
         pk_lin = self._pk_at(self._k, pk_data)
-        pk_lin_lt = pk_lin * jnp.exp(-(self._k / k_IR)**2)
+        pk_lin_lt = pk_lin * jnp.exp(-(self._k / self.k_IR)**2)
 
         pk_int = hg.grid.moment(hg.pad_input(pk_lin), 1) / (2 * jnp.pi**2)
         pk_int_lt = hg.grid.moment(hg.pad_input(pk_lin_lt), 1) / (2 * jnp.pi**2)
@@ -854,26 +853,9 @@ class LPT(PowerSpectrum):
         return self._evaluate(k_true, mu_true, sin_true, corrs.rows, f, pk_data, weights)[0]
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=None):
-        """P(k, mu) at the observed (k, mu), AP included, ``(nk, nmu)``; ``k_IR`` as in :meth:`get_corrs`."""
-        corrs = self.get_corrs(pk_data, params.h, k_IR)
-        return self.get_pkmu_from_corrs(k, mu, corrs, pk_data, params, alpha_perp, alpha_para)
-
-    def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=None):
-        """Multipoles ``P_ell(k)``, ``(nells, nk)``; ``k_IR`` as in :meth:`get_corrs`."""
-        corrs = self.get_corrs(pk_data, params.h, k_IR)
-        return self.get_pk_ells_from_corrs(k, corrs, pk_data, params, alpha_perp, alpha_para)
-
-    @partial(jit, static_argnames=['self', 'kmax'])
-    def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, k_IR=None, kmax=None):
-        """``xi_ell(r)``, ``(nells, nr)``: as :meth:`PowerSpectrum.get_xi_ells`; ``k_IR`` as in :meth:`get_corrs`."""
-        corrs = self.get_corrs(pk_data, params.h, k_IR)
-        return self._get_xi_ells_from_corrs(r, corrs, pk_data, params, alpha_perp, alpha_para, kmax)
-
-    @partial(jit, static_argnames=['self'])
-    def get_pkmu_components(self, k, mu, pk_data, f, k_IR=None):
+    def get_pkmu_components(self, k, mu, pk_data, f):
         """The 23 parts of ``_PARTS`` on the (k, mu) grid, ``(23, nk, nmu)`` (diagnostic, no AP)."""
-        corrs = self.get_corrs(pk_data, None, k_IR)
+        corrs = self.get_corrs(pk_data, None)
         k_true, mu_true, sin_true = self._true_coordinates(k, mu, 1.0, 1.0)
         return self._evaluate(k_true, mu_true, sin_true, corrs.rows, f, pk_data, jnp.eye(N_PARTS))
 
@@ -891,7 +873,7 @@ class LPT(PowerSpectrum):
         return self._evaluate(k_true, mu_true, sin_true, corrs.rows, f, pk_data,
                               jnp.asarray(_TEMPLATE_MATRIX))
 
-    def get_pkmu_terms(self, k, mu, pk_data, f, alpha_perp=1.0, alpha_para=1.0, k_IR=None):
+    def get_pkmu_terms(self, k, mu, pk_data, f, alpha_perp=1.0, alpha_para=1.0):
         """Templates from ``pk_data`` (see :meth:`get_pkmu_terms_from_corrs`)."""
-        corrs = self.get_corrs(pk_data, None, k_IR)
+        corrs = self.get_corrs(pk_data, None)
         return self.get_pkmu_terms_from_corrs(k, mu, corrs, pk_data, f, alpha_perp, alpha_para)
