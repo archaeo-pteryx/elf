@@ -1,6 +1,8 @@
 # elf
 
-A JAX code of the one-loop galaxy power spectrum in redshift space, in Eulerian (`elf.EPT`) and Lagrangian (`elf.LPT`) perturbation theory. Both classes have the same parameters and methods. Everything is `jit`-compiled and differentiable with respect to the linear power spectrum and all parameters.
+### elf -- a differentiable code of **E**ulerian and **L**agrangian effective **F**ield theories
+
+A JAX code of the one-loop galaxy power spectrum in redshift space, in Eulerian (`elf.EPT`) and Lagrangian (`elf.LPT`) perturbation theory. Both classes have the same parameters and methods. Everything is `jit`-compiled and differentiable with respect to the linear power spectrum and all parameters. 
 
 ### Installation
 
@@ -95,5 +97,6 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 
 ### Citations
 
-- Yosuke Kobayashi & Kazuyuki Akitsu, TBD (in prep.)
-</content>
+- Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian
+  and Lagrangian one-loop perturbation theories
+  </content>
