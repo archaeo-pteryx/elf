@@ -2,26 +2,25 @@ cff-version: 1.2.0
 message: "If you use this software in your research, please cite the associated paper."
 
 authors:
-
-- family-names: "Kobayashi"
-  given-names: "Yosuke"
-  orcid: "https://orcid.org/0000-0002-6633-5036"
-- family-names: "Akitsu"
-  given-names: "Kazuyuki"
-  orcid: "https://orcid.org/0000-0001-6473-3420"
+  - family-names: "Kobayashi"
+    given-names: "Yosuke"
+    orcid: "https://orcid.org/0000-0002-6633-5036"
+  - family-names: "Akitsu"
+    given-names: "Kazuyuki"
+    orcid: "https://orcid.org/0000-0001-6473-3420"
 
 title: "elf"
 version: "0.1.0"
 url: "https://github.com/archaeo-pteryx/elf"
 
 preferred-citation:
-type: article
-authors:
-- family-names: "Kobayashi"
-  given-names: "Yosuke"
-  orcid: "https://orcid.org/0000-0002-6633-5036"
-- family-names: "Akitsu"
-  given-names: "Kazuyuki"
-  orcid: "https://orcid.org/0000-0001-6473-3420"
-title: "Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian and Lagrangian one-loop perturbation theories"
-year: 2026
+  type: article
+  authors:
+    - family-names: "Kobayashi"
+      given-names: "Yosuke"
+      orcid: "https://orcid.org/0000-0002-6633-5036"
+    - family-names: "Akitsu"
+      given-names: "Kazuyuki"
+      orcid: "https://orcid.org/0000-0001-6473-3420"
+  title: "Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian and Lagrangian one-loop perturbation theories"
+  year: 2026
