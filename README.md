@@ -7,8 +7,7 @@ A JAX code of the one-loop galaxy power spectrum in redshift space, in Eulerian 
 ### Installation
 
 ```bash
-cd elf
-python -m pip install -e .
+python -m pip install git+https://github.com/archaeo-pteryx/elf
 ```
 
 ### Usage
@@ -97,5 +96,9 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 
 ### Citations
 
+<<<<<<< HEAD
 - Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian
   and Lagrangian one-loop perturbation theories
+=======
+- Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian and Lagrangian one-loop perturbation theories
+>>>>>>> 4378893 (some updates.)
