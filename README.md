@@ -96,9 +96,4 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 
 ### Citations
 
-<<<<<<< HEAD
-- Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian
-  and Lagrangian one-loop perturbation theories
-=======
 - Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian and Lagrangian one-loop perturbation theories
->>>>>>> 4378893 (some updates.)
