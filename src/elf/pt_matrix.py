@@ -17,10 +17,11 @@ def get_I(nu1, nu2):
 
 
 class PTMatrix22:
+    """P22 kernel matrix of the table file ``path``, a function of (nu1, nu2)."""
 
-    def __init__(self, name):
-        self.name = name
-        with open(name,'r') as file:
+    def __init__(self, path):
+        self.path = path
+        with open(path,'r') as file:
             expr = file.read()
         self.expr = parse_mathematica(expr)
         nu1 = var('nu1')
@@ -32,10 +33,11 @@ class PTMatrix22:
 
 
 class PTMatrix13:
+    """P13 kernel matrix of the table file ``path``, a function of nu1."""
 
-    def __init__(self, name):
-        self.name = name
-        with open(name,'r') as file:
+    def __init__(self, path):
+        self.path = path
+        with open(path,'r') as file:
             expr = file.read()
         self.expr = parse_mathematica(expr)
         nu1 = var('nu1')

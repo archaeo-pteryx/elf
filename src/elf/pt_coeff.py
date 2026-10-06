@@ -1,8 +1,9 @@
 import sympy as sym
 from sympy.parsing.mathematica import parse_mathematica
 
-def get_coeff_info(name):
-    with open(name, 'r') as file:
+def get_coeff_info(path):
+    """``[[mu, f, b1, b2, bG2, bGamma3 powers, coefficient], ...]`` of the terms of the table file ``path``."""
+    with open(path, 'r') as file:
         expr = file.read()
     expr = parse_mathematica(expr)
     terms = expr.as_ordered_terms()

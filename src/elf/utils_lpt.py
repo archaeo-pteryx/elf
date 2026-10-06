@@ -95,26 +95,29 @@ def _assemble_lpt_moments_from_derivatives(
 
     return mq0, mq1, mq2, mq3, mq4, nq1, nq2, mq1_nq1, mq2_nq1
 
-def get_lpt_moments(
-    A, B, C, c2, s2, A_mu, B_mu, coeffs, lmax=10, V_mu=None, *, c=None, s=None
-):
+def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, V, *, c, s):
     """The nine LPT moment arrays ``(L, nq)``, without the factor ``exp(-B s^2)``.
 
-    The caller folds that factor into ``exp(-K^2 (X + c^2 Y) / 2)``: separately they give 0 * inf.
+    The angular integral is taken with the polar axis along K = k + f (k.n) n.
+    ``A = k q c``, ``B = -(1/2) K^2 Y_lin_lt(q)`` and ``C = k q s`` are ``(nq,)`` arrays,
+    ``c`` and ``s`` the cosine and sine of the angle between K and k, ``c2`` and ``s2``
+    their squares.  ``A_mu = (1 + f) mu / Kfac`` and ``B_mu = sqrt(1 - mu^2) / Kfac``
+    give the line of sight in that frame.  ``V`` ``(5, L, L)`` is the angular table
+    :func:`compute_V_mu` at ``s2``, with ``L = lmax + 1``.
+
+    The caller folds ``exp(-B s^2)`` into ``exp(-K^2 (X + c^2 Y) / 2)``, because the two
+    factors computed separately give 0 * inf.
     """
-    L = lmax + 1
+    L = V.shape[1]
 
     rho2 = A*A + C*C
     Bs2  = B * s2
 
     B_pows = _pow_table_vec(-B, L)
 
-    if V_mu is None:
-        V_mu = compute_V_mu(s2, coeffs, lmax)
-
-    # S[d,l,q] = (-B)^l sum_i V_mu[d,l,i] (-B)^i, by Horner through degree l
+    # S[d,l,q] = (-B)^l sum_i V[d,l,i] (-B)^i, by Horner through degree l
     z = -B
-    coefficients = V_mu.astype(B_pows.dtype)
+    coefficients = V.astype(B_pows.dtype)
     rows = []
     for ell in range(L):
         row = coefficients[:, ell, ell, None] + jnp.zeros_like(z)[None, :]
@@ -132,9 +135,6 @@ def get_lpt_moments(
     s2_safe = jnp.where(safe, s2, jnp.ones_like(s2))
     invs2 = jnp.where(safe, 1.0 / s2_safe, jnp.zeros_like(s2))
     T0, T1, T2, T3 = (invs2*S0, invs2*S1, invs2*S2, invs2*S3)
-
-    c = jnp.sqrt(c2) if c is None else c
-    s = jnp.sqrt(s2) if s is None else s
 
     # powers of 1/rho from one reciprocal square root
     inv_rho = jax.lax.rsqrt(rho2)

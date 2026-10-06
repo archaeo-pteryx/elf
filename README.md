@@ -65,13 +65,13 @@ pk_ells2 = model.get_pk_ells(k, pk_data, params2)
 
 ### Cross power spectrum
 
-Give the second tracer's bias as `bias2` (without it the auto spectrum is returned). `ctr` and `stoch` are the coefficients of the cross spectrum itself. Counterterms built from each tracer's own coefficients, `[Z1^A c^B(mu) + Z1^B c^A(mu)] k^2 P` with `Z1 = b1 + f mu^2` and `c^X(mu) = c0^X + c2^X mu^2 + c4^X mu^4` (and likewise at NLO), are a polynomial in `mu^2`; pass them by matching its coefficients to the form above. The cross shot noise is a parameter of its own (zero for disjoint samples).
+Give the two tracers' biases as `bias_a` and `bias_b` instead of `bias`. `ctr` and `stoch` are the coefficients of the cross spectrum itself. Counterterms built from each tracer's own coefficients, `[Z1^A c^B(mu) + Z1^B c^A(mu)] k^2 P` with `Z1 = b1 + f mu^2` and `c^X(mu) = c0^X + c2^X mu^2 + c4^X mu^4` (and likewise at NLO), are a polynomial in `mu^2`; pass them by matching its coefficients to the form above. The cross shot noise is a parameter of its own (zero for disjoint samples).
 
 ```python
 params_ab = elf.make_params(
     f=0.578, h=0.6736,
-    bias=jnp.array([2.0, -0.5, -0.2, 0.5]),        # tracer a
-    bias2=jnp.array([1.4, -0.5, 0.05, -0.1]),      # tracer b
+    bias_a=jnp.array([2.0, -0.5, -0.2, 0.5]),      # tracer a
+    bias_b=jnp.array([1.4, -0.5, 0.05, -0.1]),     # tracer b
     ctr=jnp.array([4.0, 8.0, -3.0, 0.0, 70.0, 0.0, 0.0]),
     stoch=jnp.array([0.0, 0.0, 0.0]),              # cross shot noise (0 for disjoint samples)
 )
@@ -99,4 +99,3 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 
 - Yosuke Kobayashi & Kazuyuki Akitsu, Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian
   and Lagrangian one-loop perturbation theories
-  </content>

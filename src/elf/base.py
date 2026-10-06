@@ -1,9 +1,9 @@
 """The public API shared by the EPT and LPT backends.
 
 :class:`PowerSpectrum` holds the common options and grids and implements every
-public method from two backend hooks: ``get_corrs(pk_data, h)`` (quantities that
-depend only on P_lin and h) and ``_pkmu_true`` (tree level plus one loop at the
-true (k, mu)).  The AP map, mu folding, stochastic term, linear-family
+public method from two backend hooks: ``get_pt_terms(pk_data, h)`` (the PT terms,
+which depend only on P_lin and h) and ``_pkmu_true`` (tree level plus one loop at
+the true (k, mu)).  The AP map, mu folding, stochastic term, linear-family
 counterterms, volume factor and the multipole/configuration-space projections
 are done here.
 """
@@ -20,11 +20,12 @@ from . import ir_resum
 from . import spline
 from .eft_terms import Counterterms, stochasticity
 from .multipole import prepare_mu_gauleg, get_legendre_multipoles, get_k_mu_true_sin_for_ap
+from .params import _with_tracer_biases
 from .utils import get_pk
 
 
 class PowerSpectrum(ABC):
-    """Shared spectrum operations; instantiate EPT or LPT."""
+    """Shared spectrum operations (instantiate EPT or LPT)."""
 
     def __init__(self,
                  kmin_fft=1e-5,
@@ -49,8 +50,13 @@ class PowerSpectrum(ABC):
         ngauss, ells: Gauss-Legendre points on mu in [0, 1] (``max(ells) < 2 ngauss``)
             and the even multipole orders returned.
         counterterm_base: 'linear_ir_resum', 'linear' or 'zeldovich' (LPT only).
-        irres_method ('DST', 'SG', 'WH'), r_bao [Mpc/h], lambda_ir [h/Mpc]:
-            wiggle/no-wiggle split and BAO damping (Sigma^2 integrated to lambda_ir).
+        irres_method: method of the wiggle/no-wiggle split, 'DST' (discrete sine
+            transform), 'SG' (Savitzky-Golay filter) or 'WH' (Whittaker-Henderson
+            smoothing).  The split serves the EPT IR resummation and the
+            'linear_ir_resum' counterterm base of both backends.
+        r_bao [Mpc/h], lambda_ir [h/Mpc]: BAO scale and upper limit of the Sigma^2
+            integral of the BAO damping.  ``lambda_ir`` is not LPT's ``k_IR``, the
+            split ``P_lt = P e^{-(k/k_IR)^2}`` inside the LPT body.
         subtract_k0_const: drop the k -> 0 constant of the b2^2 term.
         """
         if nfft % 2:
@@ -87,11 +93,16 @@ class PowerSpectrum(ABC):
         return self._counterterms.base
 
     @abstractmethod
-    def get_corrs(self, pk_data, h):
-        """Intermediate quantities that depend only on ``P_lin`` and ``h`` (backend specific)."""
+    def get_pt_terms(self, pk_data, h):
+        """The backend's ``PTTerms`` of ``pk_data``, the quantities that depend only on ``P_lin`` and ``h``.
+
+        ``h`` enters only the no-wiggle data.  ``h=None`` skips them in LPT (its template
+        and component methods do so).  EPT accepts ``h=None`` only when it needs no
+        no-wiggle data (``do_irres=False`` and ``counterterm_base='linear'``).
+        """
 
     @abstractmethod
-    def _pkmu_true(self, k_true, mu_true, sin_true, corrs, pk_data, params):
+    def _pkmu_true(self, k_true, mu_true, sin_true, pt_terms, pk_data, params):
         """Tree level plus one loop at the true coordinates, ``(nk, nmu)``.
 
         ``k_true`` is ``(nk, nmu)``; ``mu_true`` (folded to ``|mu|``) and ``sin_true`` are ``(nmu,)``.
@@ -114,77 +125,70 @@ class PowerSpectrum(ABC):
         k_true, mu_true, sin_true = get_k_mu_true_sin_for_ap(k, mu, alpha_perp, alpha_para)
         return k_true, jnp.abs(mu_true), sin_true
 
-    def _add_stoch_ctr_volume(self, pkmu, k_true, mu_k, params, ctr_base, alpha_perp, alpha_para):
-        """``[pkmu + P_stoch + P_ctr[ctr_base]] / (alpha_perp^2 alpha_para)`` (``ctr_base=None``: no P_ctr)."""
+    def _add_stoch_ctr_volume(self, pkmu, k_true, mu_k, params, ctr_base_pk, alpha_perp, alpha_para):
+        """``[pkmu + P_stoch + P_ctr[ctr_base_pk]] / (alpha_perp^2 alpha_para)`` (no P_ctr if ``ctr_base_pk`` is None)."""
         pkmu = pkmu + stochasticity(k_true, mu_k, params.stoch)
-        if ctr_base is not None:
-            pkmu = (pkmu + self._counterterms.leading(k_true, mu_k, params.f, params.ctr, ctr_base)
-                    + self._counterterms.nlo(k_true, mu_k, params.f, params.ctr, ctr_base))
+        pkmu = self._counterterms.add_kspace(pkmu, k_true, mu_k, params.f, params.ctr, ctr_base_pk)
         return pkmu / (alpha_perp**2 * alpha_para)
 
-    def _linear_at(self, k_true, mu_true, f, corrs, pk_data):
-        """``(pk, pk_nw, pk_w, damp)`` at ``k_true``; the last three are None without IR data."""
+    def _linear_at(self, k_true, mu_true, f, pt_terms, pk_data):
+        """``(pk, pk_nw, pk_w, damp_exponent)`` at ``k_true`` (the last three None without no-wiggle data).
+
+        ``damp_exponent`` is ``k^2 Sigma^2_s`` of :func:`ir_resum.damping_exponent`.
+        """
         pk = self._pk_at(k_true, pk_data)
-        if corrs.pk_nw_data is None:
+        if pt_terms.pk_nw_data is None:
             return pk, None, None, None
-        pk_nw = self._pk_at(k_true, corrs.pk_nw_data)
+        pk_nw = self._pk_at(k_true, pt_terms.pk_nw_data)
         mu = jnp.broadcast_to(mu_true, k_true.shape)
-        damp = ir_resum.damping_exponent(k_true, mu, f, corrs.Sigma2, corrs.dSigma2)
-        return pk, pk_nw, pk - pk_nw, damp
+        damp_exponent = ir_resum.damping_exponent(k_true, mu, f, pt_terms.Sigma2, pt_terms.dSigma2)
+        return pk, pk_nw, pk - pk_nw, damp_exponent
 
     def _set_xi_ells_transform(self):
-        """Kernels of the P_ell -> xi_ell transforms (as the EPT forward row (ell, 0))."""
+        """Kernels of the P_ell -> xi_ell transforms, the forward rows (ell, 0) at the input bias ``nu_xi_n0``."""
         hg = self._hankel
         fs = self.fftlog_settings
-        nu_eff = fs.nu_pld_n0 + 3
-        u_ms, q_factors, qs = [], [], []
-        for ell in self.ells:
-            lnxy, q_grid, _ = fftlog.hankel_setup(ell, fs.nu, hg.grid)
-            u_ms.append(fftlog.hankel_setup(ell, nu_eff, hg.grid, lnxy=lnxy)[2])
-            q_factors.append(q_grid.x ** (-nu_eff))
-            qs.append(q_grid.x)
-        self._xi_ells_u_m = tuple(u_ms)
-        self._xi_ells_q_factor = tuple(q_factors)
-        self._xi_ells_q = tuple(qs)
+        forward = fftlog.forward_transform(hg.grid, fs.nu, self.ells, [0] * len(self.ells),
+                                           nu_in=fs.nu_xi_n0)
+        self._xi_ells_rows = tuple(forward.row(i) for i in range(len(self.ells)))
 
     @partial(jit, static_argnames=['self'])
-    def get_pkmu_from_corrs(self, k, mu, corrs, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
-        """P(k, mu) at the observed (k, mu) from ``corrs``, shape ``(nk, nmu)``.
+    def get_pkmu_from_pt_terms(self, k, mu, pt_terms, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
+        """P(k, mu) at the observed (k, mu) from ``pt_terms``, shape ``(nk, nmu)``.
 
-        ``[P_body + P_stoch + P_ctr](k_true, |mu_true|) / (alpha_perp^2 alpha_para)``; the
+        ``[P_body + P_stoch + P_ctr](k_true, |mu_true|) / (alpha_perp^2 alpha_para)``.  The
         linear-family counterterms multiply ``P_lin`` or ``P_nw + e^{-k^2 Sigma^2_s} P_w``.
-        ``pk_data`` must be the spectrum ``corrs`` was computed from.
+        ``pk_data`` must be the spectrum ``pt_terms`` was computed from.  For an auto
+        spectrum (``params.bias`` set) ``bias_a`` and ``bias_b`` are both set to ``bias``
+        here, the only entry that reads the biases.
         """
+        params = _with_tracer_biases(params)
         k_true, mu_true, sin_true = self._true_coordinates(k, mu, alpha_perp, alpha_para)
-        pkmu = self._pkmu_true(k_true, mu_true, sin_true, corrs, pk_data, params)
+        pkmu = self._pkmu_true(k_true, mu_true, sin_true, pt_terms, pk_data, params)
         # broadcast mu to (nk, nmu): fixes the order of the reverse-mode sums
         mu_k = jnp.broadcast_to(mu_true, k_true.shape)
-        base_pk = None
-        if self._counterterms.needs_kspace_base:
-            pk, pk_nw, pk_w, damp = self._linear_at(k_true, mu_true, params.f, corrs, pk_data)
-            if self.counterterm_base == 'linear':
-                base_pk = pk
-            else:
-                base_pk = pk_nw + jnp.exp(-damp) * pk_w
-        return self._add_stoch_ctr_volume(pkmu, k_true, mu_k, params, base_pk, alpha_perp, alpha_para)
+        # None for 'zeldovich', whose counterterms LPT folds into its integrand
+        ctr_base_pk = self._counterterms.kspace_base_pk(
+            lambda: self._linear_at(k_true, mu_true, params.f, pt_terms, pk_data))
+        return self._add_stoch_ctr_volume(pkmu, k_true, mu_k, params, ctr_base_pk, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
     def get_pkmu(self, k, mu, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
-        """P(k, mu) at the observed (k, mu), AP distortion included; shape ``(nk, nmu)``."""
-        corrs = self.get_corrs(pk_data, params.h)
-        return self.get_pkmu_from_corrs(k, mu, corrs, pk_data, params, alpha_perp, alpha_para)
+        """P(k, mu) at the observed (k, mu), AP distortion included, shape ``(nk, nmu)``."""
+        pt_terms = self.get_pt_terms(pk_data, params.h)
+        return self.get_pkmu_from_pt_terms(k, mu, pt_terms, pk_data, params, alpha_perp, alpha_para)
 
     @partial(jit, static_argnames=['self'])
-    def get_pk_ells_from_corrs(self, k, corrs, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
-        """Legendre multipoles ``P_ell(k)`` for ``ell`` in ``self.ells`` from ``corrs``; shape ``(nells, nk)``."""
-        pkmu = self.get_pkmu_from_corrs(k, self._mu_quad, corrs, pk_data, params, alpha_perp, alpha_para)
+    def get_pk_ells_from_pt_terms(self, k, pt_terms, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
+        """Legendre multipoles ``P_ell(k)`` for ``ell`` in ``self.ells`` from ``pt_terms``, shape ``(nells, nk)``."""
+        pkmu = self.get_pkmu_from_pt_terms(k, self._mu_quad, pt_terms, pk_data, params, alpha_perp, alpha_para)
         return get_legendre_multipoles(pkmu, self._legendre_weights)
 
     @partial(jit, static_argnames=['self'])
     def get_pk_ells(self, k, pk_data, params, alpha_perp=1.0, alpha_para=1.0):
-        """Legendre multipoles ``P_ell(k)`` for ``ell`` in ``self.ells``; shape ``(nells, nk)``."""
-        corrs = self.get_corrs(pk_data, params.h)
-        return self.get_pk_ells_from_corrs(k, corrs, pk_data, params, alpha_perp, alpha_para)
+        """Legendre multipoles ``P_ell(k)`` for ``ell`` in ``self.ells``, shape ``(nells, nk)``."""
+        pt_terms = self.get_pt_terms(pk_data, params.h)
+        return self.get_pk_ells_from_pt_terms(k, pt_terms, pk_data, params, alpha_perp, alpha_para)
 
     def _xi_ells_nkeep(self, kmax):
         """Number of core k nodes with ``k <= kmax`` (``None``: ``kmax_fft / 3``)."""
@@ -196,38 +200,38 @@ class PowerSpectrum(ABC):
             raise ValueError("kmax must keep at least two nodes of the internal k grid")
         return n_keep
 
-    def _get_xi_ells_from_corrs(self, r, corrs, pk_data, params, alpha_perp, alpha_para, kmax=None):
-        """``xi_ell(r) = i^l int dk k^2 P_l j_l(kr) / (2 pi^2)`` of ``P_ell`` cut at ``kmax``, from ``corrs``."""
+    def _get_xi_ells_from_pt_terms(self, r, pt_terms, pk_data, params, alpha_perp, alpha_para, kmax=None):
+        """``xi_ell(r) = i^l int dk k^2 P_l j_l(kr) / (2 pi^2)`` of ``P_ell`` cut at ``kmax``, from ``pt_terms``."""
         r = jnp.atleast_1d(r)
         hg = self._hankel
-        fs = self.fftlog_settings
 
         # P_ell on the core nodes k <= kmax, zero elsewhere; trapezoid end weights 1/2
         n_keep = self._xi_ells_nkeep(kmax)
         k = self._k[:n_keep]
-        pk_ells = self.get_pk_ells_from_corrs(k, corrs, pk_data, params, alpha_perp, alpha_para)
+        pk_ells = self.get_pk_ells_from_pt_terms(k, pt_terms, pk_data, params, alpha_perp, alpha_para)
         w = fftlog.trapezoid_weights('core', n_keep, 0, hg.grid.dln)
         n_zero = self._nfft - n_keep + hg.npad
         pk_ells = jnp.pad(pk_ells * w, [(0, 0), (hg.npad, n_zero)])
 
         xi_ells = []
         for i, ell in enumerate(self.ells):
-            xi = fftlog.hankel(fs.nu_pld_n0, pk_ells[i] / (2 * jnp.pi**2), hg.k_padded,
-                               None, self._xi_ells_u_m[i], hg.npad, crop=False,
-                               y_pow=self._xi_ells_q_factor[i])
+            row = self._xi_ells_rows[i]
+            xi = row.apply(pk_ells[i] / (2 * jnp.pi**2), hg.grid)
             xi = xi * hg.mask_xi
             if (ell // 2) % 2:
                 xi = -xi
-            xi_ells.append(spline.interp1d(jnp.log(r), jnp.log(self._xi_ells_q[i]), xi))
+            xi_ells.append(spline.interp1d(jnp.log(r), jnp.log(row.q), xi))
         return jnp.stack(xi_ells, axis=0)
 
     @partial(jit, static_argnames=['self', 'kmax'])
     def get_xi_ells(self, r, pk_data, params, alpha_perp=1.0, alpha_para=1.0, kmax=None):
-        """Configuration-space multipoles ``xi_ell(r)`` for ``ell`` in ``self.ells``; shape ``(nells, nr)``.
+        """Configuration-space multipoles ``xi_ell(r)`` for ``ell`` in ``self.ells``, shape ``(nells, nr)``.
 
         ``xi_ell`` is the transform of ``P_ell`` evaluated on the internal k nodes up to
-        ``kmax`` and set to zero above; small r depends on ``kmax``.  The default
-        ``kmax_fft / 3`` keeps out the high-k end, where the one-loop spectra are inaccurate.
+        ``kmax`` and set to zero above.  ``kmax`` is this cut on ``P_ell``, applied before
+        the transform.  It is unrelated to the FFTlog band ``kmax_fft``, and small r
+        depends on it.  The default ``kmax_fft / 3`` keeps out the high-k end, where the
+        one-loop spectra are inaccurate.
         """
-        corrs = self.get_corrs(pk_data, params.h)
-        return self._get_xi_ells_from_corrs(r, corrs, pk_data, params, alpha_perp, alpha_para, kmax)
+        pt_terms = self.get_pt_terms(pk_data, params.h)
+        return self._get_xi_ells_from_pt_terms(r, pt_terms, pk_data, params, alpha_perp, alpha_para, kmax)

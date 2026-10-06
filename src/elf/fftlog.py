@@ -12,6 +12,7 @@ one, restricted to its support by :func:`trapezoid_weights`.
 
 from dataclasses import dataclass
 from functools import cached_property
+from typing import NamedTuple
 
 import numpy as np
 from scipy.special import loggamma
@@ -28,17 +29,22 @@ class FFTlogSettings:
     """Numerical constants of the FFTlog pipelines (for convergence studies, not tuning)."""
 
     nu: float = 1.1
-    """Bias of the ordinary Hankel transforms of both backends."""
+    """Bias of the ordinary Hankel transforms of both backends.  Its low-ringing phase fixes
+    the output grids ``q_padded[l]`` of every forward transform (:func:`forward_transform`),
+    and it is the kernel bias of the LPT P -> xi_l^n rows."""
 
     nu_n0: float = 1.5
-    """LPT: bias of the ``l = 0``, ``n >= 0`` source -> correlator transform (``theta``);
-    suppresses the periodic image ``e^{-nu L}`` of its q -> 0 plateau."""
+    """LPT: bias of the source -> correlator transforms with ``n >= 0``, at any order l
+    (currently only ``theta``).  It suppresses the periodic image ``e^{-nu L}`` of their
+    q -> 0 plateau."""
 
-    nu_pld: float = -0.3
-    """EPT: bias of the shared forward rfft for the ``n != 0`` rows ``xi_l^n``."""
+    nu_xi: float = -0.3
+    """EPT: input bias of the P -> xi_l^n transforms with ``n != 0`` (one rfft shared by
+    those rows, the kernel of row (l, n) has the bias ``nu_xi + n + 3``)."""
 
-    nu_pld_n0: float = -1.5
-    """EPT: the same for the ``n = 0`` rows."""
+    nu_xi_n0: float = -1.5
+    """The same for the ``n = 0`` rows of EPT and for the P_ell -> xi_ell transforms of
+    ``get_xi_ells`` (both backends)."""
 
     nu_matrix_matter: float = -0.3
     """EPT matrix: decomposition bias of the matter P22 and P13 blocks."""
@@ -187,6 +193,55 @@ def hankel(nu, fx_padded, x, y, u_m, n_pad, crop=True, y_pow=None):
         return res
     n_out = res.shape[-1]
     return res[..., n_pad:n_out - n_pad]
+
+
+class ForwardTransform(NamedTuple):
+    """Kernels of the forward transforms ``H_l^n[f](q) = int dk k^{n+2} f(k) j_l(kq) / (2 pi^2)``.
+
+    Built by :func:`forward_transform`, one row per (l, n).  The input is ``f / (2 pi^2)`` on the
+    padded k grid with its padding and end weights already applied.  ``nu_in`` is the bias of its
+    rfft, and the kernel of a row has the bias ``nu_in + n + 3`` and the low-ringing phase of
+    ``(l, FFTlogSettings.nu)``, so row (l, n) lands on ``HankelGrids.q_padded[l]``.
+    """
+    nu_in: object                   # float (one rfft shared by the rows) or (n_rows, 1) array (one per row)
+    u_m: jnp.ndarray                # (n_rows, n // 2 + 1) kernels
+    y_pow: jnp.ndarray              # (n_rows, n) q^{-(nu_in + n + 3)}
+    q: jnp.ndarray                  # (n_rows, n) output grids
+
+    def row(self, i):
+        """The transform of row ``i`` alone (arrays without the row axis)."""
+        nu_in = self.nu_in if np.ndim(self.nu_in) == 0 else self.nu_in[i]
+        return ForwardTransform(nu_in, self.u_m[i], self.y_pow[i], self.q[i])
+
+    def apply(self, fx_padded, grid):
+        """The rows of ``fx_padded`` on ``grid`` (leading batch axes broadcast as in :func:`hankel`), uncropped."""
+        return hankel(self.nu_in, fx_padded, grid.x, None, self.u_m, grid.n_pad,
+                      crop=False, y_pow=self.y_pow)
+
+
+def forward_transform(grid, nu, ells, ns, nu_in=None, nu_kernel=None):
+    """:class:`ForwardTransform` of the rows ``(ells[i], ns[i])`` on the padded grid ``grid``.
+
+    ``nu`` is the ordinary bias whose low-ringing phase fixes the output grids.  Exactly one of
+    ``nu_in`` and ``nu_kernel`` is given.  ``nu_in`` (EPT, ``get_xi_ells``) is one input bias for
+    all rows, with kernels at ``nu_in + n + 3``.  ``nu_kernel`` (LPT) is one kernel bias for all
+    rows, with the input bias ``nu_kernel - n - 3`` of each row (one rfft per row).
+    """
+    if (nu_in is None) == (nu_kernel is None):
+        raise ValueError("give exactly one of nu_in and nu_kernel")
+    ells = [int(l) for l in np.asarray(ells)]
+    ns = [int(n) for n in np.asarray(ns)]
+    u_ms, y_pows, qs = [], [], []
+    for l, n in zip(ells, ns):
+        lnxy, q_grid, _ = hankel_setup(l, nu, grid)
+        nu_eff = nu_kernel if nu_in is None else nu_in + n + 3
+        u_ms.append(hankel_setup(l, nu_eff, grid, lnxy=lnxy)[2])
+        y_pows.append(q_grid.x ** (-nu_eff))
+        qs.append(q_grid.x)
+    if nu_in is None:
+        nu_in = (nu_kernel - (jnp.asarray(ns) + 3).astype(jnp.float64))[:, None]
+    return ForwardTransform(nu_in, jnp.stack(u_ms, axis=0), jnp.stack(y_pows, axis=0),
+                            jnp.stack(qs, axis=0))
 
 
 INPUT_SUPPORT = {'zero-pad': 'core', 'power-law': 'full'}

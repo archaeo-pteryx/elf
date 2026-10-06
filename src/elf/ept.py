@@ -2,6 +2,7 @@ import os
 import glob, re
 from typing import NamedTuple, Optional
 import numpy as _np
+import sympy as sym
 import jax
 jax.config.update('jax_enable_x64', True)
 from jax import jit
@@ -17,11 +18,6 @@ from .base import PowerSpectrum
 from .utils import eval_power_coeffs
 
 from . import spline
-
-
-# Matrix-path group tags (matter / bias operator); the biases themselves are in FFTlogSettings.
-_NU_GROUP_MATTER_TAG = -0.3
-_NU_GROUP_BIAS_TAG = -1.6
 
 
 def _table_names(directory, prefix):
@@ -56,35 +52,58 @@ def get_degree_dict(name):
     return degree_dict
 
 
-def get_nu_group_tag_from_name(name):
-    """Matrix-path group tag (matter or bias operator) of a PT kernel name."""
+def _is_bias_block(name):
+    """Whether a ``pt_matrix`` kernel belongs to the bias-operator group (a power of b2, bG2 or bGamma3).
+
+    The other blocks form the matter group.  The two groups use their own decomposition
+    biases (``FFTlogSettings.nu_matrix_*``).
+    """
     degree_dict = get_degree_dict(name)
-    if 'b2' in degree_dict.keys():
-        if degree_dict['b2'] > 0: return _NU_GROUP_BIAS_TAG
-    if 'bG2' in degree_dict.keys():
-        if degree_dict['bG2'] > 0: return _NU_GROUP_BIAS_TAG
-    if 'bGamma3' in degree_dict.keys():
-        if degree_dict['bGamma3'] > 0: return _NU_GROUP_BIAS_TAG
-    return _NU_GROUP_MATTER_TAG
+    return any(degree_dict.get(key, 0) > 0 for key in ('b2', 'bG2', 'bGamma3'))
 
 
-class Corrs(NamedTuple):
-    """EPT intermediate quantities on the core k grid; depend only on ``P_lin`` and ``h``.
+def uv_terms():
+    """``[((mu_pow, f_pow, b1_pow), coefficient)]`` of ``Z1 Z3_UV`` (exact rationals).
 
-    ``p22`` ``(n22, nk)``, ``p13_kernel`` ``(n13, nk)`` (P13 blocks divided by P(k)),
-    ``pk_int = (1/2 pi^2) int dk P`` (matrix UV term, else None),
-    ``pk_int2 = (1/2 pi^2) int dk k^2 P^2`` (b2^2 constant); ``*_nw`` the same for
-    the no-wiggle spectrum (``do_irres``); ``pk_nw_data``, ``Sigma2``, ``dSigma2``
-    as in the LPT ``Corrs`` (None without IR resummation).
+    ``Z1 = b1 + f mu^2``, ``Z3_UV = -61/315 b1 + ((-3/5 + 2/105 b1) f + (-16/35 - 1/3 b1) f^2) mu^2
+    + (-46/105 f^2 - 1/3 f^3) mu^4``.
+    """
+    mu, f, b1 = sym.symbols('mu f b1')
+    R = sym.Rational
+    z1 = b1 + f * mu**2
+    z3_uv = (-R(61, 315) * b1
+             + ((-R(3, 5) + R(2, 105) * b1) * f + (-R(16, 35) - R(1, 3) * b1) * f**2) * mu**2
+             + (-R(46, 105) * f**2 - R(1, 3) * f**3) * mu**4)
+    return sorted(sym.Poly(sym.expand(z1 * z3_uv), mu, f, b1).terms())
+
+
+def _one_monomial(degrees, nterms):
+    """Table ``(nblocks, nterms, 7)`` of one monomial per block (``degrees`` rows), zero-padded to ``nterms``."""
+    degrees = _np.asarray(degrees, dtype=_np.float64)
+    table = _np.zeros((degrees.shape[0], nterms, 7))
+    table[:, 0, :6] = degrees
+    table[:, 0, 6] = 1.0
+    return table
+
+
+class PTTerms(NamedTuple):
+    """EPT PT terms on the core k grid, which depend only on ``P_lin`` and ``h``.
+
+    ``p22`` ``(n22, nk)``, ``p13_kernel`` ``(n13, nk)`` (P13 blocks divided by P(k) and
+    by the block's static ``k^p``, ``p`` = ``EPT._k_power_13``.  In the matrix method the
+    last row is the UV constant ``(1/2 pi^2) int dk P`` with p = 2).
+    ``pk_int2 = (1/2 pi^2) int dk k^2 P^2`` is the b2^2 constant.  ``*_nw`` are the same
+    for the no-wiggle spectrum (None without ``do_irres``).  The no-wiggle data
+    ``pk_nw_data``, ``Sigma2``, ``dSigma2`` (as in the LPT ``PTTerms``) are present
+    whenever the IR resummation or the 'linear_ir_resum' counterterm base needs them,
+    and None otherwise.
     """
 
     p22: jnp.ndarray
     p13_kernel: jnp.ndarray
-    pk_int: Optional[jnp.ndarray]
     pk_int2: jnp.ndarray
     p22_nw: Optional[jnp.ndarray]
     p13_kernel_nw: Optional[jnp.ndarray]
-    pk_int_nw: Optional[jnp.ndarray]
     pk_nw_data: Optional[jnp.ndarray]
     Sigma2: Optional[jnp.ndarray]
     dSigma2: Optional[jnp.ndarray]
@@ -134,18 +153,26 @@ class EPT(PowerSpectrum):
         if self.method == 'matrix':
             self._initialize_loop_matrix()
 
-        # (mu, f, b1, b2, bG2, bGamma3) monomials + coefficient of each block, (nblocks, nterms, 7).
-        def one_monomial(degrees):
-            degrees = jnp.asarray(degrees, dtype=self.coeff_info_22.dtype)
-            return jnp.concatenate([degrees, jnp.ones_like(degrees[:, :1])], axis=1)[:, None, :]
-
-        self._monomials_22 = one_monomial(self.degrees_22) if method == 'matrix' else self.coeff_info_22
-        self._monomials_13 = self.coeff_info_13 if method == 'hankel' else one_monomial(self.degrees_13)
+        # (mu, f, b1, b2, bG2, bGamma3) monomials + coefficient of each block, (nblocks, nterms, 7),
+        # and the static extra power p of k of each P13 block, applied at the true k.
+        if method == 'matrix':
+            # one monomial per block, then the UV block: the monomials of Z1 Z3_UV, whose kernel
+            # row is the constant pk_int = (1/2 pi^2) int dk P and whose p = 2 (the term
+            # k^2 P(k) pk_int Z1 Z3_UV of P13, which the matrix blocks do not contain)
+            uv = _np.array([[m, p, b, 0, 0, 0, float(c)] for (m, p, b), c in uv_terms()])
+            self._monomials_22 = jnp.asarray(_one_monomial(self.degrees_22, 1))
+            self._monomials_13 = jnp.asarray(_np.concatenate(
+                [_one_monomial(self.degrees_13, uv.shape[0]), uv[None]], axis=0))
+            self._k_power_13 = _np.array([0] * len(self.matrix_block_names_13) + [2])
+        else:
+            self._monomials_22 = self.coeff_info_22
+            self._monomials_13 = self.coeff_info_13
+            self._k_power_13 = _np.zeros(len(self.pkmu_coeff_names_13), dtype=int)
         self._mu_degree_max = int(max(_np.max(_np.asarray(table[..., 0]))
                                       for table in (self._monomials_22, self._monomials_13)))
 
     def _initialize_loop_coeff(self):
-        self.pkmu_coeff_names_22, lnm_22, self.coeff_info_22 = _read_coeff_tables('22')
+        _, lnm_22, self.coeff_info_22 = _read_coeff_tables('22')
         self.pkmu_coeff_names_13, lnm_13, self.coeff_info_13 = _read_coeff_tables('13')
         # m stays a static numpy array: it selects the m = 0 residual branch at trace time.
         self._ln_22 = jnp.asarray(lnm_22[:, :2], dtype=jnp.int32)
@@ -155,69 +182,64 @@ class EPT(PowerSpectrum):
         ln_pairs = [[0,0], [0,-2], [1,-1], [2,0], [2,-2], [3,-1], [4,0]]
         self._ln_list = jnp.array(ln_pairs)
         self._ln_list_static = tuple((int(l), int(n)) for l, n in ln_pairs)
-        self._ln_index = {pair: i for i, pair in enumerate(self._ln_list_static)}
         lmax = jnp.max(self._ln_list[:, 0])
         self._set_hankel(lmax)
 
     def _set_hankel(self, lmax):
         """Grids and kernels of the chain ``P(k) -> xi_l^n(q) -> P22/P13(k)``.
 
-        Forward row (l, n): one shared rfft per bias (``nu_pld``, ``nu_pld_n0`` for
-        n = 0), kernel ``g_l`` at ``nu + n + 3`` with the low-ringing phase of
-        ``nu``, so it lands on ``q_padded[l]``, the conjugate grid of the backward
-        kernel ``u_m[l]``.
+        The padded grid and end weights of the input also serve both methods' ``pk_int2``,
+        the matrix UV constant and the ``get_xi_ells`` transforms.  The forward chain
+        ``P(k) -> xi_l^n(q)`` (:func:`fftlog.forward_transform`) has all seven rows with
+        the input bias ``nu_xi`` and again with ``nu_xi_n0``, each one rfft shared by the
+        rows, kernel ``g_l`` at ``nu_in + n + 3`` with the low-ringing phase of ``nu``, so
+        row (l, n) lands on ``q_padded[l]``, the conjugate grid of the backward kernel
+        ``u_m[l]``.  The n = 0 rows take the ``nu_xi_n0`` result.
         """
         fs = self.fftlog_settings
         hg = self._hankel = fftlog.HankelGrids(self._k, fs, self.pad_mode, lmax)
         self._set_xi_ells_transform()
 
-        def build_forward(nu):
-            u_ms, q_factors = [], []
-            for l, n in self._ln_list_static:
-                nu_eff = nu + n + 3
-                # phase (lnxy) of the ordinary nu, kernel bias nu_eff: keeps q_padded[l] conjugate to k_padded
-                u_ms.append(fftlog.hankel_setup(l, nu_eff, hg.grid, lnxy=hg.lnxy[l])[2])
-                q_factors.append(hg.q_padded[l] ** (-nu_eff))
-            return jnp.stack(u_ms, axis=0), jnp.stack(q_factors, axis=0)
-
-        self._xi_pld_u_m, self._xi_pld_q_factor = build_forward(fs.nu_pld)
-        self._xi_pld_u_m_n0, self._xi_pld_q_factor_n0 = build_forward(fs.nu_pld_n0)
-        self._xi_pld_n0_mask = jnp.array(
+        ells = [l for l, _ in self._ln_list_static]
+        ns = [n for _, n in self._ln_list_static]
+        self._xi_forward = fftlog.forward_transform(hg.grid, fs.nu, ells, ns, nu_in=fs.nu_xi)
+        self._xi_forward_n0 = fftlog.forward_transform(hg.grid, fs.nu, ells, ns, nu_in=fs.nu_xi_n0)
+        self._xi_n0_mask = jnp.array(
             [n == 0 for _, n in self._ln_list_static], dtype=bool
         )
 
     def _initialize_loop_matrix(self):
-        self.pkmu_term_names_22 = _table_names('pt_matrix', '22')
-        self.pkmu_term_names_13 = _table_names('pt_matrix', '13')
+        """Matrices and monomial degrees of the ``pt_matrix`` blocks, one (mu, f, bias) monomial per block."""
+        self.matrix_block_names_22 = _table_names('pt_matrix', '22')
+        self.matrix_block_names_13 = _table_names('pt_matrix', '13')
 
-        matter = _NU_GROUP_MATTER_TAG
-        is_matter_22 = [get_nu_group_tag_from_name(name) == matter for name in self.pkmu_term_names_22]
-        is_matter_13 = [get_nu_group_tag_from_name(name) == matter for name in self.pkmu_term_names_13]
+        is_matter_22 = [not _is_bias_block(name) for name in self.matrix_block_names_22]
+        is_matter_13 = [not _is_bias_block(name) for name in self.matrix_block_names_13]
 
-        matrix = self._set_matrix(self.pkmu_term_names_22 + self.pkmu_term_names_13)
+        matrix = self._set_matrix(self.matrix_block_names_22 + self.matrix_block_names_13)
 
-        self.matrices_22 = jnp.array([matrix[name] for name in self.pkmu_term_names_22])
-        self.matrices_13 = jnp.array([matrix[name] for name in self.pkmu_term_names_13])
+        self.matrices_22 = jnp.array([matrix[name] for name in self.matrix_block_names_22])
+        self.matrices_13 = jnp.array([matrix[name] for name in self.matrix_block_names_13])
 
-        self._idx_22_nu1 = jnp.array([i for i, m in enumerate(is_matter_22) if m], dtype=jnp.int32)
-        self._idx_22_nu2 = jnp.array([i for i, m in enumerate(is_matter_22) if not m], dtype=jnp.int32)
-        self._idx_13_nu1 = jnp.array([i for i, m in enumerate(is_matter_13) if m], dtype=jnp.int32)
-        self._idx_13_nu2 = jnp.array([i for i, m in enumerate(is_matter_13) if not m], dtype=jnp.int32)
+        self._idx_22_matter = jnp.array([i for i, m in enumerate(is_matter_22) if m], dtype=jnp.int32)
+        self._idx_22_bias = jnp.array([i for i, m in enumerate(is_matter_22) if not m], dtype=jnp.int32)
+        self._idx_13_matter = jnp.array([i for i, m in enumerate(is_matter_13) if m], dtype=jnp.int32)
+        self._idx_13_bias = jnp.array([i for i, m in enumerate(is_matter_13) if not m], dtype=jnp.int32)
 
-        self.matrices_22_nu1 = self.matrices_22[self._idx_22_nu1]
-        self.matrices_22_nu2 = self.matrices_22[self._idx_22_nu2]
-        self.matrices_13_nu1 = self.matrices_13[self._idx_13_nu1]
-        self.matrices_13_nu2 = self.matrices_13[self._idx_13_nu2]
+        self.matrices_22_matter = self.matrices_22[self._idx_22_matter]
+        self.matrices_22_bias = self.matrices_22[self._idx_22_bias]
+        self.matrices_13_matter = self.matrices_13[self._idx_13_matter]
+        self.matrices_13_bias = self.matrices_13[self._idx_13_bias]
 
         def get_degree_vector(name):
             d = get_degree_dict(name)
-            if name in self.pkmu_term_names_22:
+            if name in self.matrix_block_names_22:
                 return [d['mu'], d['f'], d['b1'], d['b2'], d['bG2'], 0]
             else:
                 return [d['mu'], d['f'], d['b1'], 0, d['bG2'], d['bGamma3']]
 
-        self.degrees_22 = jnp.array([get_degree_vector(name) for name in self.pkmu_term_names_22])
-        self.degrees_13 = jnp.array([get_degree_vector(name) for name in self.pkmu_term_names_13])
+        self.degrees_22 = jnp.array([get_degree_vector(name) for name in self.matrix_block_names_22])
+        self.degrees_13 = jnp.array([get_degree_vector(name) for name in self.matrix_block_names_13])
 
     def _set_matrix(self, names):
         """PT matrices of the given blocks at the decomposition bias of their group."""
@@ -225,9 +247,9 @@ class EPT(PowerSpectrum):
         mat = {}
         for name in names:
             mat_file = os.path.dirname(__file__) + f'/pt_matrix/{name}.txt'
-            if '22' in name:
+            if name.startswith('22'):
                 mat[name] = pt_matrix.PTMatrix22(mat_file)
-            elif '13' in name:
+            elif name.startswith('13'):
                 mat[name] = pt_matrix.PTMatrix13(mat_file)
             else:
                 raise KeyError('PT kernel name %s is invalid.' % (name))
@@ -236,25 +258,29 @@ class EPT(PowerSpectrum):
         matrix = {}
 
         for name in names:
-            if get_nu_group_tag_from_name(name) == _NU_GROUP_MATTER_TAG:
+            if not _is_bias_block(name):
                 nu = fs.nu_matrix_matter
-            elif name in self.pkmu_term_names_22:
+            elif name in self.matrix_block_names_22:
                 nu = fs.nu_matrix_p22_bias
             else:
                 nu = fs.nu_matrix_p13_bias
 
             nu_m = -0.5 * (nu + eta_m * 1j)
-            if '22' in name:
+            if name.startswith('22'):
                 nu_m1, nu_m2 = jnp.meshgrid(nu_m, nu_m)
                 matrix[name] = mat[name](nu_m1, nu_m2).T
-            elif '13' in name:
+            elif name.startswith('13'):
                 matrix[name] = mat[name](nu_m)
-        
+
         return matrix
-    
+
     @partial(jit, static_argnames=['self'])
-    def get_corrs(self, pk_data, h):
-        """The :class:`Corrs` of ``pk_data`` (``h`` enters only the wiggle/no-wiggle split)."""
+    def get_pt_terms(self, pk_data, h):
+        """The :class:`PTTerms` of ``pk_data``.
+
+        ``h`` enters only the wiggle/no-wiggle split, computed when ``do_irres`` or the
+        'linear_ir_resum' base needs it.  ``h=None`` works only without them.
+        """
         k = self._k
         pk = self._pk_at(k, pk_data)
         if self.do_irres or self.counterterm_base == 'linear_ir_resum':
@@ -266,52 +292,58 @@ class EPT(PowerSpectrum):
             pk_nw = self._pk_at(k, pk_nw_data)
             pk_w = pk - pk_nw
             pk = pk_nw + pk_w
-        p22, p13_kernel, pk_int = self._get_blocks(pk)
+        p22, p13_kernel = self._get_blocks(pk)
         hg = self._hankel
         # the end weight multiplies P^2 once
         pk_int2 = hg.grid.moment(
             hg.w_input * fftlog.pad(pk, hg.grid, hg.pad_mode)**2, 3) / (2 * jnp.pi**2)
         if self.do_irres:
-            p22_nw, p13_kernel_nw, pk_int_nw = self._get_blocks(pk_nw)
+            p22_nw, p13_kernel_nw = self._get_blocks(pk_nw)
         else:
-            p22_nw = p13_kernel_nw = pk_int_nw = None
-        return Corrs(p22=p22, p13_kernel=p13_kernel, pk_int=pk_int, pk_int2=pk_int2,
-                     p22_nw=p22_nw, p13_kernel_nw=p13_kernel_nw, pk_int_nw=pk_int_nw,
-                     pk_nw_data=pk_nw_data, Sigma2=Sigma2, dSigma2=dSigma2)
+            p22_nw = p13_kernel_nw = None
+        return PTTerms(p22=p22, p13_kernel=p13_kernel, pk_int2=pk_int2,
+                       p22_nw=p22_nw, p13_kernel_nw=p13_kernel_nw,
+                       pk_nw_data=pk_nw_data, Sigma2=Sigma2, dSigma2=dSigma2)
 
     def _get_blocks(self, pk):
-        """``(p22, p13_kernel, pk_int)`` of one spectrum on the grid for ``self.method``.
+        """``(p22, p13_kernel)`` of one spectrum on the core k grid for ``self.method``.
 
-        hankel: P13 kernel = ``k^m H_l[q^2 xi_l^n]``, ``pk_int = None``; matrix:
-        power-law decomposition, ``pk_int`` = constant of the P13 UV term.
+        hankel: P13 kernel = ``k^m H_l[q^2 xi_l^n]``.  matrix: power-law decomposition,
+        and the last P13 row is the UV constant ``pk_int``.
         """
         if self.method == 'matrix':
             fs = self.fftlog_settings
-            p_q_1 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_matter)
+            p_q_matter = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_matter)
             # nu > -3/2 on purpose: the P22 bias blocks come out as I(k) - I(0) by analytic continuation
-            p_q_2 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p22_bias)
-            p_q_3 = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p13_bias)
-            p22 = self._get_pkmu_terms_22(p_q_1, p_q_2)
-            p13_kernel = self._get_pkmu_terms_13(p_q_1, p_q_3)
+            p_q_p22_bias = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p22_bias)
+            p_q_p13_bias = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p13_bias)
+            p22 = self._matrix_p22_blocks(p_q_matter, p_q_p22_bias)
+            p13_kernel = self._matrix_p13_kernels(p_q_matter, p_q_p13_bias)
             pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk), 1) / (2 * jnp.pi**2)
-            return p22, p13_kernel, pk_int
+            # UV block: a row constant in k, its k^2 is applied at the true k (_k_power_13)
+            uv = jnp.broadcast_to(pk_int, (1, self._nfft))
+            return p22, jnp.concatenate([p13_kernel, uv], axis=0)
 
         xi_ln = self._get_xi_ln_array(pk)
         p22 = self._get_p22_blocks(xi_ln)
         p13_kernel = self._get_p13_kernel_blocks(xi_ln)
-        return p22, p13_kernel, None
+        return p22, p13_kernel
 
-    def _pkmu_true(self, k_true, mu_true, sin_true, corrs, pk_data, params):
+    def _pkmu_true(self, k_true, mu_true, sin_true, pt_terms, pk_data, params):
         """Tree level plus one loop at the true (k, mu) (``sin_true`` unused).
 
-        ``L[P] = sum_b p22_b C22_b(mu) + P sum_b p13_kernel_b C13_b(mu)``; with ``do_irres``
+        ``L[P] = sum_b p22_b C22_b(mu) + P sum_b k^{p_b} p13_kernel_b C13_b(mu)`` (``p_b`` =
+        ``_k_power_13``).  With ``do_irres``
         tree = ``Z1 Z1' [P_nw + e^{-D} (1 + D) P_w]``, loop = ``L[P_nw] + e^{-D} (L[P] - L[P_nw])``,
-        ``D = k^2 Sigma^2_s``.  The b2^2 constant ``b2 b2'/2 pk_int2`` is added after, undamped.
+        ``D = k^2 Sigma^2_s`` (``damp_exponent``).  The b2^2 constant ``b2 b2'/2 pk_int2`` is
+        added after, undamped.  Primes denote the second tracer ``params.bias_b``.
+
+        The blocks are interpolated in ln k at the true k.
         """
         f = params.f
-        bias_a = params.bias
+        bias_a = params.bias_a
         bias_b = params.bias_b
-        pk, pk_nw, pk_w, damp = self._linear_at(k_true, mu_true, f, corrs, pk_data)   # (nk, nmu)
+        pk, pk_nw, pk_w, damp_exponent = self._linear_at(k_true, mu_true, f, pt_terms, pk_data)   # (nk, nmu)
 
         # mu powers as products: mu ** p with p = 0 has a NaN derivative at mu = 0.
         mu_pows = [jnp.ones_like(mu_true)]
@@ -327,83 +359,75 @@ class EPT(PowerSpectrum):
             coeffs.append(jnp.sum(c.reshape(nblocks, nterms, -1), axis=1))
         C22, C13 = coeffs
 
-        blocks = [corrs.p22, corrs.p13_kernel]
+        blocks = [pt_terms.p22, pt_terms.p13_kernel]
         if self.do_irres:
-            blocks += [corrs.p22_nw, corrs.p13_kernel_nw]
-        n22, n13 = corrs.p22.shape[0], corrs.p13_kernel.shape[0]
+            blocks += [pt_terms.p22_nw, pt_terms.p13_kernel_nw]
+        n22, n13 = pt_terms.p22.shape[0], pt_terms.p13_kernel.shape[0]
         stack = jnp.concatenate(blocks, axis=0)
-        stack = spline.interp1d(jnp.log(k_true), self._logk_fft, stack)
-        stack = jnp.moveaxis(stack, 0, -1)                             # (nk, nmu, nblocks)
+        # (nfft, nblocks) -> (nk, nmu, nblocks)
+        stack = spline.interp1d(jnp.log(k_true), self._logk_fft, stack.T, axis=0)
+        if _np.any(self._k_power_13):
+            # static k^p of the P13 blocks, at the true k, in the full and the no-wiggle part
+            k_pow = _np.concatenate([_np.zeros(n22, dtype=int), self._k_power_13])
+            k_pow = _np.tile(k_pow, len(blocks) // 2)
+            for p in _np.unique(k_pow[k_pow != 0]):
+                stack = jnp.where(k_pow == p, stack * k_true[..., None] ** int(p), stack)
 
         b1_a, b1_b = bias_a[0], bias_b[0]
         Z1_a = b1_a + f * mu_true**2
         Z1_b = b1_b + f * mu_true**2
-        if corrs.pk_int is not None:
-            Z3_UV_a = self._get_Z3_UV(mu_true, f, b1_a)
-            Z3_UV_b = self._get_Z3_UV(mu_true, f, b1_b)
-            Z1Z3_UV = (Z1_a * Z3_UV_b + Z1_b * Z3_UV_a) / 2
 
-        def loop(offset, P, pk_int):
+        def loop(offset, P):
             p22 = stack[:, :, offset:offset + n22]
             p13_kernel = stack[:, :, offset + n22:offset + n22 + n13]
-            out = jnp.sum(p22 * C22.T, axis=-1) + P * jnp.sum(p13_kernel * C13.T, axis=-1)
-            if pk_int is not None:
-                out = out + k_true**2 * P * pk_int * Z1Z3_UV
-            return out
+            return jnp.sum(p22 * C22.T, axis=-1) + P * jnp.sum(p13_kernel * C13.T, axis=-1)
 
-        loop_full = loop(0, pk, corrs.pk_int)
+        loop_full = loop(0, pk)
         if self.do_irres:
-            loop_nw = loop(n22 + n13, pk_nw, corrs.pk_int_nw)
-            e_damp = jnp.exp(-damp)
-            pkmu = (Z1_a * Z1_b) * (pk_nw + e_damp * (1 + damp) * pk_w)
+            loop_nw = loop(n22 + n13, pk_nw)
+            e_damp = jnp.exp(-damp_exponent)
+            pkmu = (Z1_a * Z1_b) * (pk_nw + e_damp * (1 + damp_exponent) * pk_w)
             pkmu = pkmu + loop_nw + e_damp * (loop_full - loop_nw)
         else:
             pkmu = (Z1_a * Z1_b) * pk + loop_full
         if not self.subtract_k0_const:
             # added after the IR combination: a constant contact term must not be damped
-            pkmu = pkmu + (bias_a[1] * bias_b[1]) / 2. * corrs.pk_int2
+            pkmu = pkmu + (bias_a[1] * bias_b[1]) / 2. * pt_terms.pk_int2
         return pkmu
 
-    def _merge_groups(self, idx_1, blocks_1, idx_2, blocks_2):
-        """``k^3 Re[blocks]`` with the matter/bias group rows put back at ``idx_1``/``idx_2``."""
-        out = jnp.zeros((idx_1.shape[0] + idx_2.shape[0], self._nfft), dtype=blocks_1.dtype)
-        out = out.at[idx_1].set(blocks_1).at[idx_2].set(blocks_2)
+    def _merge_groups(self, idx_matter, blocks_matter, idx_bias, blocks_bias):
+        """``k^3 Re[blocks]`` with the matter/bias group rows put back at ``idx_matter``/``idx_bias``."""
+        out = jnp.zeros((idx_matter.shape[0] + idx_bias.shape[0], self._nfft), dtype=blocks_matter.dtype)
+        out = out.at[idx_matter].set(blocks_matter).at[idx_bias].set(blocks_bias)
         return (self._k**3)[None, :] * jnp.real(out)
 
-    def _get_pkmu_terms_22(self, p_q_1, p_q_2):
+    def _matrix_p22_blocks(self, p_q_matter, p_q_bias):
         """Matrix-path P22 blocks from the decompositions of the matter and bias groups."""
         return self._merge_groups(
-            self._idx_22_nu1, jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu1, p_q_1, p_q_1),
-            self._idx_22_nu2, jnp.einsum('tnm,nj,mj->tj', self.matrices_22_nu2, p_q_2, p_q_2))
+            self._idx_22_matter,
+            jnp.einsum('tnm,nj,mj->tj', self.matrices_22_matter, p_q_matter, p_q_matter),
+            self._idx_22_bias,
+            jnp.einsum('tnm,nj,mj->tj', self.matrices_22_bias, p_q_bias, p_q_bias))
 
-    def _get_pkmu_terms_13(self, p_q_1, p_q_2):
-        """Matrix-path P13 kernels (blocks without their outer P(k))."""
+    def _matrix_p13_kernels(self, p_q_matter, p_q_bias):
+        """Matrix-path P13 kernels (blocks without their outer P(k)) from the matter and bias decompositions."""
         return self._merge_groups(
-            self._idx_13_nu1, jnp.einsum('tn,nj->tj', self.matrices_13_nu1, p_q_1),
-            self._idx_13_nu2, jnp.einsum('tn,nj->tj', self.matrices_13_nu2, p_q_2))
-
-    @staticmethod
-    def _get_Z3_UV(mu, f, b1):
-        return - 61./315. * b1 \
-            + ((- 3./5. + 2./105. * b1) * f + (- 16./35. - 1./3. * b1) * f**2) * mu**2 \
-            + ((- 46./105.) * f**2 + (- 1./3.) * f**3) * mu**4
+            self._idx_13_matter, jnp.einsum('tn,nj->tj', self.matrices_13_matter, p_q_matter),
+            self._idx_13_bias, jnp.einsum('tn,nj->tj', self.matrices_13_bias, p_q_bias))
 
     def _get_xi_ln_array(self, array):
         """Forward transforms ``xi_ln[l, n]`` of ``array`` on ``q_padded[l]`` (upper padded band zeroed)."""
-        fs = self.fftlog_settings
         hg = self._hankel
         fx = hg.pad_input(array / (2 * jnp.pi**2))
-        xis = fftlog.hankel(fs.nu_pld, fx, hg.k_padded, None, self._xi_pld_u_m,
-                            hg.npad, crop=False, y_pow=self._xi_pld_q_factor)
-        xis_n0 = fftlog.hankel(fs.nu_pld_n0, fx, hg.k_padded, None, self._xi_pld_u_m_n0,
-                               hg.npad, crop=False, y_pow=self._xi_pld_q_factor_n0)
-        xis = jnp.where(self._xi_pld_n0_mask[:, None], xis_n0, xis) * hg.mask_xi
+        xis = self._xi_forward.apply(fx, hg.grid)
+        xis_n0 = self._xi_forward_n0.apply(fx, hg.grid)
+        xis = jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * hg.mask_xi
         xi_ln = jnp.zeros((5, 3, xis.shape[-1]))
         ls = self._ln_list[:, 0]
         ns = self._ln_list[:, 1]
         return xi_ln.at[ls, ns].set(xis)
 
-    def _get_pk_ln(self, l, n, array):
+    def _q_to_k(self, l, n, array):
         """Backward FFTlog of a source on ``q_padded[l]`` onto the core k grid."""
         hg = self._hankel
         # w_xi: end weight 1/2 at the support edge (FFTlog's m = 0 coefficient is the node sum)
@@ -424,7 +448,7 @@ class EPT(PowerSpectrum):
             xi = xi_ln[l, n]
             source = spline.interp1d(jnp.log(hg.q_padded[0]),
                                      jnp.log(hg.q_padded[l]), xi * xi)
-            pk_ln = 4 * jnp.pi * self._get_pk_ln(0, 0, source)
+            pk_ln = 4 * jnp.pi * self._q_to_k(0, 0, source)
             # end-weighted node sum of the same source, not B(k_min), which carries the output edge error
             c0 = 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
             return pk_ln, c0
@@ -438,6 +462,6 @@ class EPT(PowerSpectrum):
 
         def get_p13_kernel(term):
             l, n, m = term
-            pk_ln = self._get_pk_ln(l, -1, xi_ln[l, n])  # (nk,)
+            pk_ln = self._q_to_k(l, -1, xi_ln[l, n])  # (nk,)
             return (self._k ** m) * pk_ln
         return jax.vmap(get_p13_kernel)(self._lnm_13)  # (nterms, nk)

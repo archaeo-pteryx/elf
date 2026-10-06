@@ -10,15 +10,19 @@ from . import spline
 
 @dataclass(frozen=True)
 class DSTSettings:
-    """Settings of :func:`get_pk_nw` (module instance ``DST_SETTINGS``; ``kh_*``, ``n_*`` DST only)."""
+    """Settings of :func:`get_pk_nw` (module instance ``DST_SETTINGS``).
+
+    ``kmin_ext``, ``kmax_ext``, ``n_mid`` and ``n_ext`` are used by all three no-wiggle
+    methods ('DST', 'SG', 'WH'), the other fields only by 'DST'.
+    """
 
     kmin_ext: float = 1e-6
     """Lower end (h/Mpc) of the returned no-wiggle table."""
     kmax_ext: float = 1e3
     """Upper end (h/Mpc) of the returned no-wiggle table."""
-    kh_min: float = 7e-5
+    k_mpc_min: float = 7e-5
     """DST: lower end of the linear k grid, in 1/Mpc."""
-    kh_max: float = 7.0
+    k_mpc_max: float = 7.0
     """DST: upper end of the linear k grid, in 1/Mpc."""
     n_grid: int = 2**15
     """DST: number of nodes of the linear k grid."""
@@ -46,14 +50,14 @@ def _pk_below(pk_data, lambda_ir, kmin, num):
 def get_Sigma2(pk_data, r_bao, lambda_ir, kmin=1e-4, num=1000):
     """BAO displacement dispersion ``Sigma^2``, integrated over ``k <= lambda_ir``."""
     q, pk = _pk_below(pk_data, lambda_ir, kmin, num)
-    integrand = pk * (1 - spherical_jn(0, r_bao * q) + 2 * spherical_jn(2, r_bao * q))
+    integrand = pk * (1 - _j0(r_bao * q) + 2 * _j2(r_bao * q))
     res = jnp.trapezoid(integrand, x=q) / (6 * jnp.pi**2)
     return res
 
 def get_dSigma2(pk_data, r_bao, lambda_ir, kmin=1e-4, num=1000):
     """Anisotropic part ``delta Sigma^2``, integrated over ``k <= lambda_ir``."""
     q, pk = _pk_below(pk_data, lambda_ir, kmin, num)
-    integrand = pk * spherical_jn(2, r_bao * q)
+    integrand = pk * _j2(r_bao * q)
     res = jnp.trapezoid(integrand, x=q) / (2 * jnp.pi**2)
     return res
 
@@ -63,16 +67,21 @@ def damping_exponent(k, mu, f, Sigma2, dSigma2):
     return k**2 * Sigma2_s
 
 
-def spherical_jn(n, x):
-    x = jnp.atleast_1d(x)
-    res = jax.lax.cond(n == 0, 
-                       lambda: jnp.sin(x) / x, 
-                       lambda: jax.lax.cond(n == 1, 
-                                            lambda: (jnp.sin(x) - x * jnp.cos(x)) / x**2, 
-                                            lambda: ((3 - x**2) * jnp.sin(x) - 3 * x * jnp.cos(x)) / x**3))
-    return res
+def _j0(x):
+    """Spherical Bessel function ``j_0(x) = sin(x) / x`` (x > 0)."""
+    return jnp.sin(x) / x
+
+
+def _j2(x):
+    """Spherical Bessel function ``j_2(x) = ((3 - x^2) sin(x) - 3 x cos(x)) / x^3`` (x > 0)."""
+    return ((3 - x**2) * jnp.sin(x) - 3 * x * jnp.cos(x)) / x**3
 
 def get_pk_nw(pk_data, h, method='DST'):
+    """No-wiggle table ``(2, n)`` of ``pk_data`` (k in h/Mpc) by ``method``.
+
+    'DST' (discrete sine transform of ``ln(k P)`` on a linear grid in 1/Mpc, hence ``h``),
+    'SG' (Savitzky-Golay filter of ``ln P``) or 'WH' (Whittaker-Henderson smoothing of ``ln P``).
+    """
     s = DST_SETTINGS
     kmin_ext, kmax_ext = s.kmin_ext, s.kmax_ext
 
@@ -81,12 +90,12 @@ def get_pk_nw(pk_data, h, method='DST'):
         return get_pk(k, pk_data, kmin=kmin_ext, kmax=kmax_ext)
 
     if method == 'DST':
-        kh = jnp.linspace(s.kh_min, s.kh_max, s.n_grid) # 1/Mpc
-        k = kh / h
+        k_mpc = jnp.linspace(s.k_mpc_min, s.k_mpc_max, s.n_grid) # 1/Mpc
+        k = k_mpc / h
         kmin, kmax = k[0], k[-1]
         pk = pk_at(k)
 
-        pk_nw = _remove_wiggle_dst(kh, pk, s.n_min, s.n_max)
+        pk_nw = _remove_wiggle_dst(k_mpc, pk, s.n_min, s.n_max)
 
         # ad-hoc adjustment at high k for extrapolation
         pk_nw = pk_nw.at[-s.n_keep_high:].set(pk[-s.n_keep_high:])
@@ -184,9 +193,9 @@ def _idct2_ortho(y):
     return jnp.stack([v[:h], v[h:][::-1]], axis=-1).reshape(N)
 
 
-def _remove_wiggle_dst(kh, pk, n_min, n_max):
+def _remove_wiggle_dst(k_mpc, pk, n_min, n_max):
     signs = (-1)**jnp.arange(0, len(pk))
-    harms = _dct2_ortho(jnp.log(kh * pk) * signs)[::-1]
+    harms = _dct2_ortho(jnp.log(k_mpc * pk) * signs)[::-1]
 
     n_half = int(len(harms) / 2)
     n = jnp.arange(1, n_half + 1)
@@ -208,7 +217,7 @@ def _remove_wiggle_dst(kh, pk, n_min, n_max):
     harms_s = harms_s.at[0::2].set(harms_odd_s)
     harms_s = harms_s.at[1::2].set(harms_even_s)
 
-    pk_nw = jnp.exp(_idct2_ortho(harms_s[::-1]) * signs) / kh
+    pk_nw = jnp.exp(_idct2_ortho(harms_s[::-1]) * signs) / k_mpc
     return pk_nw
 
 def _savgol_coeffs(window_length, poly_degree, dtype=jnp.float64):

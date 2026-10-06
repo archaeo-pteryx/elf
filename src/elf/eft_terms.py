@@ -1,7 +1,9 @@
 """Shared EFT counterterm and stochasticity shapes.
 
-The backends build the base spectrum (a k-space array, or the fused Zel'dovich
-integrand in LPT); this module owns only the parameter-dependent shapes.
+:class:`Counterterms` decides where the counterterms enter.  For the 'linear' and
+'linear_ir_resum' bases they are added in k space to the spectrum (the backends
+supply ``P_lin``, ``P_nw``, ``P_w`` and the damping exponent at the true k).  For
+'zeldovich' they weight LPT's fused Zel'dovich integrand (template 12).
 """
 
 from dataclasses import dataclass
@@ -22,7 +24,8 @@ class Counterterms:
     """Counterterm base and the contractions of ``ctr = (c0, c2, c4, c6, c44, c46, c48)``.
 
     Both orders multiply the same base spectrum, with no bias or Kaiser factor;
-    for a cross spectrum the coefficients belong to the pair.
+    for a cross spectrum the coefficients belong to the pair.  The base decides
+    where they enter (:meth:`kspace_base_pk`, :meth:`add_kspace`, :meth:`zeldovich_weight`).
     """
 
     base: CountertermBase
@@ -34,10 +37,37 @@ class Counterterms:
                 f"'zeldovich', got {self.base!r}"
             )
 
-    @property
-    def needs_kspace_base(self):
-        """True unless the base is the fused LPT 'zeldovich' integrand."""
-        return self.base != "zeldovich"
+    def kspace_base_pk(self, linear_at):
+        """Base spectrum of the k-space counterterms, None for 'zeldovich'.
+
+        ``linear_at()`` returns ``(pk, pk_nw, pk_w, damp_exponent)`` at the true k
+        (``base.PowerSpectrum._linear_at``) and is called only for the k-space bases.
+        'linear' gives ``pk`` and 'linear_ir_resum' ``pk_nw + exp(-damp_exponent) pk_w``.
+        """
+        if self.base == "zeldovich":
+            return None
+        pk, pk_nw, pk_w, damp_exponent = linear_at()
+        if self.base == "linear":
+            return pk
+        return pk_nw + jnp.exp(-damp_exponent) * pk_w
+
+    def add_kspace(self, pkmu, k, mu, f, ctr, ctr_base_pk):
+        """``pkmu`` plus the leading and NLO counterterms on ``ctr_base_pk`` (``pkmu`` itself if None)."""
+        if ctr_base_pk is None:
+            return pkmu
+        return (pkmu + self.leading(k, mu, f, ctr, ctr_base_pk)
+                + self.nlo(k, mu, f, ctr, ctr_base_pk))
+
+    def zeldovich_weight(self, k, mu, f, ctr):
+        """Weight of LPT's Zel'dovich template, the leading plus NLO shape for 'zeldovich' and 0 otherwise.
+
+        The k-space bases are added by :meth:`add_kspace` instead.
+        """
+        if self.base != "zeldovich":
+            return jnp.zeros_like(k)
+        leading_coefficients, nlo_coefficients = self.split_coefficients(ctr)
+        return (self.leading_shape(k, mu, f, leading_coefficients)
+                + self.nlo_shape(k, mu, f, nlo_coefficients))
 
     @staticmethod
     def split_coefficients(ctr):
@@ -59,10 +89,10 @@ class Counterterms:
         return -2.0 * k**2 * coefficient
 
     @classmethod
-    def leading(cls, k, mu, f, ctr, base_pk):
+    def leading(cls, k, mu, f, ctr, ctr_base_pk):
         """Leading ``k^2`` counterterm from the full seven-slot ``ctr`` vector."""
         leading_coefficients, _ = cls.split_coefficients(ctr)
-        return cls.leading_shape(k, mu, f, leading_coefficients) * base_pk
+        return cls.leading_shape(k, mu, f, leading_coefficients) * ctr_base_pk
 
     @staticmethod
     def nlo_shape(k, mu, f, nlo_coefficients):
@@ -73,10 +103,10 @@ class Counterterms:
         return -2.0 * coefficient * (k * mu * f)**4
 
     @classmethod
-    def nlo(cls, k, mu, f, ctr, base_pk):
+    def nlo(cls, k, mu, f, ctr, ctr_base_pk):
         """NLO ``k^4`` counterterm from the full seven-slot ``ctr`` vector."""
         _, nlo_coefficients = cls.split_coefficients(ctr)
-        return cls.nlo_shape(k, mu, f, nlo_coefficients) * base_pk
+        return cls.nlo_shape(k, mu, f, nlo_coefficients) * ctr_base_pk
 
 
 def stochasticity(k, mu, stochastic_coefficients):
