@@ -196,14 +196,13 @@ class EPT(PowerSpectrum):
         row (l, n) lands on ``q_padded[l]``, the conjugate grid of the backward kernel
         ``u_m[l]``.  The n = 0 rows take the ``nu_xi_n0`` result.
         """
-        fs = self.fftlog_settings
-        hg = self._hankel = fftlog.HankelGrids(self._k, fs, self.pad_mode, lmax)
+        self._hankel = fftlog.HankelGrids(self._k, self.fftlog_settings, self.pad_mode, lmax)
         self._set_xi_ells_transform()
 
         ells = [l for l, _ in self._ln_list_static]
         ns = [n for _, n in self._ln_list_static]
-        self._xi_forward = fftlog.forward_transform(hg.grid, fs.nu, ells, ns, nu_in=fs.nu_xi)
-        self._xi_forward_n0 = fftlog.forward_transform(hg.grid, fs.nu, ells, ns, nu_in=fs.nu_xi_n0)
+        self._xi_forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, ells, ns, nu_in=self.fftlog_settings.nu_xi)
+        self._xi_forward_n0 = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, ells, ns, nu_in=self.fftlog_settings.nu_xi_n0)
         self._xi_n0_mask = jnp.array(
             [n == 0 for _, n in self._ln_list_static], dtype=bool
         )
@@ -293,10 +292,9 @@ class EPT(PowerSpectrum):
             pk_w = pk - pk_nw
             pk = pk_nw + pk_w
         p22, p13_kernel = self._get_blocks(pk)
-        hg = self._hankel
         # the end weight multiplies P^2 once
-        pk_int2 = hg.grid.moment(
-            hg.w_input * fftlog.pad(pk, hg.grid, hg.pad_mode)**2, 3) / (2 * jnp.pi**2)
+        pk_int2 = self._hankel.grid.moment(
+            self._hankel.w_input * fftlog.pad(pk, self._hankel.grid, self._hankel.pad_mode)**2, 3) / (2 * jnp.pi**2)
         if self.do_irres:
             p22_nw, p13_kernel_nw = self._get_blocks(pk_nw)
         else:
@@ -417,11 +415,10 @@ class EPT(PowerSpectrum):
 
     def _get_xi_ln_array(self, array):
         """Forward transforms ``xi_ln[l, n]`` of ``array`` on ``q_padded[l]`` (upper padded band zeroed)."""
-        hg = self._hankel
-        fx = hg.pad_input(array / (2 * jnp.pi**2))
-        xis = self._xi_forward.apply(fx, hg.grid)
-        xis_n0 = self._xi_forward_n0.apply(fx, hg.grid)
-        xis = jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * hg.mask_xi
+        fx = self._hankel.pad_input(array / (2 * jnp.pi**2))
+        xis = self._xi_forward.apply(fx, self._hankel.grid)
+        xis_n0 = self._xi_forward_n0.apply(fx, self._hankel.grid)
+        xis = jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * self._hankel.mask_xi
         xi_ln = jnp.zeros((5, 3, xis.shape[-1]))
         ls = self._ln_list[:, 0]
         ns = self._ln_list[:, 1]
@@ -429,11 +426,10 @@ class EPT(PowerSpectrum):
 
     def _q_to_k(self, l, n, array):
         """Backward FFTlog of a source on ``q_padded[l]`` onto the core k grid."""
-        hg = self._hankel
         # w_xi: end weight 1/2 at the support edge (FFTlog's m = 0 coefficient is the node sum)
-        fx = array * hg.q_padded[l]**(n + 3) * hg.w_xi
-        return fftlog.hankel(self.fftlog_settings.nu, fx, hg.q_padded[l], hg.k_padded,
-                             hg.u_m[l], hg.npad, crop=True)
+        fx = array * self._hankel.q_padded[l]**(n + 3) * self._hankel.w_xi
+        return fftlog.hankel(self.fftlog_settings.nu, fx, self._hankel.q_padded[l], self._hankel.k_padded,
+                             self._hankel.u_m[l], self._hankel.npad, crop=True)
 
     def _get_p22_blocks(self, xi_ln):
         """P22 blocks ``(nterms, nk)`` in ``coeff_info_22`` order.
@@ -441,16 +437,14 @@ class EPT(PowerSpectrum):
         ``B(k) = 4 pi int dq q^2 (xi_l^n)^2 j_0(kq)``; block = ``k^m B`` for m > 0 and
         ``B - C`` for m = 0, ``C = 4 pi dln sum_j w_j q_j^3 (xi_l^n)_j^2``.
         """
-        hg = self._hankel
-
         def block(ln):
             l, n = ln[0], ln[1]
             xi = xi_ln[l, n]
-            source = spline.interp1d(jnp.log(hg.q_padded[0]),
-                                     jnp.log(hg.q_padded[l]), xi * xi)
+            source = spline.interp1d(jnp.log(self._hankel.q_padded[0]),
+                                     jnp.log(self._hankel.q_padded[l]), xi * xi)
             pk_ln = 4 * jnp.pi * self._q_to_k(0, 0, source)
             # end-weighted node sum of the same source, not B(k_min), which carries the output edge error
-            c0 = 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
+            c0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(source * self._hankel.w_xi, 3)
             return pk_ln, c0
 
         pk_ln, c0 = jax.vmap(block)(self._ln_22)      # (nterms, nk), (nterms,)

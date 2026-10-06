@@ -492,52 +492,52 @@ class LPT(PowerSpectrum):
         fs = self.fftlog_settings
         l_list = list(range(lmax + 1))
 
-        hg = self._hankel = fftlog.HankelGrids(self._k, fs, self.pad_mode, lmax)
+        self._hankel = fftlog.HankelGrids(self._k, fs, self.pad_mode, lmax)
         self._set_xi_ells_transform()
-        dln = hg.grid.dln
+        dln = self._hankel.grid.dln
 
-        self._q_padded = hg.q_padded[0]
-        self._q = hg.grid.crop(self._q_padded)
+        self._q_padded = self._hankel.q_padded[0]
+        self._q = self._hankel.grid.crop(self._q_padded)
         self._log_q_padded = jnp.log(self._q_padded)
 
-        forward = fftlog.forward_transform(hg.grid, fs.nu, self.ln_list[:, 0], self.ln_list[:, 1],
+        forward = fftlog.forward_transform(self._hankel.grid, fs.nu, self.ln_list[:, 0], self.ln_list[:, 1],
                                            nu_kernel=fs.nu)
         self._xi_transform = _XiTransform(forward=forward, log_q_rows=jnp.log(forward.q))
 
         u_m = jnp.array([
-            fftlog.hankel_setup(l, fs.nu, hg.grid, lnxy=hg.lnxy[0])[2] for l in l_list
+            fftlog.hankel_setup(l, fs.nu, self._hankel.grid, lnxy=self._hankel.lnxy[0])[2] for l in l_list
         ])
         # R sources stay on their own grid q_padded[l]: the conjugate relation lands them on k_padded
         r_ln = [(0, 0), (2, 0), (4, 0), (1, -1), (3, -1)]
         ln_np = _np.asarray(self.ln_list)
-        k_ref = _np.asarray(hg.k_padded)
+        k_ref = _np.asarray(self._hankel.k_padded)
         for l, _n in r_ln:
-            k_back = _np.asarray(hg.q_grids[l].conjugate(hg.lnxy[l]).x)
+            k_back = _np.asarray(self._hankel.q_grids[l].conjugate(self._hankel.lnxy[l]).x)
             assert _np.allclose(k_back, k_ref, rtol=1e-12), (
                 f'R-source backward output grid for ell={l} is not the common '
                 'k grid; the conjugate relation of the low-ringing phase is '
                 'broken')
-        setups_n0 = [fftlog.hankel_setup(l, fs.nu_n0, hg.grid) for l in l_list]
-        q_src_padded = jnp.stack([hg.q_padded, jnp.array([s[1].x for s in setups_n0])])
+        setups_n0 = [fftlog.hankel_setup(l, fs.nu_n0, self._hankel.grid) for l in l_list]
+        q_src_padded = jnp.stack([self._hankel.q_padded, jnp.array([s[1].x for s in setups_n0])])
         self._source_transform = _SourceTransform(
             u_m=u_m,
             four_pi_q3_padded=4.0 * jnp.pi * self._q_padded**3,
-            end_weights_Q=fftlog.trapezoid_weights('core_to_2kmax', self._nfft, hg.npad, dln),
-            end_weights_R=fftlog.trapezoid_weights('core', self._nfft, hg.npad, dln),
+            end_weights_Q=fftlog.trapezoid_weights('core_to_2kmax', self._nfft, self._hankel.npad, dln),
+            end_weights_R=fftlog.trapezoid_weights('core', self._nfft, self._hankel.npad, dln),
             R_source_rows=jnp.asarray(
                 [int(_np.flatnonzero((ln_np[:, 0] == l) & (ln_np[:, 1] == n))[0])
                  for l, n in r_ln], dtype=jnp.int32),
             R_source_ells=jnp.asarray([l for l, _ in r_ln], dtype=jnp.int32),
-            u_m_src=jnp.stack([hg.u_m, jnp.array([s[2] for s in setups_n0])]),
+            u_m_src=jnp.stack([self._hankel.u_m, jnp.array([s[2] for s in setups_n0])]),
             q_src_padded=q_src_padded,
             log_q_src_padded=jnp.log(q_src_padded),
         )
 
         end_weights_q_core = fftlog.trapezoid_weights('core', self._nfft, 0, dln)
-        basis = fftlog.pad(jnp.eye(self._q.shape[0], dtype=self._q.dtype), hg.q_grids[0], 'zero-pad')
+        basis = fftlog.pad(jnp.eye(self._q.shape[0], dtype=self._q.dtype), self._hankel.q_grids[0], 'zero-pad')
 
         def build_one(u_m_l):
-            pk = fftlog.hankel(fs.nu, basis, self._q_padded, hg.k_padded, u_m_l, hg.npad)
+            pk = fftlog.hankel(fs.nu, basis, self._q_padded, self._hankel.k_padded, u_m_l, self._hankel.npad)
             return pk.T
 
         ell_indices = jnp.arange(self.lmax + 1, dtype=self._q.dtype)
@@ -575,19 +575,18 @@ class LPT(PowerSpectrum):
         ``xi_ln_common`` has shape ``(n_arrays, 5, 5, n_padded)``. n = -1, -2 sit at the
         Python indices -1, -2, and the entries not in ``ln_list`` are zero.
         """
-        hg = self._hankel
         arrays = jnp.atleast_2d(jnp.asarray(arrays))
         ells = self.ln_list[:, 0]
         ns = self.ln_list[:, 1]
 
-        fx = hg.pad_input(arrays / (2 * jnp.pi**2))              # (n_arrays, n_padded)
-        raw = self._xi_transform.forward.apply(fx[:, None, :], hg.grid)   # (n_arrays, n_ln, n_padded)
+        fx = self._hankel.pad_input(arrays / (2 * jnp.pi**2))              # (n_arrays, n_padded)
+        raw = self._xi_transform.forward.apply(fx[:, None, :], self._hankel.grid)   # (n_arrays, n_ln, n_padded)
 
         log_q_rows = self._xi_transform.log_q_rows
         xis = jax.vmap(lambda row: self._resample_to_common_q_padded(log_q_rows, row))(raw)
-        xis = xis * hg.mask_xi
-        raw = raw * hg.mask_xi
-        xi_ln = jnp.zeros((arrays.shape[0], 5, 5, hg.k_padded.shape[0]))
+        xis = xis * self._hankel.mask_xi
+        raw = raw * self._hankel.mask_xi
+        xi_ln = jnp.zeros((arrays.shape[0], 5, 5, self._hankel.k_padded.shape[0]))
         return xi_ln.at[:, ells, ns].set(xis), raw
 
     def _get_Qs_Rs(self, xi_ln_common, xi_ln_own_grid, pk_lin_padded):
@@ -604,33 +603,31 @@ class LPT(PowerSpectrum):
         k^2 int dq q xi_l^0(q) j_l(kq) (l = 0, 2, 4) and k^3 int dq q xi_l^{-1}(q) j_l(kq)
         (l = 1, 3). Q is cut to [k_min, 2 k_max], R to [k_min, k_max].
         """
-        hg = self._hankel
-        st = self._source_transform
         nu = self.fftlog_settings.nu
         integrands = jnp.stack([
             8/15 * xi_ln_common[0,0]**2 - 16/21 * xi_ln_common[2,0]**2
             + 8/35 * xi_ln_common[4,0]**2,
             xi_ln_common[1,-1]**2 - xi_ln_common[3,-1]**2,
-        ], axis=0) * hg.w_xi
+        ], axis=0) * self._hankel.w_xi
         res = fftlog.hankel(
-            nu, st.four_pi_q3_padded * integrands, self._q_padded,
-            hg.k_padded, st.u_m[0], hg.npad, crop=False,
+            nu, self._source_transform.four_pi_q3_padded * integrands, self._q_padded,
+            self._hankel.k_padded, self._source_transform.u_m[0], self._hankel.npad, crop=False,
         )
-        res = res * st.end_weights_Q
+        res = res * self._source_transform.end_weights_Q
         Q1 = res[0]
-        Q2 = Q1 - 2/5 * hg.k_padded**2 * res[1]
+        Q2 = Q1 - 2/5 * self._hankel.k_padded**2 * res[1]
         Q5 = (Q1 + Q2) / 2
         Qs = jnp.stack([Q1, Q2, Q5], axis=0)
 
-        ells = st.R_source_ells
-        q_l = hg.q_padded[ells]
-        xis = xi_ln_own_grid[st.R_source_rows] * hg.w_xi
+        ells = self._source_transform.R_source_ells
+        q_l = self._hankel.q_padded[ells]
+        xis = xi_ln_own_grid[self._source_transform.R_source_rows] * self._hankel.w_xi
         pk_list = fftlog.hankel(
             nu, q_l**2 * xis, q_l,
-            hg.k_padded, hg.u_m[ells], hg.npad, crop=False,
-        ) * (pk_lin_padded * st.end_weights_R)
+            self._hankel.k_padded, self._hankel.u_m[ells], self._hankel.npad, crop=False,
+        ) * (pk_lin_padded * self._source_transform.end_weights_R)
         pk_00, pk_20, pk_40, pk_1m1, pk_3m1 = pk_list
-        k = hg.k_padded
+        k = self._hankel.k_padded
         R1 = k**2 * (8/15*pk_00 - 16/21*pk_20 + 8/35*pk_40)
         R3 = (k**2 * (2/5*pk_00 - 6/7*pk_20 + 16/35*pk_40)
               + k**3 * (2/5*pk_1m1 - 2/5*pk_3m1))
@@ -649,26 +646,23 @@ class LPT(PowerSpectrum):
         Sources with ``n >= 0`` use the bias ``nu_n0``, the others ``nu``. Each output is
         resampled from its own grid onto ``_q_padded``.
         """
-        hg = self._hankel
-        st = self._source_transform
-        fs = self.fftlog_settings
         sources = jnp.stack(sources, axis=0)
         ells = _np.asarray(ells)
         ns = _np.asarray(ns)
         group = (ns >= 0).astype(int)                 # bias group: 0 nu, 1 nu_n0
-        nu = _np.where(group == 1, fs.nu_n0, fs.nu)
-        fx = sources * hg.k_padded[None, :] ** (jnp.asarray(ns)[:, None] + 3) / (2 * jnp.pi**2)
+        nu = _np.where(group == 1, self.fftlog_settings.nu_n0, self.fftlog_settings.nu)
+        fx = sources * self._hankel.k_padded[None, :] ** (jnp.asarray(ns)[:, None] + 3) / (2 * jnp.pi**2)
         if ells.ndim == 2:
             fx = fx[:, None, :]
             group = _np.broadcast_to(group[:, None], ells.shape)
             nu = nu[:, None]
         nu = float(nu.flat[0]) if _np.all(nu == nu.flat[0]) else jnp.asarray(nu)[..., None]
         d = fftlog.hankel(
-            nu, fx, hg.k_padded, st.q_src_padded[group, ells],
-            st.u_m_src[group, ells], hg.npad, crop=False,
+            nu, fx, self._hankel.k_padded, self._source_transform.q_src_padded[group, ells],
+            self._source_transform.u_m_src[group, ells], self._hankel.npad, crop=False,
         )
         rows = self._resample_to_common_q_padded(
-            st.log_q_src_padded[group, ells].reshape(-1, d.shape[-1]),
+            self._source_transform.log_q_src_padded[group, ells].reshape(-1, d.shape[-1]),
             d.reshape(-1, d.shape[-1]))
         return rows.reshape(d.shape)
 
@@ -835,33 +829,30 @@ class LPT(PowerSpectrum):
         added once.
         The theta row is the q < q_min ball ``D_theta = (96 pi / 5) q_min^2 U3(q_min)``.
         """
-        hg = self._hankel
-        st = self._source_transform
-        shape = self._k.shape
         q_core = fftlog.LogGrid(self._q)
         w_core = self._final_transform.end_weights_q_core
 
         def outside_core_constant(corr):
-            return jnp.broadcast_to(-4 * jnp.pi * q_core.moment(w_core * corr, 3), shape)
+            return jnp.broadcast_to(-4 * jnp.pi * q_core.moment(w_core * corr, 3), self._k.shape)
 
         source = 0.5 * xi_lin_padded**2
         b2sq_direct = fftlog.hankel(
             self.fftlog_settings.nu,
-            st.four_pi_q3_padded * source * hg.w_xi,
-            self._q_padded, hg.k_padded, st.u_m[0], hg.npad, crop=True,
+            self._source_transform.four_pi_q3_padded * source * self._hankel.w_xi,
+            self._q_padded, self._hankel.k_padded, self._source_transform.u_m[0], self._hankel.npad, crop=True,
         )
         # C_q: the k -> 0 limit of b2sq_direct as the end-weighted sum of the same samples
-        b2sq_direct_k0 = 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
+        b2sq_direct_k0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(source * self._hankel.w_xi, 3)
         # the end weight multiplies P^2 once
-        b2sq_const = 0.5 * hg.grid.moment(
-            hg.w_input * fftlog.pad(pk_lin, hg.grid, hg.pad_mode)**2, 3) / (2 * jnp.pi**2)
+        b2sq_const = 0.5 * self._hankel.grid.moment(
+            self._hankel.w_input * fftlog.pad(pk_lin, self._hankel.grid, self._hankel.pad_mode)**2, 3) / (2 * jnp.pi**2)
         theta_ball = (96 * jnp.pi / 5) * self._q[0]**2 * U3[0]
         return jnp.stack([
             outside_core_constant(chi),
             outside_core_constant(zeta),
             b2sq_direct - b2sq_direct_k0,
-            jnp.broadcast_to(b2sq_const, shape),
-            jnp.broadcast_to(theta_ball, shape),
+            jnp.broadcast_to(b2sq_const, self._k.shape),
+            jnp.broadcast_to(theta_ball, self._k.shape),
         ], axis=0)
 
     @partial(jit, static_argnames=['self'])
@@ -881,22 +872,21 @@ class LPT(PowerSpectrum):
         ``h=None`` skips them (the template and component methods do so), and such
         ``pt_terms`` cannot be fed to the spectrum methods under that base.
         """
-        hg = self._hankel
         pk_lin = self._pk_at(self._k, pk_data)
         pk_lin_lt = pk_lin * jnp.exp(-(self._k / self.k_IR)**2)
 
-        pk_int = hg.grid.moment(hg.pad_input(pk_lin), 1) / (2 * jnp.pi**2)
-        pk_int_lt = hg.grid.moment(hg.pad_input(pk_lin_lt), 1) / (2 * jnp.pi**2)
+        pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk_lin), 1) / (2 * jnp.pi**2)
+        pk_int_lt = self._hankel.grid.moment(self._hankel.pad_input(pk_lin_lt), 1) / (2 * jnp.pi**2)
 
         xi_ln_padded, xi_raw_padded = self._get_xi_ln(
             jnp.stack([pk_lin, pk_lin_lt], axis=0))
-        xi_ln = hg.grid.crop(xi_ln_padded[0])
-        xi_ln_lt = hg.grid.crop(xi_ln_padded[1])
+        xi_ln = self._hankel.grid.crop(xi_ln_padded[0])
+        xi_ln_lt = self._hankel.grid.crop(xi_ln_padded[1])
 
         corrs_tree = self._get_corrs_tree(xi_ln, xi_ln_lt, pk_int, pk_int_lt)
 
         Qs, Rs = self._get_Qs_Rs(xi_ln_padded[0], xi_raw_padded[0],
-                                 fftlog.pad(pk_lin, hg.grid, 'zero-pad'))
+                                 fftlog.pad(pk_lin, self._hankel.grid, 'zero-pad'))
         corrs_matter_1loop, M22 = self._get_corrs_matter_1loop(Qs, Rs, corrs_tree[Row.Y_LIN])
         corrs_bias = self._get_corrs_bias(Qs, Rs, xi_ln, M22)
 
