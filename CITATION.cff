@@ -22,5 +22,9 @@ preferred-citation:
     - family-names: "Akitsu"
       given-names: "Kazuyuki"
       orcid: "https://orcid.org/0000-0001-6473-3420"
+
   title: "Fast and accurate differentiable code of the galaxy power spectrum based on Eulerian and Lagrangian one-loop perturbation theories"
+  journal: "arXiv e-prints"
   year: 2026
+  doi: "10.48550/arXiv.2610.08023"
+  url: "https://arxiv.org/abs/2610.08023"
