@@ -63,7 +63,7 @@ from .utils_lpt import (
 # Powers of (b1, b2, bG2, bGamma3) of the 12 bias templates (total degree <= 2, as cross_bias_factor needs).
 # Row t is template t of _TEMPLATE_MATRIX. Template.CTR, the Zel'dovich counterterm, has no
 # row. LPT._get_lpt_bias_factors turns the rows into the 12 bias weights of a tracer pair.
-_LPT_BIAS_DEGREES = jnp.array([
+_LPT_BIAS_DEGREES = _np.array([
     [0, 0, 0, 0],   # 1
     [1, 0, 0, 0],   # b1
     [2, 0, 0, 0],   # b1^2
@@ -489,10 +489,9 @@ class LPT(PowerSpectrum):
         ``_q_padded`` is the l = 0 output grid, and ``_q`` is its core. ``lmax`` is the
         highest order needed, max(4, ``self.lmax``).
         """
-        fs = self.fftlog_settings
         l_list = list(range(lmax + 1))
 
-        self._hankel = fftlog.HankelGrids(self._k, fs, self.pad_mode, lmax)
+        self._hankel = fftlog.HankelGrids(self._k, self.fftlog_settings, self.pad_mode, lmax)
         self._set_xi_ells_transform()
         dln = self._hankel.grid.dln
 
@@ -500,12 +499,12 @@ class LPT(PowerSpectrum):
         self._q = self._hankel.grid.crop(self._q_padded)
         self._log_q_padded = jnp.log(self._q_padded)
 
-        forward = fftlog.forward_transform(self._hankel.grid, fs.nu, self.ln_list[:, 0], self.ln_list[:, 1],
-                                           nu_kernel=fs.nu)
+        forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, self.ln_list[:, 0], self.ln_list[:, 1],
+                                           nu_kernel=self.fftlog_settings.nu)
         self._xi_transform = _XiTransform(forward=forward, log_q_rows=jnp.log(forward.q))
 
         u_m = jnp.array([
-            fftlog.hankel_setup(l, fs.nu, self._hankel.grid, lnxy=self._hankel.lnxy[0])[2] for l in l_list
+            fftlog.hankel_setup(l, self.fftlog_settings.nu, self._hankel.grid, lnxy=self._hankel.lnxy[0])[2] for l in l_list
         ])
         # R sources stay on their own grid q_padded[l]: the conjugate relation lands them on k_padded
         r_ln = [(0, 0), (2, 0), (4, 0), (1, -1), (3, -1)]
@@ -517,7 +516,7 @@ class LPT(PowerSpectrum):
                 f'R-source backward output grid for ell={l} is not the common '
                 'k grid; the conjugate relation of the low-ringing phase is '
                 'broken')
-        setups_n0 = [fftlog.hankel_setup(l, fs.nu_n0, self._hankel.grid) for l in l_list]
+        setups_n0 = [fftlog.hankel_setup(l, self.fftlog_settings.nu_n0, self._hankel.grid) for l in l_list]
         q_src_padded = jnp.stack([self._hankel.q_padded, jnp.array([s[1].x for s in setups_n0])])
         self._source_transform = _SourceTransform(
             u_m=u_m,
@@ -537,7 +536,7 @@ class LPT(PowerSpectrum):
         basis = fftlog.pad(jnp.eye(self._q.shape[0], dtype=self._q.dtype), self._hankel.q_grids[0], 'zero-pad')
 
         def build_one(u_m_l):
-            pk = fftlog.hankel(fs.nu, basis, self._q_padded, self._hankel.k_padded, u_m_l, self._hankel.npad)
+            pk = fftlog.hankel(self.fftlog_settings.nu, basis, self._q_padded, self._hankel.k_padded, u_m_l, self._hankel.npad)
             return pk.T
 
         ell_indices = jnp.arange(self.lmax + 1, dtype=self._q.dtype)
@@ -1101,9 +1100,9 @@ class LPT(PowerSpectrum):
     def _final_integral(self, k_true, mu_true, sin_true, rows, f, pk_data, W):
         """Final (k, mu) integral of the outputs with component weights ``W``, ``(n_out, nk, nmu)``.
 
-        ``W`` is an ``(n_out, 23)`` array or a function ``(k_i, mu_j) -> W``.  ``mu_true``
-        must be folded to ``|mu|`` (the moments use ``sqrt(s^2) = |s|``).  ``sin_true`` is
-        passed through so its AD-regular value, not ``sqrt(1 - mu^2)``, reaches the moments.
+        ``W`` is an ``(n_out, 23)`` array or a function ``(k_i, mu_j) -> W``.  ``mu_true`` is
+        the ``|mu|`` that ``base`` folds (the result is even in mu).  ``sin_true`` is passed
+        through so its AD-regular value, not ``sqrt(1 - mu^2)``, reaches the moments.
 
         For each (k, mu) it calls ``_integrands`` and subtracts the l = 0 integrand's value
         at q_max from the l = 0 integrand. It contracts 4 pi q^3 g_l(q) with

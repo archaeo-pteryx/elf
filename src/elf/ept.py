@@ -36,7 +36,7 @@ def _read_coeff_tables(prefix):
         coeff_info.append(pt_coeff.get_coeff_info(os.path.dirname(__file__) + f'/pt_coeff/{name}.txt'))
     max_len = max(len(lst) for lst in coeff_info)
     padded = [lst + [[0, 0, 0, 0, 0, 0, 0.0]] * (max_len - len(lst)) for lst in coeff_info]
-    return names, _np.asarray(lnm), jnp.array(padded)
+    return names, _np.asarray(lnm), _np.array(padded)
 
 
 def get_degree_dict(name):
@@ -153,22 +153,22 @@ class EPT(PowerSpectrum):
         if self.method == 'matrix':
             self._initialize_loop_matrix()
 
-        # (mu, f, b1, b2, bG2, bGamma3) monomials + coefficient of each block, (nblocks, nterms, 7),
+        # (mu, f, b1, b2, bG2, bGamma3) monomials + coefficient of each block, (nblocks, nterms, 7) numpy,
         # and the static extra power p of k of each P13 block, applied at the true k.
         if method == 'matrix':
             # one monomial per block, then the UV block: the monomials of Z1 Z3_UV, whose kernel
             # row is the constant pk_int = (1/2 pi^2) int dk P and whose p = 2 (the term
             # k^2 P(k) pk_int Z1 Z3_UV of P13, which the matrix blocks do not contain)
             uv = _np.array([[m, p, b, 0, 0, 0, float(c)] for (m, p, b), c in uv_terms()])
-            self._monomials_22 = jnp.asarray(_one_monomial(self.degrees_22, 1))
-            self._monomials_13 = jnp.asarray(_np.concatenate(
-                [_one_monomial(self.degrees_13, uv.shape[0]), uv[None]], axis=0))
+            self._monomials_22 = _one_monomial(self.degrees_22, 1)
+            self._monomials_13 = _np.concatenate(
+                [_one_monomial(self.degrees_13, uv.shape[0]), uv[None]], axis=0)
             self._k_power_13 = _np.array([0] * len(self.matrix_block_names_13) + [2])
         else:
             self._monomials_22 = self.coeff_info_22
             self._monomials_13 = self.coeff_info_13
             self._k_power_13 = _np.zeros(len(self.pkmu_coeff_names_13), dtype=int)
-        self._mu_degree_max = int(max(_np.max(_np.asarray(table[..., 0]))
+        self._mu_degree_max = int(max(_np.max(table[..., 0])
                                       for table in (self._monomials_22, self._monomials_13)))
 
     def _initialize_loop_coeff(self):
@@ -242,7 +242,6 @@ class EPT(PowerSpectrum):
 
     def _set_matrix(self, names):
         """PT matrices of the given blocks at the decomposition bias of their group."""
-        fs = self.fftlog_settings
         mat = {}
         for name in names:
             mat_file = os.path.dirname(__file__) + f'/pt_matrix/{name}.txt'
@@ -258,11 +257,11 @@ class EPT(PowerSpectrum):
 
         for name in names:
             if not _is_bias_block(name):
-                nu = fs.nu_matrix_matter
+                nu = self.fftlog_settings.nu_matrix_matter
             elif name in self.matrix_block_names_22:
-                nu = fs.nu_matrix_p22_bias
+                nu = self.fftlog_settings.nu_matrix_p22_bias
             else:
-                nu = fs.nu_matrix_p13_bias
+                nu = self.fftlog_settings.nu_matrix_p13_bias
 
             nu_m = -0.5 * (nu + eta_m * 1j)
             if name.startswith('22'):
@@ -310,11 +309,10 @@ class EPT(PowerSpectrum):
         and the last P13 row is the UV constant ``pk_int``.
         """
         if self.method == 'matrix':
-            fs = self.fftlog_settings
-            p_q_matter = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_matter)
+            p_q_matter = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_matter)
             # nu > -3/2 on purpose: the P22 bias blocks come out as I(k) - I(0) by analytic continuation
-            p_q_p22_bias = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p22_bias)
-            p_q_p13_bias = fftlog.power_law_decomposition(pk, self._k, fs.nu_matrix_p13_bias)
+            p_q_p22_bias = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_p22_bias)
+            p_q_p13_bias = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_p13_bias)
             p22 = self._matrix_p22_blocks(p_q_matter, p_q_p22_bias)
             p13_kernel = self._matrix_p13_kernels(p_q_matter, p_q_p13_bias)
             pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk), 1) / (2 * jnp.pi**2)

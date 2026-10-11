@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import numpy as np
 
 from . import spline
 
@@ -66,8 +67,13 @@ def _log_extrap_nodes(x, xmin, xmax, num=10):
     return x_low, x_high
 
 def cross_bias_factor(bias_pow, bias_a, bias_b):
-    """Cross-symmetrised bias monomials ``(max_len,)`` of powers ``bias_pow`` (total degree <= 2)."""
-    deg = jnp.sum(bias_pow, axis=1)  # (max_len,)
+    """Cross-symmetrised bias monomials ``(max_len,)`` of the static power table ``bias_pow``.
+
+    Only total degree <= 2 has a unique split between the two tracers; higher degrees raise.
+    """
+    deg = np.sum(np.asarray(bias_pow), axis=1)  # (max_len,)
+    if deg.max() > 2:
+        raise ValueError(f"bias monomials of total degree {deg.max()} > 2 are not supported")
 
     fac0 = jnp.ones_like(deg, dtype=bias_a.dtype)
 

@@ -146,10 +146,8 @@ class PowerSpectrum(ABC):
 
     def _set_xi_ells_transform(self):
         """Kernels of the P_ell -> xi_ell transforms, the forward rows (ell, 0) at the input bias ``nu_xi_n0``."""
-        hg = self._hankel
-        fs = self.fftlog_settings
-        forward = fftlog.forward_transform(hg.grid, fs.nu, self.ells, [0] * len(self.ells),
-                                           nu_in=fs.nu_xi_n0)
+        forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, self.ells, [0] * len(self.ells),
+                                           nu_in=self.fftlog_settings.nu_xi_n0)
         self._xi_ells_rows = tuple(forward.row(i) for i in range(len(self.ells)))
 
     @partial(jit, static_argnames=['self'])
@@ -203,21 +201,20 @@ class PowerSpectrum(ABC):
     def _get_xi_ells_from_pt_terms(self, r, pt_terms, pk_data, params, alpha_perp, alpha_para, kmax=None):
         """``xi_ell(r) = i^l int dk k^2 P_l j_l(kr) / (2 pi^2)`` of ``P_ell`` cut at ``kmax``, from ``pt_terms``."""
         r = jnp.atleast_1d(r)
-        hg = self._hankel
 
         # P_ell on the core nodes k <= kmax, zero elsewhere; trapezoid end weights 1/2
         n_keep = self._xi_ells_nkeep(kmax)
         k = self._k[:n_keep]
         pk_ells = self.get_pk_ells_from_pt_terms(k, pt_terms, pk_data, params, alpha_perp, alpha_para)
-        w = fftlog.trapezoid_weights('core', n_keep, 0, hg.grid.dln)
-        n_zero = self._nfft - n_keep + hg.npad
-        pk_ells = jnp.pad(pk_ells * w, [(0, 0), (hg.npad, n_zero)])
+        w = fftlog.trapezoid_weights('core', n_keep, 0, self._hankel.grid.dln)
+        n_zero = self._nfft - n_keep + self._hankel.npad
+        pk_ells = jnp.pad(pk_ells * w, [(0, 0), (self._hankel.npad, n_zero)])
 
         xi_ells = []
         for i, ell in enumerate(self.ells):
             row = self._xi_ells_rows[i]
-            xi = row.apply(pk_ells[i] / (2 * jnp.pi**2), hg.grid)
-            xi = xi * hg.mask_xi
+            xi = row.apply(pk_ells[i] / (2 * jnp.pi**2), self._hankel.grid)
+            xi = xi * self._hankel.mask_xi
             if (ell // 2) % 2:
                 xi = -xi
             xi_ells.append(spline.interp1d(jnp.log(r), jnp.log(row.q), xi))
