@@ -1,0 +1,61 @@
+{
+ "generator": "ptgen 1.0 (2026-10-13): EPT Hankel 22/13, matrix 22/13 + UV",
+ "date": "2026-10-13T06:03:09+09:00",
+ "sources_sha256": {
+  "__init__.py": "4757d95e617413e85ef1d0fb30b6e2c7d938fb8bcdfecacb46417d1eac95b1dc",
+  "__main__.py": "8b60890857924f1151fc777a871d574a2b9684b981284772652b9c6c56ffb5a0",
+  "emit.py": "56234d3e84f7d26490cf3f6d4d028bd0daca8b9517c8271b79b9f5c9aed823fe",
+  "ept_hankel.py": "7a96fab4c358d26ec58debc30502e06c75dd2092db07bee2750aa2d5cc66f1c0",
+  "ept_matrix.py": "2d12a73bdcd24a5ef0a4381dfaef02034aa9c44ff67a1a94a9448943f0140d9a",
+  "kernels.py": "ae599e903402debd3c9df4811a556fc961a332464605af09cf76366d8bb33dcb",
+  "legacy.py": "55a97304b09b2c781a5691b4325647f450014ee72b3ac3cd9a6d9a0fec9c03c5",
+  "model.py": "d228b704d6893db964bc0e51185682b4444bfe07b77a58e93a614e3d53161dc8",
+  "reduction.py": "eba58f2be450dd69f8bbcb97f3db22e1f9a28d4410d4b9ab578040fed28eb004",
+  "vectors.py": "c798aa1c131c08df8f96c72d7bf0b511ceee45bcd70107740285ace5f6be523c"
+ },
+ "files": [
+  "ept_hankel_13.npz",
+  "ept_hankel_22.npz",
+  "ept_matrix.npz"
+ ],
+ "timings_s": {
+  "hankel_22": 8.2,
+  "hankel_13": 4.6,
+  "matrix_22": 84.5,
+  "matrix_13": 10.6,
+  "uv": 4.2,
+  "legacy_comparison": 3.1
+ },
+ "comparisons": {
+  "pt_coeff_22": {
+   "blocks": 7,
+   "exact_rationals": true,
+   "loader_array_identical": true
+  },
+  "pt_coeff_13": {
+   "blocks": 7,
+   "exact_rationals": true,
+   "loader_array_identical": true
+  },
+  "pt_matrix_22": {
+   "blocks": 28,
+   "exact_rational_functions": true
+  },
+  "pt_matrix_13": {
+   "blocks": 12,
+   "exact_rational_functions": true
+  },
+  "uv": {
+   "z3_uv_equals_hand_typed": true,
+   "rows_equal_legacy_uv_terms": true,
+   "array_identical": true
+  }
+ },
+ "info": {
+  "p13_zero_lag_dropped": {
+   "(0, 0)": "b1*b2*f*mu**2 + 68*b1*b2/21 + b1*b3 - 8*b1*bdG2/3 + b2*f**2*mu**4 + 68*b2*f*mu**2/21 + b3*f*mu**2 - 8*bdG2*f*mu**2/3"
+  },
+  "z3_uv_matter": "-b1*f**2*mu**2/3 + 2*b1*f*mu**2/105 - 61*b1/315 - f**3*mu**4/3 - 46*f**2*mu**4/105 - 16*f**2*mu**2/35 - 3*f*mu**2/5",
+  "uv_limit_bias_group_unused": "-64*bG2/21 - 128*bGamma3/105"
+ }
+}
