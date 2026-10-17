@@ -1,30 +1,5 @@
 {
- "generator": "ptgen 1.2 (2026-10-17): + the derived LPT chain",
- "date": "2026-10-17T04:01:22+09:00",
- "sources_sha256": {
-  "__init__.py": "382538bd33ae4abf81e155db0c1cc1e4e06c6361247c8e7e73ecd1c7b23aedd2",
-  "__main__.py": "eba290d3d7cef847854eb368f4865a21f8af0f3fbeef3469dc814c4391ec2d51",
-  "emit.py": "7dd00b94d1bd833ab2c08510fba59d2f8a919b564d34134bbabd335569433a9d",
-  "ept_hankel.py": "7a96fab4c358d26ec58debc30502e06c75dd2092db07bee2750aa2d5cc66f1c0",
-  "ept_matrix.py": "2d12a73bdcd24a5ef0a4381dfaef02034aa9c44ff67a1a94a9448943f0140d9a",
-  "kernels.py": "ae599e903402debd3c9df4811a556fc961a332464605af09cf76366d8bb33dcb",
-  "legacy.py": "55a97304b09b2c781a5691b4325647f450014ee72b3ac3cd9a6d9a0fec9c03c5",
-  "lpt_angular.py": "70c944b58c72010f6e9bdad245c365209669ad9b4ebe9dd152212ed9e745a78f",
-  "lpt_components.py": "145fc049715925039aa49b23195a36e2adb8133d2c017c25b22c0bf3f3aaad7c",
-  "lpt_cumulant.py": "344e23293aecf153e92ed1148dce8d480049e2e2690da703e526a500be2ea66f",
-  "lpt_identities.py": "b5bb4adaf437d1fc79721680f73665d5bdb31e84d7fe9020ac13c1a02af44314",
-  "lpt_kernels.py": "bf928fc84772ae58f0755bca44eecb3fbb4c4cff0ac9ad1bb173e2c04f663a95",
-  "lpt_model.py": "1fb74e7bc0a2424f1bc3a288bd1d29c2ec889c452232fbef38c58c0acffe10e6",
-  "lpt_moments.py": "e8caae97953972c856247a322141b8e330a1e4fba9ff92a7b87f67c29388fd7d",
-  "lpt_reduce.py": "ac6ba0a6d64368272b1f4e5d4ab815f05e89be85c52eca2c436e765a7fdacd2c",
-  "lpt_rows.py": "513fc93bad1878977eb7dd583b7d420ac020666f3a79f9aa34331e74880e72a0",
-  "lpt_tensors.py": "5813aaa82f2b48d0299e6edff0268c7710a795cde541cfa186f7b07d18e0ffe5",
-  "lpt_verify.py": "5b8ff9207b38d406b4869532092f7c821158d86056acb535bfa0ca5a6362bf3c",
-  "lpt_wick.py": "470df78bd7c808261dffc6f2e17f7c992c0b756c886c9eb24c982d380b7a0dd6",
-  "model.py": "d228b704d6893db964bc0e51185682b4444bfe07b77a58e93a614e3d53161dc8",
-  "reduction.py": "eba58f2be450dd69f8bbcb97f3db22e1f9a28d4410d4b9ab578040fed28eb004",
-  "vectors.py": "c798aa1c131c08df8f96c72d7bf0b511ceee45bcd70107740285ace5f6be523c"
- },
+ "generator": "pt_autogen 1.2 (2026-10-17): + the derived LPT chain",
  "files": [
   "ept_hankel_13.npz",
   "ept_hankel_22.npz",
@@ -39,48 +14,7 @@
   "lpt/psi_terms.dat",
   "lpt/scalar_layer.dat"
  ],
- "timings_s": {
-  "hankel_22": 4.5,
-  "hankel_13": 3.5,
-  "matrix_22": 56.6,
-  "matrix_13": 2.9,
-  "uv": 1.8,
-  "lpt_cumulants": 0.0,
-  "lpt_components": 0.2,
-  "lpt_rows": 11.8,
-  "lpt_psi": 8.0,
-  "legacy_comparison": 1.8,
-  "lpt_verify_kernels": 8.1,
-  "lpt_verify_term_list": 1.0,
-  "lpt_verify_components": 0.2,
-  "lpt_verify_rows": 46.1,
-  "lpt_verify_moments_declaration": 0.0,
-  "lpt_verification": 69.4
- },
  "comparisons": {
-  "pt_coeff_22": {
-   "blocks": 7,
-   "exact_rationals": true,
-   "loader_array_identical": true
-  },
-  "pt_coeff_13": {
-   "blocks": 7,
-   "exact_rationals": true,
-   "loader_array_identical": true
-  },
-  "pt_matrix_22": {
-   "blocks": 28,
-   "exact_rational_functions": true
-  },
-  "pt_matrix_13": {
-   "blocks": 12,
-   "exact_rational_functions": true
-  },
-  "uv": {
-   "z3_uv_equals_hand_typed": true,
-   "rows_equal_legacy_uv_terms": true,
-   "array_identical": true
-  },
   "lpt": {
    "psi_entries_equal_sympy": true,
    "psi_entries_equal_sympy_count": 351,

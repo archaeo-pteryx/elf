@@ -5,7 +5,7 @@ correlators (cumulants) of its appendix "Explicit formulas for LPT power spectru
 Below, H_l^n[S](q) = int dk k^{n+2} S(k) j_l(kq) / (2 pi^2) and xi_l^n = H_l^n[P]
 (the paper's xi^l_n).
 
-The chain.  tools/ptgen derives the integrand from the generating function and writes
+The chain.  tools/pt_autogen derives the integrand from the generating function and writes
 the plain-text tables ``tables/lpt/*.dat``, which ``lpt_tables`` loads and checks.  The
 runtime reads them in three places.
 
@@ -492,7 +492,7 @@ class LPT(PowerSpectrum):
         ``ell_factors`` are those of ``_angular_integral_factors``.
 
         Hand-written.  Which components have a linear part of which kind, and the tree rows of
-        each kind, come from tables/lpt/components.dat (derived by tools/ptgen from the cumulant
+        each kind, come from tables/lpt/components.dat (derived by tools/pt_autogen from the cumulant
         expansion, lpt_components), the expansion of those terms in l and their Kaiser factors
         are written here.
         """

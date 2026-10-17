@@ -108,7 +108,7 @@ def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, V, *, c, s):
     The caller folds ``exp(-B s^2)`` into ``exp(-K^2 (X + c^2 Y) / 2)``, because the two
     factors computed separately give 0 * inf.
 
-    Hand-written.  tools/ptgen derives the same moments from the generating function
+    Hand-written.  tools/pt_autogen derives the same moments from the generating function
     (lpt_angular, for the angular polynomials of tables/lpt/moments.dat), checks a symbolic
     transcription of this code against the derivation exactly (l <= 10), and checks this code
     numerically against the factored psi tables of the derivation (moment identity, <= 2e-13).

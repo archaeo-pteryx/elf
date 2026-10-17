@@ -1,4 +1,4 @@
-"""The LPT tables ``tables/lpt/*.dat`` (generated offline by tools/ptgen), loaded and checked, with their evaluators.
+"""The LPT tables ``tables/lpt/*.dat`` (generated offline by tools/pt_autogen), loaded and checked, with their evaluators.
 
 The tables and what this module makes of them follow.  The module needs numpy only, so that the generator can load
 a copy of it next to tables under test, and its evaluators use jax.numpy when given JAX arrays.
@@ -102,7 +102,6 @@ BASIS = tuple(dict.fromkeys(b for _, b, *_ in _TERMS))
 _KEYS = list(dict.fromkeys((MOMENTS.index(m), b, s) for m, b, s, *_ in _TERMS))   # the psi entries (j, basis, shift)
 PAIRS_OF = {j: tuple((b, s) for jj, b, s in _KEYS if jj == j) for j in range(len(MOMENTS))}
 PAIRS = tuple(sorted({p for ps in PAIRS_OF.values() for p in ps}, key=lambda p: (p[1], BASIS.index(p[0]))))
-ARRAY_MONOMIALS = tuple(dict.fromkeys(e for *_, e, _ in _TERMS if any(e)))       # (a, c, b, i) other than 1
 _SCALAR = [(int(t), tuple(map(int, e)), float(v)) for t, *e, v in _records(
     'scalar_layer.dat', lambda r: (int(r[0]), tuple(map(int, r[1:-1]))))]                   # key (t, exponents)
 # (a, b, e, g) of c^a s^b A_mu^e B_mu^g in the generator's order (degree, then decreasing exponents)
@@ -263,8 +262,6 @@ _TEMPLATE_MATRIX = np.array([[1.0 if t in templates else 0.0 for _, templates, _
 _LINEAR_MATRIX = np.array([[1.0 if linear == kind else 0.0 for kind in LinearKind] for _, _, linear in _COMPONENTS])
 # the exponents of (b1, b2, bG2, bGamma3) of the bias templates (row t is template t), the EFT templates excluded
 _LPT_BIAS_DEGREES = np.array([[int(e) for e in r[1:]] for r in _TEMPLATE_RECORDS if r[1] != 'eft'], dtype=np.int32)
-LINEAR_KIND_ROWS = {LinearKind[r[0]]: tuple(Row[row] for row in r[1:]) for r in _LINEAR_RECORDS}
-"""The tree rows of each linear kind (the first-order terms the final integral replaces by linear theory)."""
 
 _require('rows_rules.dat', {r[0] for r in _KSPACE_RECORDS}, K_ROWS, 'k-space rows')
 _require('rows_rules.dat', {r[1] for r in _KSPACE_RECORDS}, Component.__members__, 'components')
