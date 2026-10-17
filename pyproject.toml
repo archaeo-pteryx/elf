@@ -31,7 +31,7 @@ ptgen = ["sympy>=1.12"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-elf = ["pt_matrix/*.txt", "pt_coeff/*.txt", "tables/*.npz", "tables/manifest.json"]
+elf = ["pt_matrix/*.txt", "pt_coeff/*.txt", "tables/*.npz", "tables/manifest.json", "tables/lpt/*.dat"]
 
 [project.urls]
 Homepage = "https://github.com/archaeo-pteryx/elf"

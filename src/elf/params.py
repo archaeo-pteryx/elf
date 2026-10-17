@@ -36,8 +36,11 @@ class Params:
     An auto spectrum sets ``bias`` (``bias_a`` and ``bias_b`` None), a cross spectrum sets
     ``bias_a`` and ``bias_b`` (``bias`` None).  The code reads only ``bias_a`` and ``bias_b``,
     both set to ``bias`` for an auto spectrum at the entry that reads the biases.
+    ``f`` and ``h`` are separate leaves because with one ``[f, h]`` leaf every gradient with
+    respect to f alone also linearizes get_pt_terms through h.
     """
-    cosmo: jnp.ndarray  # shape (2,)   [f, h]
+    f:     jnp.ndarray  # shape ()     the growth rate
+    h:     jnp.ndarray  # shape ()     H0 / (100 km/s/Mpc)
     # shape (4,)   [b1, b2, bG2, bGamma3], or [b1, b2, b_s2, bGamma3] for LPT(bias_basis='bs2')
     # (None for a cross spectrum)
     bias:  Optional[jnp.ndarray]
@@ -49,18 +52,18 @@ class Params:
     bias_b: Optional[jnp.ndarray] = field(default=None, kw_only=True)
 
     def tree_flatten(self):
-        # leaves (cosmo, bias, ctr, stoch) for auto, (cosmo, bias_a, bias_b, ctr, stoch) for cross
-        return (self.cosmo, self.bias, self.bias_a, self.bias_b, self.ctr, self.stoch), None
+        # leaves (f, h, bias, ctr, stoch) for auto, (f, h, bias_a, bias_b, ctr, stoch) for cross
+        return (self.f, self.h, self.bias, self.bias_a, self.bias_b, self.ctr, self.stoch), None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
-        cosmo, bias, bias_a, bias_b, ctr, stoch = children
-        return cls(cosmo, bias, ctr, stoch, bias_a=bias_a, bias_b=bias_b)
-    
+        f, h, bias, bias_a, bias_b, ctr, stoch = children
+        return cls(f, h, bias, ctr, stoch, bias_a=bias_a, bias_b=bias_b)
+
     @property
-    def f(self):     return self.cosmo[0]
-    @property
-    def h(self):     return self.cosmo[1]
+    def cosmo(self):
+        """``[f, h]``, kept for reading.  It is not a leaf of the pytree (derivatives go to ``f`` and ``h``)."""
+        return jnp.stack([self.f, self.h])
 
 
 def _with_tracer_biases(params):
@@ -83,15 +86,17 @@ def make_params(*, f, h, bias=None, ctr, stoch, bias_a=None, bias_b=None, dtype=
     cross spectrum.
     """
     _check_bias_form(bias, bias_a, bias_b)
-    cosmo = _as_param_array([f, h], dtype)
+    f = _as_param_array(f, dtype)
+    h = _as_param_array(h, dtype)
     bias, bias_a, bias_b = (None if b is None else _as_param_array(b, dtype)
                             for b in (bias, bias_a, bias_b))
     ctr   = _as_param_array(ctr,   dtype)
     stoch = _as_param_array(stoch, dtype)
-    _check_shape('cosmo', cosmo, (2,), '[f, h]')
+    _check_shape('f', f, (), 'a scalar')
+    _check_shape('h', h, (), 'a scalar')
     for name, b in (('bias', bias), ('bias_a', bias_a), ('bias_b', bias_b)):
         if b is not None:
             _check_shape(name, b, (4,), '[b1, b2, bG2, bGamma3]')
     _check_shape('ctr',   ctr,   (N_COUNTERTERM_COEFFICIENTS,), '[c0, c2, c4, c6, c44, c46, c48]')
     _check_shape('stoch', stoch, (3,), '[e00, e20, e22]')
-    return Params(cosmo, bias, ctr, stoch, bias_a=bias_a, bias_b=bias_b)
+    return Params(f, h, bias, ctr, stoch, bias_a=bias_a, bias_b=bias_b)

@@ -2,11 +2,44 @@
 
 Cubic Hermite interpolation on strictly increasing nodes: :func:`slopes` once per
 array, :func:`hermite` per query (arrays evaluated many times keep their slopes);
-:func:`interp1d` is both steps.
+:func:`interp1d` is both steps.  :func:`hermite_weights` and :func:`hermite_weight_derivatives`
+are the four basis weights of a query and their derivatives, shared with the kernel of the
+LPT tangent rule (``lpt_rule.point_kernel``).
 """
 
 import jax
 import jax.numpy as jnp
+
+# EPT and LPT get_pk_ells on 1 and 8 cores take 1.05-2.27x (scan_unrolled) and 2.28-5.10x (compare_all) scan's time
+SEARCHSORTED_METHOD = 'scan'
+
+
+def _interval_index(x, xq):
+    """The interval i of each query, ``clip(searchsorted(x, xq, side='right') - 1, 0, n - 2)`` with ``n = len(x)``,
+    so that x[i] <= xq < x[i + 1] inside the nodes and the first or last interval applies outside them."""
+    return jnp.clip(jnp.searchsorted(x, xq, side='right', method=SEARCHSORTED_METHOD) - 1, 0, x.shape[0] - 2)
+
+
+def hermite_weights(t, h_i):
+    """The weights of (y0, m0, y1, m1) at ``t = (xq - x[i]) / h_i`` in the interval i of width ``h_i``.
+
+    The tuple (h00, h10 h_i, h01, h11 h_i) of the cubic Hermite basis h00 = 2 t^3 - 3 t^2 + 1,
+    h10 = t^3 - 2 t^2 + t, h01 = -2 t^3 + 3 t^2 and h11 = t^3 - t^2, the slope weights times h_i.
+    """
+    t2 = t * t
+    t3 = t2 * t
+    return 2.0 * t3 - 3.0 * t2 + 1.0, (t3 - 2.0 * t2 + t) * h_i, -2.0 * t3 + 3.0 * t2, (t3 - t2) * h_i
+
+
+def hermite_weight_derivatives(t, h_i):
+    """The derivatives of :func:`hermite_weights` with respect to the query xq, as dt/dxq = 1 / h_i.
+
+    The tuple of (6 t^2 - 6 t, (3 t^2 - 4 t + 1) h_i, -6 t^2 + 6 t, (3 t^2 - 2 t) h_i), the t derivatives of the
+    four weights, each divided by h_i.
+    """
+    t2 = t * t
+    return tuple(w / h_i for w in (6.0 * t2 - 6.0 * t, (3.0 * t2 - 4.0 * t + 1.0) * h_i, -6.0 * t2 + 6.0 * t,
+                                   (3.0 * t2 - 2.0 * t) * h_i))
 
 
 def slopes(x, y, axis=-1):
@@ -38,18 +71,12 @@ def hermite(xq, x, y, m, axis=-1):
     xq = jnp.asarray(xq)
     axis = axis % y.ndim
 
-    idx = jnp.searchsorted(x, xq, side="right") - 1
-    idx = jnp.clip(idx, 0, x.shape[0] - 2)
+    idx = _interval_index(x, xq)
     x0 = x[idx]
     h_i = (x[1:] - x[:-1])[idx]
 
     t = (xq - x0) / h_i
-    t2 = t * t
-    t3 = t2 * t
-    h00 = 2.0 * t3 - 3.0 * t2 + 1.0
-    h10 = t3 - 2.0 * t2 + t
-    h01 = -2.0 * t3 + 3.0 * t2
-    h11 = t3 - t2
+    w00, w10, w01, w11 = hermite_weights(t, h_i)
 
     tail = (1,) * (y.ndim - axis - 1)
 
@@ -61,7 +88,7 @@ def hermite(xq, x, y, m, axis=-1):
     y1 = jnp.take(y, idx + 1, axis=axis, mode='clip')
     m0 = jnp.take(m, idx, axis=axis, mode='clip')
     m1 = jnp.take(m, idx + 1, axis=axis, mode='clip')
-    return c(h00) * y0 + c(h10 * h_i) * m0 + c(h01) * y1 + c(h11 * h_i) * m1
+    return c(w00) * y0 + c(w10) * m0 + c(w01) * y1 + c(w11) * m1
 
 
 def interp1d(xq, x, y, axis=-1):

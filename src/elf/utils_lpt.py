@@ -107,6 +107,11 @@ def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, V, *, c, s):
 
     The caller folds ``exp(-B s^2)`` into ``exp(-K^2 (X + c^2 Y) / 2)``, because the two
     factors computed separately give 0 * inf.
+
+    Hand-written.  tools/ptgen derives the same moments from the generating function
+    (lpt_angular, for the angular polynomials of tables/lpt/moments.dat), checks a symbolic
+    transcription of this code against the derivation exactly (l <= 10), and checks this code
+    numerically against the factored psi tables of the derivation (moment identity, <= 2e-13).
     """
     L = V.shape[1]
 
@@ -206,3 +211,80 @@ def get_lpt_moments(A, B, C, c2, s2, A_mu, B_mu, V, *, c, s):
         A, C, A_mu, B_mu,
         G00, dGdA, dGdC, d2A, d2C, dAdC, d3A, d3A2C, d4A,
     )
+
+
+def compute_V_mu_prime(s2, coeffs, lmax):
+    """``V'[d - 1, l, i] = sum_{k: N >= 1} N^d coeffs[l, k, i] s2^(N - 1)``, ``N = l + i - k``, d = 1..4; ``(4, L, L)``.
+
+    ``V' = V[1:] / s2`` exactly (the N = 0 terms of ``V[d]`` vanish for d >= 1), a polynomial in ``s2``:
+    the Horner sums with V' give ``T_d = S_d / s2`` without a division, finite at ``s2 = 0`` (the
+    analytic limit there).  Same masking as :func:`compute_V_mu` (no negative power in either branch).
+    ``V'[0] = d V[0] / d s2``.
+    """
+    L = lmax + 1
+    li = jnp.arange(L)[:, None, None]
+    ki = jnp.arange(L)[None, :, None]
+    ii = jnp.arange(L)[None, None, :]
+    N = li + ii - ki
+    mask = (N >= 1)
+    s2_powNm1 = jnp.where(mask, jnp.power(s2, jnp.maximum(N - 1, 0)), 0.0)
+    core = coeffs * mask.astype(s2_powNm1.dtype) * s2_powNm1  # (L, L, L)
+    Nd = N.astype(jnp.float64)
+    N2, N3, N4 = Nd * Nd, Nd * Nd * Nd, Nd * Nd * Nd * Nd
+    poly = jnp.stack([Nd, N2, N3, N4], axis=0)  # (4, L, L, L)
+    return jnp.einsum('dlki,lki->dli', poly, core.astype(jnp.float64))  # (4, L, L)
+
+
+def compute_V_mu_prime2(s2, coeffs, lmax):
+    """``V''[d - 1, l, i] = sum_{k: N >= 2} N^d (N - 1) coeffs[l, k, i] s2^(N - 2)`` = d V'[d - 1, l, i] / d s2,
+    ``N = l + i - k``, d = 1..4; ``(4, L, L)``.
+
+    The s derivative of the basis T_d (:func:`lpt_horner_poly` with 2 s V'').  Same masking as
+    :func:`compute_V_mu_prime` (the N = 1 terms of V' are constant in s2; no negative power in either branch).
+    """
+    L = lmax + 1
+    li = jnp.arange(L)[:, None, None]
+    ki = jnp.arange(L)[None, :, None]
+    ii = jnp.arange(L)[None, None, :]
+    N = li + ii - ki
+    mask = (N >= 2)
+    s2_powNm2 = jnp.where(mask, jnp.power(s2, jnp.maximum(N - 2, 0)), 0.0)
+    core = coeffs * mask.astype(s2_powNm2.dtype) * s2_powNm2  # (L, L, L)
+    Nd = N.astype(jnp.float64)
+    Nm1 = Nd - 1.0
+    N2, N3, N4 = Nd * Nd, Nd * Nd * Nd, Nd * Nd * Nd * Nd
+    poly = jnp.stack([Nd * Nm1, N2 * Nm1, N3 * Nm1, N4 * Nm1], axis=0)  # (4, L, L, L)
+    return jnp.einsum('dlki,lki->dli', poly, core.astype(jnp.float64))  # (4, L, L)
+
+
+def lpt_horner_poly(B, coef, pow_offset=0, m_min=0):
+    """Rows ``[b][m] = (-B)^(m + pow_offset) sum_{i <= m} coef[b, m, i] (-B)^i`` (Horner's rule), (nq,) arrays.
+
+    ``coef`` ``(n_b, L, L)``.  ``m_min`` (an int or one per b): the rows m < m_min are the Python float 0.0, for
+    coefficient rows that vanish identically (the caller's guarantee); every other row needs m + pow_offset >= 0.
+    With coef = concat(V[:1], V') this is the basis S_0, T_1 .. T_4 of the factored moments (``lpt_tables``, where
+    T_d[0] = V'[d - 1, 0, 0] = 0 makes m_min = (0, 1, 1, 1, 1) exact).  Its derivatives are the same rows with
+    other tables: d/dB with coef[b, m, i] -(m + i) and pow_offset = -1 (m = 0 vanishes), d/ds with
+    2 s concat(V'[:1], V'') (the s2 derivative of the coefficients; m = 0 vanishes).
+    """
+    z = -B
+    nb, L = coef.shape[0], coef.shape[1]
+    mins = (m_min,) * nb if isinstance(m_min, int) else tuple(m_min)
+    rows = []
+    for b in range(nb):
+        rb = []
+        for m in range(L):
+            if m < mins[b]:
+                rb.append(0.0)
+                continue
+            power = m + pow_offset
+            assert power >= 0, (m, pow_offset)
+            row = coef[b, m, m] + jnp.zeros_like(z)
+            for i in range(m - 1, -1, -1):
+                row = row * z + coef[b, m, i]
+            if power >= 1:
+                row = row * z**power
+            rb.append(row)
+        rows.append(rb)
+    return rows
+

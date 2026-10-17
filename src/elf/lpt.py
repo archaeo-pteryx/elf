@@ -5,18 +5,21 @@ correlators (cumulants) of its appendix "Explicit formulas for LPT power spectru
 Below, H_l^n[S](q) = int dk k^{n+2} S(k) j_l(kq) / (2 pi^2) and xi_l^n = H_l^n[P]
 (the paper's xi^l_n).
 
+The chain.  tools/ptgen derives the integrand from the generating function and writes
+the plain-text tables ``tables/lpt/*.dat``, which ``lpt_tables`` loads and checks.  The
+runtime reads them in three places.
+
 Stage 1, ``get_pt_terms(pk_data, h)`` -> :class:`PTTerms`, depends only on P_lin and h.
-Its ``rows`` (:class:`Row`) are 28 correlators on the q grid and five k-space rows.
-The FFTlog chain:
+Its ``rows`` (:class:`Row`) are 28 correlators on the q grid and five k-space rows, made
+by ``lpt_stages.pt_rows`` from the recipes of ``rows_recipes.dat`` (and the units and
+sources of ``rows_sources.dat``, the rules of ``rows_rules.dat``):
   A. ``_get_xi_ln``: P(k) -> xi_l^n(q) for the (l, n) of ``ln_list``, for P and
      P_lt = P exp(-(k/k_IR)^2).
-  B. ``_get_Qs_Rs``: products of xi_l^n -> Q_1, Q_2, Q_5(k) (q -> k), and
-     transforms of xi_l^n times P -> R_1, R_2(k).
-  C. ``_transform_sources``: linear combinations S(k) of Q_n and R_n -> rows
-     H_l^n[S](q) (k -> q), for ``_get_corrs_matter_1loop`` and ``_get_corrs_bias``.
-The other rows are local in q. ``_get_corrs_tree`` builds the tree rows from xi_l^n.
-Products of xi_l^n give chi, zeta, X/Y_Upsilon and, through the paper's identities,
-Y22, U20, V10 and V12. Ub3 = -(24/5) U3. ``_get_kspace_rows`` builds the k-space rows.
+  B. the stage-B units, products of xi_l^n (q -> k) and transforms of xi_l^n times P,
+     and the sources Q_1, Q_2, R_1, R_2 (k) made of them.
+  C. ``_transform_sources``: combinations S(k) of the sources -> H_l^n[S](q) (k -> q).
+The other rows are products of xi_l^n, zero-lag constants (grid moments) and references
+to other rows, and the k-space rows come from the rules of rows_rules.dat.
 
 Stage 2, for each (k, mu), ``_pkmu_true`` -> ``_final_integral`` does the final q -> k
 integral. ``_integrands`` combines the rows with the angular moments of
@@ -24,20 +27,22 @@ integral. ``_integrands`` combines the rows with the angular moments of
 linear part. ``_final_integral`` contracts it with the transform rows of
 ``_FinalTransform`` interpolated at k. It then adds back the linear part (Kaiser
 factor times P_lin(k)) and the k-space rows. ``base.PowerSpectrum`` adds the
-stochastic term, the k-space counterterms and the AP volume factor.
+stochastic term, the k-space counterterms and the AP volume factor.  The derivatives of
+the point loop come from the tangent rule ``lpt_rule`` (``USE_TANGENT_RULE``), which
+reads the component table (``basis_rows.dat``, ``component_entries.dat``) and the psi
+family of the moments (``psi_terms.dat``, ``scalar_layer.dat``).
 
-Tables. ``_COMPONENTS`` lists the 23 components (terms) of the integrand
-(:class:`Component`). ``_TEMPLATE_MATRIX`` (13 x 23) assigns them to the templates
-(:class:`Template`), which are the 12 bias monomials of ``_LPT_BIAS_DEGREES`` and the
-Zel'dovich counterterm. ``_LINEAR_MATRIX`` (23 x 3) gives the kind
-(:class:`LinearKind`) of each component's linear part. ``_KSPACE_ROWS`` pairs the
-k-space rows with components. The one engine ``_final_integral(..., W)`` weights the
-components with W (n_out, 23). W = identity gives the components, W =
-``_TEMPLATE_MATRIX`` the templates, and W = (bias and counterterm weights) @
-``_TEMPLATE_MATRIX`` the spectrum.
+Tables (module ``lpt_tables``, from ``components.dat``). ``_COMPONENTS`` lists the 23
+components (terms) of the integrand (:class:`Component`). ``_TEMPLATE_MATRIX`` (13 x 23)
+assigns them to the templates (:class:`Template`), which are the 12 bias monomials of
+``_LPT_BIAS_DEGREES`` and the Zel'dovich counterterm. ``_LINEAR_MATRIX`` (23 x 3) gives
+the kind (:class:`LinearKind`) of each component's linear part. ``_KSPACE_ROWS``
+(``rows_rules.dat``) pairs the k-space rows with components. The one engine
+``_final_integral(..., W)`` weights the components with W (n_out, 23). W = identity gives
+the components, W = ``_TEMPLATE_MATRIX`` the templates, and W = (bias and counterterm
+weights) @ ``_TEMPLATE_MATRIX`` the spectrum.
 """
 
-from enum import IntEnum
 from typing import NamedTuple, Optional
 
 import numpy as _np
@@ -49,9 +54,17 @@ from functools import partial
 import jax.numpy as jnp
 
 from . import fftlog
+from . import lpt_rule
+from . import lpt_stages
 from . import spline
 
 from .base import PowerSpectrum
+# The definitions of the final integrand, imported by name (lpt.Row, lpt.Component, ... keep working): the tables
+# (lpt_tables) and the hand-written geometry and moment indices (lpt_defs).
+from .lpt_tables import (_LPT_BIAS_DEGREES, Template, LinearKind, Component, _COMPONENTS, N_COMPONENTS,
+                         _TEMPLATE_MATRIX, _LINEAR_MATRIX, Row, TREE_ROWS, _KSPACE_ROWS, COMPONENT_ENTRIES,
+                         entry_scalars, row_basis)
+from .lpt_defs import _RSDGeometry, _rsd_geometry
 from .utils import cross_bias_factor
 from .utils_lpt import (
     make_G00_coeffs,
@@ -59,235 +72,29 @@ from .utils_lpt import (
     compute_V_mu,
 )
 
+USE_TANGENT_RULE = True
+"""For tests and diagnosis.  With True (the default) the point loop of ``LPT._final_integral`` is a ``jax.custom_jvp``
+differentiated by the tangent rule ``lpt_rule.point_loop_jvp``, with False JAX differentiates the same loop directly
+(the same values, slow gradients).  Read at trace time, so a change applies to functions traced afterwards."""
 
-# Powers of (b1, b2, bG2, bGamma3) of the 12 bias templates (total degree <= 2, as cross_bias_factor needs).
-# Row t is template t of _TEMPLATE_MATRIX. Template.CTR, the Zel'dovich counterterm, has no
-# row. LPT._get_lpt_bias_factors turns the rows into the 12 bias weights of a tracer pair.
-_LPT_BIAS_DEGREES = _np.array([
-    [0, 0, 0, 0],   # 1
-    [1, 0, 0, 0],   # b1
-    [2, 0, 0, 0],   # b1^2
-    [0, 1, 0, 0],   # b2
-    [1, 1, 0, 0],   # b1 b2
-    [0, 2, 0, 0],   # b2^2
-    [0, 0, 1, 0],   # bG2
-    [1, 0, 1, 0],   # b1 bG2
-    [0, 1, 1, 0],   # b2 bG2
-    [0, 0, 2, 0],   # bG2^2
-    [0, 0, 0, 1],   # bGamma3
-    [1, 0, 0, 1],   # b1 bGamma3
-], dtype=jnp.int32)
-
-
-# Indices into the tuple of utils_lpt.get_lpt_moments.
-# Each moment is an (lmax + 1, nq) array over the order l of j_l(kq) and q. MQa stands for
-# the power (Khat.qhat)^a and NQb for (nhat.qhat)^b, with K = k + f (k.n) n. They are the
-# keys of the component dicts of LPT._component_coefficients.
-MQ0, MQ1, MQ2, MQ3, MQ4, NQ1, NQ2, MQ1NQ1, MQ2NQ1 = range(9)
-
-
-class Template(IntEnum):
-    """Templates, the rows of ``_TEMPLATE_MATRIX``.
-
-    ONE ... B1_BGAMMA3 are the 12 bias monomials (rows of ``_LPT_BIAS_DEGREES``). ONE,
-    the monomial 1, is the matter part. CTR is the Zel'dovich counterterm base.
-    """
-    ONE = 0
-    B1 = 1
-    B1_B1 = 2
-    B2 = 3
-    B1_B2 = 4
-    B2_B2 = 5
-    BG2 = 6
-    B1_BG2 = 7
-    B2_BG2 = 8
-    BG2_BG2 = 9
-    BGAMMA3 = 10
-    B1_BGAMMA3 = 11
-    CTR = 12
-
-
-class LinearKind(IntEnum):
-    """Kind of a component's linear part, the columns of ``_LINEAR_MATRIX`` (``LPT._linear_rows``)."""
-    ZA = 0
-    B1 = 1
-    XI = 2
-
-
-class Component(IntEnum):
-    """The 23 components of the final integrand, the columns of ``_TEMPLATE_MATRIX`` (see ``_COMPONENTS``)."""
-    ZA = 0
-    AA = 1
-    A22 = 2
-    A13 = 3
-    W112 = 4
-    U10 = 5
-    A_U = 6
-    A10 = 7
-    XI = 8
-    A_XI = 9
-    U_U = 10
-    U11 = 11
-    U20 = 12
-    XI_U = 13
-    XI_XI = 14
-    UPS = 15
-    V10 = 16
-    V12 = 17
-    CHI = 18
-    ZETA = 19
-    UB3 = 20
-    THETA = 21
-    CTR = 22
-
-
-# The 23 components of the final integrand (order of LPT._component_coefficients): the
-# templates each belongs to and the kind of its linear part.
-# A component is one term in the braces of Eqs. (pkmu_lpt_tree) and (pkmu_lpt_1loop), without
-# its bias coefficient (kk A = k_i k_j A_ij and k.U = k_i U_i, with redshift-space displacements):
-#   ZA     1 - (1/2) kk A^> (Zel'dovich)   AA     (1/8) kkkk A^> A^>
-#   A22    -(1/2) kk A^(22)                A13    -(1/2) kk (A^(13) + A^(31))
-#   W112   -(i/6) kkk W                    U10    2i k.(U^lin + U^(3))
-#   A_U    -i kk A^> k.U^lin               A10    -kk A^10
-#   XI     xi_lin                          A_XI   -(1/2) kk A^> xi_lin
-#   U_U    -kk U^lin U^lin                 U11    i k.U^11
-#   U20    i k.U^20                        XI_U   2i xi_lin k.U^lin
-#   XI_XI  (1/2) xi_lin^2                  UPS    -kk Upsilon
-#   V10    2i k.V^10                       V12    2i k.V^12
-#   CHI    chi                             ZETA   zeta
-#   UB3    2i k.U_Gamma3                   THETA  2 theta
-#   CTR    the ZA term, weighted by the Zel'dovich counterterm shape
-# Every component also carries the factor e^{-(1/2) kk A^<}. 'templates' are rows of
-# _TEMPLATE_MATRIX. 'linear' is the kind of the component's linear-theory term (a column of
-# _LINEAR_MATRIX), None if it has none. A component's index is its column of W in
-# LPT._final_integral, and the order must match LPT._component_coefficients.
-_COMPONENTS = (
-    # component          templates                                linear
-    (Component.ZA,       (Template.ONE,),                         LinearKind.ZA),
-    (Component.AA,       (Template.ONE,),                         None),
-    (Component.A22,      (Template.ONE,),                         None),
-    (Component.A13,      (Template.ONE,),                         None),
-    (Component.W112,     (Template.ONE,),                         None),
-    (Component.U10,      (Template.B1,),                          LinearKind.B1),
-    (Component.A_U,      (Template.B1,),                          None),
-    (Component.A10,      (Template.B1,),                          None),
-    (Component.XI,       (Template.B1_B1,),                       LinearKind.XI),
-    (Component.A_XI,     (Template.B1_B1,),                       None),
-    (Component.U_U,      (Template.B1_B1, Template.B2),           None),
-    (Component.U11,      (Template.B1_B1,),                       None),
-    (Component.U20,      (Template.B2,),                          None),
-    (Component.XI_U,     (Template.B1_B2,),                       None),
-    (Component.XI_XI,    (Template.B2_B2,),                       None),
-    (Component.UPS,      (Template.BG2,),                         None),
-    (Component.V10,      (Template.BG2,),                         None),
-    (Component.V12,      (Template.B1_BG2,),                      None),
-    (Component.CHI,      (Template.B2_BG2,),                      None),
-    (Component.ZETA,     (Template.BG2_BG2,),                     None),
-    (Component.UB3,      (Template.BGAMMA3,),                     None),
-    (Component.THETA,    (Template.B1_BGAMMA3,),                  None),
-    (Component.CTR,      (Template.CTR,),                         LinearKind.ZA),
-)
-assert [component for component, *_ in _COMPONENTS] == list(Component)
-N_COMPONENTS = len(_COMPONENTS)
-# Component.XI_XI, the b2^2 component, has its xi_lin^2 / 2 transformed separately.
-# LPT._integrands subtracts the undamped xi_lin^2 / 2 from the l = 0 integrand, and the rows
-# Row.B2SQ_RESIDUAL and Row.B2SQ_CONST of _KSPACE_ROWS add it back in k space.
-
-# M[t, c] = 1 if component c belongs to template t.
-# Shape (13, 23). Rows are templates (Template), columns are components (Component).
-# LPT._pkmu_true uses (template weights) @ M as the component weights W. W = M gives the
-# 13 templates (get_pkmu_templates_from_pt_terms).
-_TEMPLATE_MATRIX = _np.array(
-    [[1.0 if t in templates else 0.0 for _, templates, _ in _COMPONENTS] for t in Template])
-
-# N[c, kind] = 1 if component c has a linear part of that kind.
-# Shape (23, 3). The kinds of LPT._linear_rows are LinearKind.ZA (orders l = 0, 1, 2), B1
-# (l = 1) and XI (l = 0). They come back as (1 + f mu^2)^2 P, 2 (1 + f mu^2) P and P.
-# LPT._integrands uses W @ N, the weight of each kind.
-_LINEAR_MATRIX = _np.array(
-    [[1.0 if linear == kind else 0.0 for kind in LinearKind] for _, _, linear in _COMPONENTS])
-
-
-class Row(IntEnum):
-    """Rows of ``PTTerms.rows`` (the table in :class:`PTTerms`).
-
-    ``TREE_ROWS``, ``MATTER_ROWS`` and ``BIAS_ROWS`` live on the core q grid, the last
-    five rows (CHI_OUTSIDE ... THETA_BALL) on the core k grid.
-    """
-    X_LIN = 0
-    Y_LIN = 1
-    X_LIN_LT = 2
-    Y_LIN_LT = 3
-    X_LIN_GT = 4
-    Y_LIN_GT = 5
-    XI_LIN = 6
-    U_LIN = 7
-    X22 = 8
-    Y22 = 9
-    X13 = 10
-    Y13 = 11
-    V1 = 12
-    V3 = 13
-    T = 14
-    U3 = 15
-    U11 = 16
-    U20 = 17
-    X10 = 18
-    Y10 = 19
-    V10 = 20
-    V12 = 21
-    X_UPS = 22
-    Y_UPS = 23
-    CHI = 24
-    ZETA = 25
-    UB3 = 26
-    THETA = 27
-    CHI_OUTSIDE = 28
-    ZETA_OUTSIDE = 29
-    B2SQ_RESIDUAL = 30
-    B2SQ_CONST = 31
-    THETA_BALL = 32
-
-
-TREE_ROWS = slice(Row.X_LIN, Row.U_LIN + 1)
-MATTER_ROWS = slice(Row.X22, Row.T + 1)
-BIAS_ROWS = slice(Row.U3, Row.THETA + 1)
-BIAS_OFFSET = Row.U3   # corrs_bias[i] is rows[BIAS_OFFSET + i]
 N_ROWS = len(Row)
 
-# k-space rows of pt_terms added after the final transform (constants are read at k_min).
-# Columns: 'component' is the component whose weight W[:, component] multiplies the row,
-# 'row' the row of pt_terms.rows, 'factor' a fixed multiplier. 'interpolated' rows are
-# Hermite-interpolated in ln k at the true k, the others are constants. 'k0_const' rows are
-# skipped when subtract_k0_const=True. Used by LPT._final_integral.
-_KSPACE_ROWS = (
-    # component          row                 factor  interpolated  k0_const
-    (Component.CHI,      Row.CHI_OUTSIDE,    1.0,    True,         False),   # -int 4 pi q^2 chi dq
-    (Component.ZETA,     Row.ZETA_OUTSIDE,   1.0,    True,         False),   # -int 4 pi q^2 zeta dq
-    (Component.XI_XI,    Row.B2SQ_RESIDUAL,  1.0,    True,         False),   # H_0[xi^2 / 2](k) - C_q
-    (Component.XI_XI,    Row.B2SQ_CONST,     1.0,    False,        True),    # I0
-    (Component.THETA,    Row.THETA_BALL,     2.0,    False,        False),   # D_theta (the component is 2 theta)
-)
 
+def _components_from_table(s, R):
+    """The components as ``{moment index: (nq,) coefficient}`` dicts, in Component order, from the component table.
 
-class _RSDGeometry(NamedTuple):
-    """Redshift-space geometry of one mu (:func:`_rsd_geometry`), with K = k + f (k.n) n."""
-    Kfac: jnp.ndarray               # |K| / k
-    c: jnp.ndarray                  # cosine of the angle between K and k
-    s: jnp.ndarray                  # sine of that angle
-    c2: jnp.ndarray                 # c^2
-    s2: jnp.ndarray                 # s^2
-    A_mu: jnp.ndarray               # (1 + f) mu / Kfac, the line of sight along K
-    B_mu: jnp.ndarray               # sqrt(1 - mu^2) / Kfac, the line of sight across K
-
-
-def _rsd_geometry(f, mu, sin_mu):
-    """The :class:`_RSDGeometry` of ``mu`` (``sin_mu`` its AD-regular sine)."""
-    Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
-    c = (1 + f * mu**2) / Kfac
-    s = f * mu * sin_mu / Kfac
-    return _RSDGeometry(Kfac=Kfac, c=c, s=s, c2=c**2, s2=s**2,
-                        A_mu=(1 + f) * mu / Kfac, B_mu=sin_mu / Kfac)
+    c_j^c(q) = sum over the entries e = (c, j, t) of s_e R_t(q) (tables/lpt/component_entries.dat), with ``s`` the
+    per-point factors of ``lpt_tables.entry_scalars`` and ``R`` the basis rows of ``lpt_tables.row_basis``, summed per
+    component and moment in table order.
+    """
+    components = []
+    for entries in COMPONENT_ENTRIES:
+        coefficients = {}
+        for j, e, t in entries:
+            term = s[e] * R[t]
+            coefficients[j] = coefficients[j] + term if j in coefficients else term
+        components.append(coefficients)
+    return components
 
 
 def _weighted_coeffs(components, W):
@@ -321,9 +128,9 @@ class PTTerms(NamedTuple):
 
     Rows 0-27 live on the core q grid ``LPT._q``, rows 28-32 on the core k grid
     ``LPT._k``. Vector and tensor cumulants are stored as their scalar coefficients,
-    e.g. U_i = qhat_i U and A_ij = X delta_ij + Y qhat_i qhat_j. The builders return
-    the blocks ``TREE_ROWS``, ``MATTER_ROWS``, ``BIAS_ROWS`` and the k-space rows, so
-    ``corrs_bias[i]`` is row ``BIAS_OFFSET + i``.
+    e.g. U_i = qhat_i U and A_ij = X delta_ij + Y qhat_i qhat_j. The rows are evaluated from
+    the recipes of tables/lpt/rows_recipes.dat (``lpt_stages``), ``TREE_ROWS`` being the rows
+    linear in P_lin.
 
     ======  =============================  ==================================================
     row     Row                            definition (paper symbols, xi_l^n = H_l^n[P])
@@ -378,7 +185,7 @@ class _XiTransform(NamedTuple):
 class _SourceTransform(NamedTuple):
     """The Q/R sources (backward, q -> k) and their k -> q transforms to the correlator rows.
 
-    Stage B (``LPT._get_Qs_Rs``) and stage C (``LPT._transform_sources``) data. The
+    Stage B (``lpt_stages.stage_b``) and stage C (``LPT._transform_sources``) data. The
     order index l runs over 0 ... max(4, ``LPT.lmax``). ``u_m`` is ``(n_l, n_padded // 2 + 1)``,
     and ``u_m[0]`` serves the Q sources and the b2^2 row. The end weights live on
     ``k_padded``. ``u_m_src`` and ``q_src_padded`` are indexed ``[group, l]``. Group 0
@@ -389,8 +196,8 @@ class _SourceTransform(NamedTuple):
     four_pi_q3_padded: jnp.ndarray  # 4 pi q^3 on _q_padded (with d ln q it gives 4 pi q^2 dq)
     end_weights_Q: jnp.ndarray      # support [k_min, 2 k_max]
     end_weights_R: jnp.ndarray      # support [k_min, k_max]
-    R_source_rows: jnp.ndarray      # (5,) ln_list rows of R: (l, n) = (0,0) (2,0) (4,0) (1,-1) (3,-1)
-    R_source_ells: jnp.ndarray      # (5,) their orders l
+    R_source_rows: jnp.ndarray      # ln_list rows of the 13 units of stage B, (l, n) = lpt_stages.UNITS_13_LN
+    R_source_ells: jnp.ndarray      # their orders l
     u_m_src: jnp.ndarray            # k -> q kernels [bias group (nu, nu_n0), l]
     q_src_padded: jnp.ndarray       # (2, n_l, n_padded) output q grids of u_m_src
     log_q_src_padded: jnp.ndarray   # ln of q_src_padded
@@ -405,6 +212,7 @@ class _FinalTransform(NamedTuple):
     """
     pk_select_kernel: jnp.ndarray   # [l, k, j]: transform of the unit source at core node j, end weights folded in
     pk_select_slopes: jnp.ndarray   # ln k slopes of pk_select_kernel (axis 1) for spline.hermite
+    pk_select_nodes: jnp.ndarray    # [k, kind, l, j]: kind 0 pk_select_kernel, kind 1 pk_select_slopes (a copy)
     end_weights_q_core: jnp.ndarray # (nq,) trapezoid weights of the core q grid, 1/2 at both ends
     four_pi_q3: jnp.ndarray         # (nq,) 4 pi q^3
     ell_indices: jnp.ndarray        # (lmax + 1,) the orders l as floats
@@ -476,8 +284,7 @@ class LPT(PowerSpectrum):
 
         self.G00_coeffs = make_G00_coeffs(self.lmax)
 
-        ln_list = [[0, 0], [0, -2], [1, -1], [2, 0], [2, -2], [3, -1], [4, 0]]
-        self.ln_list = jnp.array(ln_list)
+        self.ln_list = jnp.array(lpt_stages.STAGE_A)       # the (l, n) of stage A the recipes need
         self._set_hankel(max(int(jnp.max(self.ln_list[:, 0])), self.lmax))
 
     def _set_hankel(self, lmax):
@@ -506,8 +313,8 @@ class LPT(PowerSpectrum):
         u_m = jnp.array([
             fftlog.hankel_setup(l, self.fftlog_settings.nu, self._hankel.grid, lnxy=self._hankel.lnxy[0])[2] for l in l_list
         ])
-        # R sources stay on their own grid q_padded[l]: the conjugate relation lands them on k_padded
-        r_ln = [(0, 0), (2, 0), (4, 0), (1, -1), (3, -1)]
+        # the 13 units of stage B stay on their own grid q_padded[l]: the conjugate relation lands them on k_padded
+        r_ln = lpt_stages.UNITS_13_LN
         ln_np = _np.asarray(self.ln_list)
         k_ref = _np.asarray(self._hankel.k_padded)
         for l, _n in r_ln:
@@ -541,9 +348,14 @@ class LPT(PowerSpectrum):
 
         ell_indices = jnp.arange(self.lmax + 1, dtype=self._q.dtype)
         pk_select_kernel = jax.vmap(build_one)(u_m[:self.lmax + 1]) * end_weights_q_core
+        pk_select_slopes = spline.slopes(self._logk_fft, pk_select_kernel, axis=1)
         self._final_transform = _FinalTransform(
             pk_select_kernel=pk_select_kernel,
-            pk_select_slopes=spline.slopes(self._logk_fft, pk_select_kernel, axis=1),
+            pk_select_slopes=pk_select_slopes,
+            # the Hermite nodes of the tangent rule's kernel (lpt_rule.point_kernel), ln k axis first: one gather takes
+            # the value and slope rows of two nodes (static copy; the forward reads pk_select_kernel / pk_select_slopes)
+            pk_select_nodes=jnp.stack([jnp.moveaxis(pk_select_kernel, 1, 0), jnp.moveaxis(pk_select_slopes, 1, 0)],
+                                      axis=1),
             end_weights_q_core=end_weights_q_core,
             four_pi_q3=4.0 * jnp.pi * self._q**3,
             ell_indices=ell_indices,
@@ -588,52 +400,6 @@ class LPT(PowerSpectrum):
         xi_ln = jnp.zeros((arrays.shape[0], 5, 5, self._hankel.k_padded.shape[0]))
         return xi_ln.at[:, ells, ns].set(xis), raw
 
-    def _get_Qs_Rs(self, xi_ln_common, xi_ln_own_grid, pk_lin_padded):
-        """Q/R sources on the padded k grid: ``(Q1, Q2, Q5)``, ``(R1, R2)``.
-
-        Q (products of different l) from ``xi_ln_common``; R from ``xi_ln_own_grid``
-        with the per-l kernel.  Inputs carry the mask only; ``w_xi`` is applied here once
-        per transform input (on the product for Q: it is one function cut at q_max).
-
-        Stage B. One l = 0 transform of two xi products gives (paper Eq. Q_as_ft)
-        Q_1 = 4 pi int dq q^2 j_0(kq) zeta / 2 and
-        Q_1 - Q_2 = (2/5) k^2 4 pi int dq q^2 j_0(kq) [(xi_1^{-1})^2 - (xi_3^{-1})^2].
-        Q_5 = (Q_1 + Q_2) / 2. R_1 and R_1 + R_2 are P(k) times combinations of
-        k^2 int dq q xi_l^0(q) j_l(kq) (l = 0, 2, 4) and k^3 int dq q xi_l^{-1}(q) j_l(kq)
-        (l = 1, 3). Q is cut to [k_min, 2 k_max], R to [k_min, k_max].
-        """
-        nu = self.fftlog_settings.nu
-        integrands = jnp.stack([
-            8/15 * xi_ln_common[0,0]**2 - 16/21 * xi_ln_common[2,0]**2
-            + 8/35 * xi_ln_common[4,0]**2,
-            xi_ln_common[1,-1]**2 - xi_ln_common[3,-1]**2,
-        ], axis=0) * self._hankel.w_xi
-        res = fftlog.hankel(
-            nu, self._source_transform.four_pi_q3_padded * integrands, self._q_padded,
-            self._hankel.k_padded, self._source_transform.u_m[0], self._hankel.npad, crop=False,
-        )
-        res = res * self._source_transform.end_weights_Q
-        Q1 = res[0]
-        Q2 = Q1 - 2/5 * self._hankel.k_padded**2 * res[1]
-        Q5 = (Q1 + Q2) / 2
-        Qs = jnp.stack([Q1, Q2, Q5], axis=0)
-
-        ells = self._source_transform.R_source_ells
-        q_l = self._hankel.q_padded[ells]
-        xis = xi_ln_own_grid[self._source_transform.R_source_rows] * self._hankel.w_xi
-        pk_list = fftlog.hankel(
-            nu, q_l**2 * xis, q_l,
-            self._hankel.k_padded, self._hankel.u_m[ells], self._hankel.npad, crop=False,
-        ) * (pk_lin_padded * self._source_transform.end_weights_R)
-        pk_00, pk_20, pk_40, pk_1m1, pk_3m1 = pk_list
-        k = self._hankel.k_padded
-        R1 = k**2 * (8/15*pk_00 - 16/21*pk_20 + 8/35*pk_40)
-        R3 = (k**2 * (2/5*pk_00 - 6/7*pk_20 + 16/35*pk_40)
-              + k**3 * (2/5*pk_1m1 - 2/5*pk_3m1))
-        R2 = R3 - R1
-        Rs = jnp.stack([R1, R2], axis=0)
-        return Qs, Rs
-
     def _transform_sources(self, sources, *, ells, ns):
         """``H_l^n[S](q) = int dk k^{n+2} S(k) j_l(kq) / (2 pi^2)`` of each source on the common padded q grid.
 
@@ -665,236 +431,20 @@ class LPT(PowerSpectrum):
             d.reshape(-1, d.shape[-1]))
         return rows.reshape(d.shape)
 
-    def _get_corrs_tree(self, xi_ln, xi_ln_lt, pk_int, pk_int_lt):
-        """Tree rows (``TREE_ROWS``): ``X = (2/3)(pk_int - xi_0^{-2} - xi_2^{-2})``, ``Y = 2 xi_2^{-2}``.
-
-        Y as ``(2q/5)(xi_1^{-1} + xi_3^{-1})`` (n = -2 is inaccurate at small q); X keeps
-        ``xi_2^{-2}``, whose error cancels that of ``xi_0^{-2}``.
-
-        ``xi_ln`` and ``xi_ln_lt`` are the stage-A outputs of P and P_lt on the core q grid.
-        ``pk_int`` = int dk P / (2 pi^2), and likewise ``pk_int_lt``. The lt rows use P_lt,
-        and the gt rows are the full rows minus the lt rows. xi_lin = xi_0^0 and
-        U_lin = -xi_1^{-1}.
-        """
-        q = self._q
-        X_lin = 2/3 * (pk_int - xi_ln[0,-2] - xi_ln[2,-2])
-        Y_lin = 2 * q / 5 * (xi_ln[1,-1] + xi_ln[3,-1])
-
-        X_lin_lt = 2/3 * (pk_int_lt - xi_ln_lt[0,-2] - xi_ln_lt[2,-2])
-        Y_lin_lt = 2 * q / 5 * (xi_ln_lt[1,-1] + xi_ln_lt[3,-1])
-
-        X_lin_gt = X_lin - X_lin_lt
-        Y_lin_gt = Y_lin - Y_lin_lt
-
-        xi_lin = xi_ln[0,0]
-        U_lin = - xi_ln[1,-1]
-
-        corrs = jnp.stack([X_lin, Y_lin, X_lin_lt, Y_lin_lt,
-                           X_lin_gt, Y_lin_gt, xi_lin, U_lin], axis=0)
-        return corrs
-
-    def _get_corrs_matter_1loop(self, Qs, Rs, Y_lin):
-        """Matter one-loop rows X22, Y22, X13, Y13, V1, V3, T (``MATTER_ROWS``), returns ``(corrs, M22)``.
-
-        Through stage C. The sources are ``S_22 = (9/98) Q1``, ``S_13 = (5/21) R1`` and
-        W_T, W_1, W_3, the brackets of the paper's T, V1, V3 with their prefactors.
-        ``X22 = (2/3)(M22 - H_0^{-2}[S_22] - Y22/2)``,
-        ``X13 = (2/3)(M13 - H_0^{-2}[S_13] - H_2^{-2}[S_13])`` and
-        ``Y13 = 2 H_2^{-2}[S_13]``. ``Y_lin`` (``Row.Y_LIN``) enters through Y22.
-
-        Zero-lag constant ``M = int dk S / (2 pi^2)``: the grid moment of the padded,
-        end-weighted source.  Identities:
-        ``Y22 = (18/49) Y_lin^2 / q^2``, ``M13 = (70/27) M22``.
-        n = -3 rows from n = -2 pairs:
-        ``T = (q/7)(H_2^{-2} + H_4^{-2})[W_T]``, ``H_1^{-3}[W] = (q/3)(H_0^{-2} + H_2^{-2})[W]``,
-        ``V_i = H_1^{-3}[W_i] - T/5``.
-        """
-        crop = self._hankel.grid.crop
-        Q1, Q2 = Qs[0], Qs[1]
-        R1, R2 = Rs[0], Rs[1]
-        q = self._q
-
-        S_22 = 9/98 * Q1
-        S_13 = 5/21 * R1
-        W_T = -3/7 * (Q1 + 2 * Q2 + 2 * R1 + 4 * R2)
-        W_1 = 3/35 * (Q1 + 2 * Q2 - 3 * R1 + 4 * R2)
-        W_3 = -3/35 * (4 * Q1 - 2 * Q2 - 2 * R1 - 4 * R2)
-
-        H0_S22_padded = self._transform_sources([S_22], ells=[0], ns=[-2])[0]
-        H_pairs_padded = self._transform_sources(
-            [S_13, W_T, W_1, W_3],
-            ells=[(0, 2), (2, 4), (0, 2), (0, 2)],
-            ns=[-2, -2, -2, -2],
-        )
-        H_pairs = crop(H_pairs_padded)
-        moment = self._hankel.grid.moment
-        M22 = moment(S_22, 1) / (2 * jnp.pi**2)
-        M13 = 70/27 * M22
-        H0_S22 = crop(H0_S22_padded)
-        (H0_S13, H2_S13), (H2_WT, H4_WT), (H0_W1, H2_W1), (H0_W3, H2_W3) = H_pairs
-
-        Y22 = 18/49 * Y_lin**2 / q**2
-        X22 = 2/3 * (M22 - H0_S22 - 0.5 * Y22)
-        X13 = 2/3 * (M13 - H0_S13 - H2_S13)
-        Y13 = 2 * H2_S13
-
-        T = q / 7 * (H2_WT + H4_WT)
-        H1m3_W1 = q / 3 * (H0_W1 + H2_W1)
-        H1m3_W3 = q / 3 * (H0_W3 + H2_W3)
-        V1 = H1m3_W1 - 0.2 * T
-        V3 = H1m3_W3 - 0.2 * T
-
-        corrs = jnp.stack([X22, Y22, X13, Y13, V1, V3, T], axis=0)
-        return corrs, M22
-
-    def _get_corrs_bias(self, Qs, Rs, xi_ln, M22):
-        """Bias rows (``BIAS_ROWS``) from the Q/R sources and the core xi output ``xi_ln``.
-
-        Identities: ``M10 = (28/9) M22``,
-        ``V10 = (24/35)((xi_1^{-1})^2 - (xi_3^{-1})^2)/q``, ``U20 = -(6/7) U_lin^2 / q``,
-        ``Ub3 = -(24/5) U3``, ``theta = H_0^0[-(8/7) R1]`` (``F_G2 = -(20/7) R1``).
-
-        Stage C gives ``U3 = H_1^{-1}[-(5/21) R1]``, ``U11 = H_1^{-1}[-(6/7)(R1 + R2)]``,
-        ``X10 = M10 - H_0^{-2}[S_10a] - H_2^{-2}[S_10b]``,
-        ``Y10 = 3 H_2^{-2}[S_10b]`` and theta, with
-        ``S_10a = (2/7)(Q5 + 2 R2)`` and ``S_10b = (1/7)(2 Q5 + 3 R1 + 4 R2)``.
-        The other rows are local in ``xi_ln``. chi and zeta are the paper's chi_G2 and
-        zeta_G2. ``X_Upsilon = 4 J3^2`` and ``Y_Upsilon = 12 J2^2 - 4 J3^2 - (4/3) U_lin^2``,
-        where J2, J3 are the paper's J_2, J_3 up to sign.
-        ``V12 = (14/3) V10 + (2/5) d/dq[(xi_1^{-1})^2 - (xi_3^{-1})^2]``.
-        """
-        Q5 = Qs[2]
-        R1, R2 = Rs[0], Rs[1]
-        q = self._q
-
-        S_10a = 2/7 * (Q5 + 2 * R2)
-        S_10b = 1/7 * (2 * Q5 + 3 * R1 + 4 * R2)
-        crop = self._hankel.grid.crop
-        H_bias_padded = self._transform_sources(
-            [
-                -5/21 * R1,
-                -6/7 * (R1 + R2),
-                S_10a,
-                S_10b,
-            ],
-            ells=[1, 1, 0, 2],
-            ns=[-1, -1, -2, -2],
-        )
-        H_bias = crop(H_bias_padded)
-        # separate call: batching theta with the rows above changes their FFT rounding
-        theta = crop(self._transform_sources([-8/7 * R1], ells=[0], ns=[0])[0])
-        M10 = 28/9 * M22
-
-        U3, U11 = H_bias[0], H_bias[1]
-        H0_S10a, H2_S10b = H_bias[2], H_bias[3]
-        X10 = M10 - H0_S10a - H2_S10b
-        Y10 = 3 * H2_S10b
-
-        U_lin = -xi_ln[1, -1]
-        U20 = -(6.0/7.0) * U_lin**2 / q
-
-        J2 = 2/15 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        J3 = -1/5 * xi_ln[1,-1] - 1/5 * xi_ln[3,-1]
-        X_Upsilon = 4 * J3**2
-        Y_Upsilon = 12 * J2**2 - 4 * J3**2 - (4.0/3.0) * U_lin**2
-
-        V10 = 24/35 * (xi_ln[1,-1]**2 - xi_ln[3,-1]**2) / q
-        # d/dq[(xi_3^{-1})^2 - (xi_1^{-1})^2], with d xi_l^n / dq = (l/q) xi_l^n - xi_{l+1}^{n+1}
-        dq_xi3sq_minus_xi1sq = (
-            2.0 * xi_ln[3,-1] * (3.0*xi_ln[3,-1]/q - xi_ln[4,0])
-            - 2.0 * xi_ln[1,-1] * (xi_ln[1,-1]/q - xi_ln[2,0])
-        )
-        V12 = (14.0/3.0) * V10 - (2.0/5.0) * dq_xi3sq_minus_xi1sq
-        chi = 4/3 * (xi_ln[2,0]**2 - xi_ln[0,0]**2)
-        zeta = 2 * (8/15 * xi_ln[0,0]**2 - 16/21 * xi_ln[2,0]**2 + 8/35 * xi_ln[4,0]**2)
-
-        Ub3 = -24/5 * U3
-
-        return jnp.stack([U3, U11, U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon,
-                          chi, zeta, Ub3, theta], axis=0)
-
-    def _get_kspace_rows(self, chi, zeta, U3, xi_lin_padded, pk_lin):
-        """The k-space rows ``Row.CHI_OUTSIDE`` ... ``Row.THETA_BALL`` on the core k grid (see :class:`PTTerms`).
-
-        The chi and zeta rows are ``-4 pi int dq q^2 corr`` over the core q grid (core
-        trapezoid), which equals the integral outside it. The b2^2 rows are the residual
-        ``H_0[xi^2/2](k) - C_q`` (the paper's Eq. m0_residual) and the constant
-        ``I0 = (1/2) int dk k^2 P^2 / (2 pi^2)``.
-        Here ``H_0[xi^2/2](k) = 4 pi int dq q^2 j_0(kq) xi_lin^2 / 2`` is a q -> k
-        transform of the padded xi_0^0 ``xi_lin_padded``, and ``C_q`` is its k -> 0 limit,
-        the end-weighted sum of the same samples that enter the transform (as for the EPT
-        m = 0 blocks), so the residual is as accurate as the transform. I0, the same limit
-        by Parseval's theorem, is the k-space weighted sum (end weight on P^2 once) and is
-        added once.
-        The theta row is the q < q_min ball ``D_theta = (96 pi / 5) q_min^2 U3(q_min)``.
-        """
-        q_core = fftlog.LogGrid(self._q)
-        w_core = self._final_transform.end_weights_q_core
-
-        def outside_core_constant(corr):
-            return jnp.broadcast_to(-4 * jnp.pi * q_core.moment(w_core * corr, 3), self._k.shape)
-
-        source = 0.5 * xi_lin_padded**2
-        b2sq_direct = fftlog.hankel(
-            self.fftlog_settings.nu,
-            self._source_transform.four_pi_q3_padded * source * self._hankel.w_xi,
-            self._q_padded, self._hankel.k_padded, self._source_transform.u_m[0], self._hankel.npad, crop=True,
-        )
-        # C_q: the k -> 0 limit of b2sq_direct as the end-weighted sum of the same samples
-        b2sq_direct_k0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(source * self._hankel.w_xi, 3)
-        # the end weight multiplies P^2 once
-        b2sq_const = 0.5 * self._hankel.grid.moment(
-            self._hankel.w_input * fftlog.pad(pk_lin, self._hankel.grid, self._hankel.pad_mode)**2, 3) / (2 * jnp.pi**2)
-        theta_ball = (96 * jnp.pi / 5) * self._q[0]**2 * U3[0]
-        return jnp.stack([
-            outside_core_constant(chi),
-            outside_core_constant(zeta),
-            b2sq_direct - b2sq_direct_k0,
-            jnp.broadcast_to(b2sq_const, self._k.shape),
-            jnp.broadcast_to(theta_ball, self._k.shape),
-        ], axis=0)
-
     @partial(jit, static_argnames=['self'])
     def get_pt_terms(self, pk_data, h):
         """The :class:`PTTerms` of ``pk_data``.
 
-        The rows (:class:`Row`) are ``TREE_ROWS`` (X/Y_lin, X/Y_lin_lt, X/Y_lin_gt, xi_lin,
-        U_lin), ``MATTER_ROWS`` (X22, Y22, X13, Y13, V1, V3, T) and ``BIAS_ROWS`` (U3, U11,
-        U20, X10, Y10, V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta) on the core
-        q grid, then the k-space rows of :meth:`_get_kspace_rows`.
-
-        The steps are stage A (``_get_xi_ln``) of P and P_lt, ``_get_corrs_tree``, stage B
-        (``_get_Qs_Rs``), ``_get_corrs_matter_1loop`` and ``_get_corrs_bias`` through
-        stage C, and ``_get_kspace_rows``. :class:`PTTerms` has the table of the rows.
+        The rows (:class:`Row`) are the tree rows (``TREE_ROWS``), the one-loop rows on the core q grid and the
+        k-space rows, evaluated from the recipes of tables/lpt/rows_recipes.dat by ``lpt_stages.pt_rows`` (stage A
+        ``_get_xi_ln`` of P and P_lt, the stage-B units and sources, stage C through ``_transform_sources``, the
+        products, constants and rules).  :class:`PTTerms` has the table of the rows.
 
         ``h`` enters only the no-wiggle data of the 'linear_ir_resum' counterterm base.
         ``h=None`` skips them (the template and component methods do so), and such
         ``pt_terms`` cannot be fed to the spectrum methods under that base.
         """
-        pk_lin = self._pk_at(self._k, pk_data)
-        pk_lin_lt = pk_lin * jnp.exp(-(self._k / self.k_IR)**2)
-
-        pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk_lin), 1) / (2 * jnp.pi**2)
-        pk_int_lt = self._hankel.grid.moment(self._hankel.pad_input(pk_lin_lt), 1) / (2 * jnp.pi**2)
-
-        xi_ln_padded, xi_raw_padded = self._get_xi_ln(
-            jnp.stack([pk_lin, pk_lin_lt], axis=0))
-        xi_ln = self._hankel.grid.crop(xi_ln_padded[0])
-        xi_ln_lt = self._hankel.grid.crop(xi_ln_padded[1])
-
-        corrs_tree = self._get_corrs_tree(xi_ln, xi_ln_lt, pk_int, pk_int_lt)
-
-        Qs, Rs = self._get_Qs_Rs(xi_ln_padded[0], xi_raw_padded[0],
-                                 fftlog.pad(pk_lin, self._hankel.grid, 'zero-pad'))
-        corrs_matter_1loop, M22 = self._get_corrs_matter_1loop(Qs, Rs, corrs_tree[Row.Y_LIN])
-        corrs_bias = self._get_corrs_bias(Qs, Rs, xi_ln, M22)
-
-        # padded xi_0^0, not corrs_tree[Row.XI_LIN]: the lower padded band gives the q < q_min part
-        kspace_rows = self._get_kspace_rows(
-            corrs_bias[Row.CHI - BIAS_OFFSET], corrs_bias[Row.ZETA - BIAS_OFFSET],
-            corrs_bias[Row.U3 - BIAS_OFFSET], xi_ln_padded[0][0, 0], pk_lin)
-        rows = jnp.concatenate([corrs_tree, corrs_matter_1loop, corrs_bias, kspace_rows], axis=0)
-
+        rows = lpt_stages.pt_rows(self, self._pk_at(self._k, pk_data))
         if self.counterterm_base == 'linear_ir_resum' and h is not None:
             pk_nw_data, Sigma2, dSigma2 = self._get_ir_data(pk_data, h)
         else:
@@ -928,79 +478,6 @@ class LPT(PowerSpectrum):
         return _AngularIntegralFactors(Kfac=geo.Kfac, K=K, Ksq=Ksq, ir_damping=ir_damping,
                                        ell_factors=ell_factors, moments=moments)
 
-    def _component_coefficients(
-        self, k_i, mu_j, f, Kfac, K, Ksq, corrs_tree, corrs_matter_1loop, corrs_bias
-    ):
-        """The 23 components as ``{moment index: (nq,) coefficient}`` dicts, in ``_COMPONENTS`` order.
-
-        This is the only definition of the integrand. Component c contributes
-        sum_j c_j^c(q) M_j to the integrand, where M_j are the moments (MQ0 ...) of
-        ``_angular_integral_factors``. The coefficients contain the k, K, f and mu factors
-        of the terms listed above ``_COMPONENTS``.
-        """
-        X_lin_gt, Y_lin_gt = corrs_tree[Row.X_LIN_GT], corrs_tree[Row.Y_LIN_GT]
-        xi_lin, U_lin = corrs_tree[Row.XI_LIN], corrs_tree[Row.U_LIN]
-        X22, Y22, X13, Y13, V1, V3, T = corrs_matter_1loop
-        U3, U11, U20, X10, Y10 = corrs_bias[Row.U3 - BIAS_OFFSET:Row.Y10 - BIAS_OFFSET + 1]
-        V10, V12, X_Upsilon, Y_Upsilon, chi, zeta, Ub3, theta = corrs_bias[Row.V10 - BIAS_OFFSET:]
-
-        mu2 = mu_j**2
-
-        ZA = {MQ0: 1.0 - 0.5 * Ksq * X_lin_gt, MQ2: -0.5 * Ksq * Y_lin_gt}
-
-        aa = Ksq**2 / 8.0
-        AA = {MQ0: aa * X_lin_gt**2,
-              MQ2: aa * 2.0 * X_lin_gt * Y_lin_gt,
-              MQ4: aa * Y_lin_gt**2}
-
-        p22 = -0.5 * k_i**2
-        A22 = {MQ0: p22 * (Kfac**2 + 2 * f * (1 + f) * mu2 + f**2 * mu2) * X22,
-               MQ2: p22 * Kfac**2 * Y22,
-               MQ1NQ1: p22 * 2 * f * Kfac * mu_j * Y22,
-               NQ2: p22 * f**2 * mu2 * Y22}
-
-        A13 = {MQ0: p22 * 2 * (Kfac**2 + 2 * f * (1 + f) * mu2) * X13,
-               MQ2: p22 * 2 * Kfac**2 * Y13,
-               MQ1NQ1: p22 * 2 * 2 * f * Kfac * mu_j * Y13}
-
-        p112 = 0.5 * k_i**3
-        W112 = {MQ1: p112 * (2 * Kfac * (Kfac**2 + f * (1 + f) * mu2) * V1 + Kfac**2 * Kfac * V3),
-                NQ1: p112 * Kfac**2 * f * mu_j * V3,
-                MQ3: p112 * Kfac**2 * Kfac * T,
-                MQ2NQ1: p112 * Kfac**2 * f * mu_j * T}
-
-        U10 = {MQ1: -2.0 * K * (U_lin + U3), NQ1: -4.0 * f * k_i * mu_j * U3}
-
-        A_U = {MQ1: Ksq * K * X_lin_gt * U_lin, MQ3: Ksq * K * Y_lin_gt * U_lin}
-
-        A10 = {MQ0: -Ksq * X10 - f * k_i**2 * mu_j * (1 + f) * mu_j * X10,
-               MQ2: -Ksq * Y10,
-               MQ1NQ1: -f * k_i**2 * mu_j * Kfac * Y10}
-
-        XI = {MQ0: xi_lin}
-        A_XI = {MQ0: -0.5 * Ksq * X_lin_gt * xi_lin, MQ2: -0.5 * Ksq * Y_lin_gt * xi_lin}
-        U_U = {MQ2: -Ksq * U_lin**2}
-        U11c = {MQ1: -K * U11, NQ1: -f * k_i * mu_j * U11}
-        U20c = {MQ1: -K * U20, NQ1: -f * k_i * mu_j * U20}
-        XI_U = {MQ1: -2.0 * K * xi_lin * U_lin}
-        XI_XI = {MQ0: 0.5 * xi_lin**2}
-
-        UPS = {MQ0: -Ksq * X_Upsilon, MQ2: -Ksq * Y_Upsilon}
-        V10c = {MQ1: -2.0 * K * V10, NQ1: -2.0 * f * k_i * mu_j * V10}
-        V12c = {MQ1: -2.0 * K * V12}
-        CHI = {MQ0: chi}
-        ZETA = {MQ0: zeta}
-        UB3 = {MQ1: -2.0 * K * Ub3}
-        THETA = {MQ0: 2.0 * theta}
-
-        CTR = {MQ0: 1.0 - 0.5 * Ksq * X_lin_gt, MQ2: -0.5 * Ksq * Y_lin_gt}
-
-        components = dict(ZA=ZA, AA=AA, A22=A22, A13=A13, W112=W112, U10=U10, A_U=A_U,
-                          A10=A10, XI=XI, A_XI=A_XI, U_U=U_U, U11=U11c, U20=U20c,
-                          XI_U=XI_U, XI_XI=XI_XI, UPS=UPS, V10=V10c, V12=V12c, CHI=CHI,
-                          ZETA=ZETA, UB3=UB3, THETA=THETA, CTR=CTR)
-        return tuple(components[component.name] for component, *_ in _COMPONENTS)
-
     def _linear_rows(self, mu_j, f, V, geometry, K, Ksq, ell_factors, corrs_tree):
         """Linear part of the final integrand (JVP at pt_terms = 0), its weight and transform.
 
@@ -1013,6 +490,11 @@ class LPT(PowerSpectrum):
         linear-theory terms (first order in the tree rows), on the core q grid.
         ``geometry`` is the :class:`_RSDGeometry` of this mu, and ``K``, ``Ksq`` and
         ``ell_factors`` are those of ``_angular_integral_factors``.
+
+        Hand-written.  Which components have a linear part of which kind, and the tree rows of
+        each kind, come from tables/lpt/components.dat (derived by tools/ptgen from the cumulant
+        expansion, lpt_components), the expansion of those terms in l and their Kaiser factors
+        are written here.
         """
         X_lt, Y_lt = corrs_tree[Row.X_LIN_LT], corrs_tree[Row.Y_LIN_LT]
         X_gt, Y_gt = corrs_tree[Row.X_LIN_GT], corrs_tree[Row.Y_LIN_GT]
@@ -1063,17 +545,16 @@ class LPT(PowerSpectrum):
         ``g_o = ir_damping ell_factors sum_j (sum_c W[o, c] c_j^c) M_j - lin_weight (linear rows)
         - W[o, Component.XI_XI] xi^2/2``.  Returns ``(g, lin)`` with ``lin * P_lin(k)`` the k-space add-back.
 
-        c_j^c are the component coefficients of ``_component_coefficients``. M_j,
+        c_j^c are the component coefficients of the component table (``_components_from_table``, from
+        ``corrs_q = (tree rows, basis rows R_t)``). M_j,
         ``ir_damping`` and ``ell_factors`` are those of ``_angular_integral_factors``. The
         linear rows come from ``_linear_rows``, weighted per kind by ``W @ _LINEAR_MATRIX``.
         ``g`` is a tuple of n_out arrays. ``lin`` has shape ``(n_out,)``. ``V`` and ``geometry``
         are the angular table and the :class:`_RSDGeometry` of this mu.
         """
-        corrs_tree, corrs_matter_1loop, corrs_bias = corrs_q
+        corrs_tree, R = corrs_q
         factors = self._angular_integral_factors(k_i, V, geometry, corrs_tree)
-        components = self._component_coefficients(
-            k_i, mu_j, f, factors.Kfac, factors.K, factors.Ksq,
-            corrs_tree, corrs_matter_1loop, corrs_bias)
+        components = _components_from_table(entry_scalars(k_i, mu_j, f, factors.Kfac), R)
         coeffs = _weighted_coeffs(components, W)                        # {j: (n_out, nq)}
 
         lin_weight, za, b1, xi, kaiser = self._linear_rows(
@@ -1097,6 +578,63 @@ class LPT(PowerSpectrum):
             g.append(g_o)
         return tuple(g), lin
 
+    def _angular_table(self, f, mu_j, sin_j):
+        """The angular table V ``(5, L, L)`` of one mu (``utils_lpt.compute_V_mu``)."""
+        return compute_V_mu(_rsd_geometry(f, mu_j, sin_j).s2, self.G00_coeffs, self.lmax)
+
+    def _kspace_tables(self, rows):
+        """The ``_KSPACE_ROWS`` rows (interpolated rows whole, constants at k_min) and their ln k slopes."""
+        kspace_rows = {row: rows[row] if interpolated else rows[row, 0]
+                       for _, row, _, interpolated, _ in _KSPACE_ROWS}
+        kspace_slopes = {row: spline.slopes(self._logk_fft, rows[row])
+                         for _, row, _, interpolated, _ in _KSPACE_ROWS if interpolated}
+        return kspace_rows, kspace_slopes
+
+    def _point_value(self, k_i, mu_j, V, sin_j, p_i, W_ij, f, corrs_q, kspace):
+        """Output ``(n_out,)`` of the final integral at one (k, mu) (the body of the point loop)."""
+        ft = self._final_transform
+        kspace_rows, kspace_slopes = kspace
+        # the geometry once per (k, mu), shared by the integral factors and the linear rows
+        geometry = _rsd_geometry(f, mu_j, sin_j)
+        logk = jnp.log(k_i)
+        g, lin = self._integrands(k_i, mu_j, f, V, geometry, corrs_q, W_ij)
+        kernel = spline.hermite(logk, self._logk_fft, ft.pk_select_kernel, ft.pk_select_slopes, axis=1)
+        out = []
+        for g_o in g:
+            g_o = ft.four_pi_q3 * g_o.at[0, :].subtract(g_o[0, -1])
+            out.append(jnp.sum(jnp.sum(g_o * kernel, axis=-1), axis=-1))
+        out = jnp.stack(out) + lin * p_i
+        for component, row, factor, interpolated, k0_const in _KSPACE_ROWS:
+            if k0_const and self.subtract_k0_const:
+                continue
+            if interpolated:
+                value = spline.hermite(logk, self._logk_fft, kspace_rows[row], kspace_slopes[row])
+            else:
+                value = kspace_rows[row]
+            out = out + W_ij[:, component] * (factor * value)
+        return out
+
+    def _point_loop(self, W_fn, k_true, mu_true, sin_true, pk_lin_true, rows, f, W_args):
+        """The point loop ``(nk, nmu, n_out)``: ``_point_value`` at every (k, mu).
+
+        ``k_true``, ``pk_lin_true`` ``(nk, nmu)``; ``mu_true``, ``sin_true`` ``(nmu,)``; ``rows``
+        ``PTTerms.rows``.  The weights are ``W_fn(k_i, mu_j, *W_args)`` ``(n_out, 23)`` at each point
+        (a callable W, closure-converted) or, for ``W_fn=None``, the array ``W_args[0]``.
+        """
+        corrs_q = (rows[TREE_ROWS], row_basis(rows))       # the basis rows R_t once per call, outside the loop
+        kspace = self._kspace_tables(rows)
+        V_all = jax.vmap(lambda m, s: self._angular_table(f, m, s))(mu_true, sin_true)   # once per mu
+        mu_b = jnp.broadcast_to(mu_true, k_true.shape)
+
+        def per_mu(k_i, mu_j, V, sin_j, p_i):
+            W_ij = W_fn(k_i, mu_j, *W_args) if W_fn is not None else W_args[0]
+            return self._point_value(k_i, mu_j, V, sin_j, p_i, W_ij, f, corrs_q, kspace)
+
+        def per_k(k_row, mu_row, p_row):
+            return jax.vmap(per_mu)(k_row, mu_row, V_all, sin_true, p_row)
+
+        return jax.vmap(per_k)(k_true, mu_b, pk_lin_true)
+
     def _final_integral(self, k_true, mu_true, sin_true, rows, f, pk_data, W):
         """Final (k, mu) integral of the outputs with component weights ``W``, ``(n_out, nk, nmu)``.
 
@@ -1110,47 +648,24 @@ class LPT(PowerSpectrum):
         adds ``lin * P_lin(k)`` and the ``_KSPACE_ROWS`` rows times their component weights.
         W = identity gives the components, ``_TEMPLATE_MATRIX`` the templates, and the
         function ``component_weights`` of ``_pkmu_true`` the spectrum. ``rows`` is ``PTTerms.rows``.
+
+        The point loop is a ``jax.custom_jvp`` (``_point_loop``, rule ``lpt_rule.point_loop_jvp``;
+        plain autodiff with ``USE_TANGENT_RULE = False``).  A callable W is closure-converted, so the
+        values it closes over (biases, counterterms, f) are arguments of the custom_jvp, and the
+        primal evaluates it at every point as before.
         """
-        ft = self._final_transform
-        corrs_q = (rows[TREE_ROWS], rows[MATTER_ROWS], rows[BIAS_ROWS])
-        kspace_rows = {row: rows[row] if interpolated else rows[row, 0]
-                       for _, row, _, interpolated, _ in _KSPACE_ROWS}
-        kspace_slopes = {row: spline.slopes(self._logk_fft, rows[row])
-                         for _, row, _, interpolated, _ in _KSPACE_ROWS if interpolated}
-
-        def angular_table(mu_j, sin_j):
-            return compute_V_mu(_rsd_geometry(f, mu_j, sin_j).s2, self.G00_coeffs, self.lmax)
-
-        V_all = jax.vmap(angular_table)(mu_true, sin_true)       # (nmu, 5, L, L), once per mu
-        mu_true = jnp.broadcast_to(mu_true, k_true.shape)
         pk_lin_true = self._pk_at(k_true, pk_data)
-
-        def per_mu(k_i, mu_j, V, sin_j, p_i):
-            # the geometry once per (k, mu), shared by the integral factors and the linear rows
-            geometry = _rsd_geometry(f, mu_j, sin_j)
-            logk = jnp.log(k_i)
-            W_ij = W(k_i, mu_j) if callable(W) else W
-            g, lin = self._integrands(k_i, mu_j, f, V, geometry, corrs_q, W_ij)
-            kernel = spline.hermite(logk, self._logk_fft, ft.pk_select_kernel, ft.pk_select_slopes, axis=1)
-            out = []
-            for g_o in g:
-                g_o = ft.four_pi_q3 * g_o.at[0, :].subtract(g_o[0, -1])
-                out.append(jnp.sum(jnp.sum(g_o * kernel, axis=-1), axis=-1))
-            out = jnp.stack(out) + lin * p_i
-            for component, row, factor, interpolated, k0_const in _KSPACE_ROWS:
-                if k0_const and self.subtract_k0_const:
-                    continue
-                if interpolated:
-                    value = spline.hermite(logk, self._logk_fft, kspace_rows[row], kspace_slopes[row])
-                else:
-                    value = kspace_rows[row]
-                out = out + W_ij[:, component] * (factor * value)
-            return out
-
-        def per_k(k_row, mu_row, p_row):
-            return jax.vmap(per_mu)(k_row, mu_row, V_all, sin_true, p_row)
-
-        out = jax.vmap(per_k)(k_true, mu_true, pk_lin_true)       # (nk, nmu, n_out)
+        if callable(W):
+            W_fn, W_args = jax.closure_convert(W, k_true[0, 0], mu_true[0])
+            W_args = tuple(W_args)
+        else:
+            W_fn, W_args = None, (jnp.asarray(W),)
+        if USE_TANGENT_RULE:
+            loop = jax.custom_jvp(partial(self._point_loop, W_fn))
+            loop.defjvp(partial(lpt_rule.point_loop_jvp, self, W_fn), symbolic_zeros=True)
+        else:
+            loop = partial(self._point_loop, W_fn)
+        out = loop(k_true, mu_true, sin_true, pk_lin_true, rows, f, W_args)   # (nk, nmu, n_out)
         return jnp.moveaxis(out, -1, 0)
 
     def _pkmu_true(self, k_true, mu_true, sin_true, pt_terms, pk_data, params):
