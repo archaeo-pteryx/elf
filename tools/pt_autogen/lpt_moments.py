@@ -38,7 +38,6 @@ the monomials and their derivatives, and at runtime the residual sets of the rul
 Khat.qhat extends the Horner basis to T5, T6, ...
 """
 import importlib
-import importlib.util
 import math
 import os
 import shutil
@@ -63,6 +62,8 @@ LMAX_CHECK = 10
 
 RUNTIME_TABLE_MODULE = 'lpt_tables.py'
 """The runtime module of src/elf that reads the psi tables (numpy only), loaded next to tables under test."""
+RUNTIME_TABLE_READER = 'table_text.py'
+"""The shared table reader that RUNTIME_TABLE_MODULE imports (a relative import: the two are loaded as one package)."""
 
 COEFFICIENT_VARIABLE = {'K': None, 'Kc': c, 'Ks': s, 'KAm': Am, 'KBm': Bm}
 """The coefficient vectors of ``elf.lpt_tables.psi_family``, K and K^x = dK/dx at fixed values of the other three."""
@@ -396,15 +397,27 @@ def import_utils_lpt():
     return jax, importlib.import_module(name + '.utils_lpt')
 
 
+def load_table_module(directory, name):
+    """``<directory>/<RUNTIME_TABLE_MODULE>`` imported as ``<name>.lpt_tables`` of a stand-in package over ``directory``
+    (its relative import of table_text resolves to ``<directory>/<RUNTIME_TABLE_READER>``, and nothing of the package
+    elf runs).  A module loaded earlier under ``name`` is replaced."""
+    for key in [key for key in sys.modules if key == name or key.startswith(name + '.')]:
+        del sys.modules[key]
+    package = types.ModuleType(name, 'the runtime table modules loaded without the package elf')
+    package.__path__ = [str(directory)]
+    sys.modules[name] = package
+    return importlib.import_module(name + '.' + RUNTIME_TABLE_MODULE[:-3])
+
+
 def runtime_table_module(table_dir, name='pt_autogen_lpt_table_module'):
-    """``src/elf/<RUNTIME_TABLE_MODULE>`` loaded from a copy next to a copy of ``<table_dir>/lpt`` (numpy only)."""
+    """``src/elf/<RUNTIME_TABLE_MODULE>`` (with its reader) loaded from a copy next to a copy of ``<table_dir>/lpt``
+    (numpy only)."""
     from . import emit
     with tempfile.TemporaryDirectory() as tmp:
         shutil.copytree(os.path.join(table_dir, emit.LPT_DIR), os.path.join(tmp, 'tables', emit.LPT_DIR))
-        shutil.copy(os.path.join(emit.REPO_DIR, 'src', 'elf', RUNTIME_TABLE_MODULE), tmp)
-        spec = importlib.util.spec_from_file_location(name, os.path.join(tmp, RUNTIME_TABLE_MODULE))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        for module in (RUNTIME_TABLE_MODULE, RUNTIME_TABLE_READER):
+            shutil.copy(os.path.join(emit.REPO_DIR, 'src', 'elf', module), tmp)
+        module = load_table_module(tmp, name)
     return module
 
 

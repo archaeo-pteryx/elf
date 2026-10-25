@@ -1,7 +1,8 @@
 """The LPT tables ``tables/lpt/*.dat`` (generated offline by tools/pt_autogen), loaded and checked, with their evaluators.
 
-The tables and what this module makes of them follow.  The module needs numpy only, so that the generator can load
-a copy of it next to tables under test, and its evaluators use jax.numpy when given JAX arrays.
+The tables and what this module makes of them follow.  The module needs numpy and the shared reader ``table_text``
+only, so that the generator can load a copy of the two next to tables under test, and its evaluators use jax.numpy
+when given JAX arrays.
 
 * ``rows_recipes.dat``  the rows of PTTerms.rows in order, :class:`Row`, and the recipe of each (``RECIPES``, evaluated
   by lpt_stages).  ``TREE_ROWS`` is the leading block of rows linear in P_lin (their terms are transforms of the
@@ -19,13 +20,11 @@ a copy of it next to tables under test, and its evaluators use jax.numpy when gi
   polynomials (``MOMENT_POLYNOMIALS``).
 * ``psi_terms.dat``, ``scalar_layer.dat``  the psi family of the moments, evaluated by ``psi_family``.
 
-The import checks the tables.  A repeated key raises ValueError naming the file and the lines (the key being (moment,
-basis, shift, t, exponents) in psi_terms.dat, (t, exponents) in scalar_layer.dat, (component, moment, t, exponents) in
-component_entries.dat, the row id t in basis_rows.dat, (row, term, source or ref) in rows_recipes.dat, (unit, l) and
-(source, unit) in rows_sources.dat and the record name in components.dat, rows_rules.dat and moments.dat).  The rows of
-basis_rows.dat are placed by their ids t, which must be 0 .. N_CT - 1 in any order.  Every name a table uses must be
-defined by the table that owns it (rows, components, templates, linear kinds, moments, sources, units, rules), else
-ValueError.
+The tables are generated and byte-checked by ``python -m pt_autogen check``, so the import does not re-verify their
+structure.  A repeated key raises ValueError naming the file and the lines where a duplicate would be summed silently
+(psi_terms.dat, scalar_layer.dat, component_entries.dat, rows_sources.dat, rows_recipes.dat), an undefined name is left
+to the KeyError or IndexError of its lookup.  The rows of basis_rows.dat are placed by their ids, ``row_basis``
+multiplies all the factors of a basis row.
 
 ``psi_family(A, C, B, ir, coeffs, need) -> {(name, deriv): {(j, basis name, shift): value}}``: ``coeffs`` maps the names
 of COEFFS to (N_K,) vectors, K and K^x = scalar_dmonomials(c, s, A_mu, B_mu, x) @ SCALAR_MATRIX; ``need`` is a set of
@@ -36,43 +35,21 @@ Exact zeros are omitted, a constant value is a Python float; only + - * (JAX, nu
 """
 import os
 from enum import IntEnum
-from fractions import Fraction
 from typing import NamedTuple
 
 import numpy as np
 
+import operator
+from functools import reduce
+
+from .table_text import fraction as _fraction, records
+
 _DIR = os.path.join(os.path.dirname(__file__), 'tables', 'lpt')
 
 
-def _records(name, key):
-    """The whitespace-separated records of tables/lpt/<name> in file order (the '#' lines are its header).
-
-    ``key(record)`` is what a line defines.  A key that repeats an earlier line's raises ValueError naming the file and
-    both lines.  The generator writes every key once, and a repeated key would otherwise be summed or overwritten
-    without notice (a coefficient split over two lines, for example)."""
-    records, first = [], {}
-    with open(os.path.join(_DIR, name)) as fh:
-        for number, line in enumerate(fh, 1):
-            if line.strip() and not line.startswith('#'):
-                record = line.split()
-                k = key(record)
-                if k in first:
-                    raise ValueError(f'tables/lpt/{name} line {number} repeats the key {k} of line {first[k]}')
-                first[k] = number
-                records.append(record)
-    return records
-
-
-def _require(name, used, known, what):
-    """ValueError when tables/lpt/<name> uses names of ``what`` that ``known`` lacks."""
-    unknown = sorted(set(used) - set(known), key=str)
-    if unknown:
-        raise ValueError(f'tables/lpt/{name} uses the {what} {unknown} that its tables do not define')
-
-
-def _fraction(text):
-    """The exact rational of a table coefficient ('a/b' or a decimal)."""
-    return Fraction(text)
+def _records(name, key=None):
+    """The records of tables/lpt/<name> in file order (``table_text.records``)."""
+    return records(os.path.join(_DIR, name), key)
 
 
 def _enum(name, names, doc):
@@ -85,7 +62,7 @@ def _enum(name, names, doc):
 # ---------------------------------------------------------------------------------------------------------------
 # moments.dat
 
-_MOMENT_LINES = _records('moments.dat', lambda r: (r[0],) + tuple(map(int, r[2:])))      # key (moment, exponents)
+_MOMENT_LINES = _records('moments.dat')
 MOMENTS = tuple(dict.fromkeys(m for m, *_ in _MOMENT_LINES))
 """The moments in the order of utils_lpt.get_lpt_moments, MQa NQb = (Khat.qhat)^a (n.qhat)^b."""
 MOMENT_POLYNOMIALS = {m: tuple((int(c), *map(int, e)) for mm, c, *e in _MOMENT_LINES if mm == m) for m in MOMENTS}
@@ -96,8 +73,6 @@ MOMENT_POLYNOMIALS = {m: tuple((int(c), *map(int, e)) for mm, c, *e in _MOMENT_L
 
 _TERMS = [(m, b, int(s), int(t), tuple(map(int, e)), float(v)) for m, b, s, t, *e, v in _records(
     'psi_terms.dat', lambda r: (r[0], r[1], int(r[2]), int(r[3]), tuple(map(int, r[4:-1]))))]   # key (j, b, s, t, e)
-if tuple(dict.fromkeys(m for m, *_ in _TERMS)) != MOMENTS:
-    raise ValueError('tables/lpt/psi_terms.dat does not list the moments of moments.dat in their order')
 BASIS = tuple(dict.fromkeys(b for _, b, *_ in _TERMS))
 _KEYS = list(dict.fromkeys((MOMENTS.index(m), b, s) for m, b, s, *_ in _TERMS))   # the psi entries (j, basis, shift)
 PAIRS_OF = {j: tuple((b, s) for jj, b, s in _KEYS if jj == j) for j in range(len(MOMENTS))}
@@ -109,7 +84,6 @@ SCALAR_MONOMIALS = tuple(sorted({e for _, e, _ in _SCALAR}, key=lambda e: (sum(e
 N_K = 1 + max(t for t, _, _ in _SCALAR)
 _S = {(e, t): v for t, e, v in _SCALAR}
 SCALAR_MATRIX = np.array([[_S.get((e, t), 0.0) for t in range(N_K)] for e in SCALAR_MONOMIALS])   # K = mono @ this
-_require('psi_terms.dat', {t for _, _, _, t, _, _ in _TERMS if t >= 0}, range(N_K), 'coefficients K_t')
 COEFFS = {'K': None, 'Kc': 'c', 'Ks': 's', 'KAm': 'Am', 'KBm': 'Bm'}   # name -> the variable x of K^x
 _X = {'c': 0, 's': 1, 'Am': 2, 'Bm': 3}                               # positions in (a, b, e, g)
 
@@ -138,8 +112,7 @@ def _recipes(records):
         terms = {}
         for _, i, kind, l, n, qpow, coef, ref in (r for r in records if r[0] == row):
             terms.setdefault(int(i), []).append((kind, l, n, qpow, coef, ref))
-        if any(len({line[:4] for line in lines}) != 1 for lines in terms.values()):
-            raise ValueError(f'tables/lpt/rows_recipes.dat gives one term of {row} several kinds or orders')
+        # an H or M term combines the sources of its lines, the other kinds have one line
         out[row] = tuple(Term(lines[0][0], _int_or_none(lines[0][1]), _int_or_none(lines[0][2]),
                               _int_or_none(lines[0][3]), tuple((_fraction(c), ref) for *_, c, ref in lines))
                          for _, lines in sorted(terms.items()))
@@ -162,8 +135,8 @@ def _units_and_sources(records):
     for record in records:
         if record[0] == 'unit':
             _, name, kind, n, l, c = record
-            kind, n, lines = units.setdefault(name, (kind, int(n), ()))
-            units[name] = (kind, n, lines + ((int(l), _fraction(c)),))
+            lines = units.get(name, (None, None, ()))[2]       # the lines of one unit share its kind and order
+            units[name] = (kind, int(n), lines + ((int(l), _fraction(c)),))
         else:
             _, name, unit, kpow, c = record
             sources[name] = sources.get(name, ()) + ((unit, int(kpow), _fraction(c)),)
@@ -174,7 +147,6 @@ UNITS, SOURCES = _units_and_sources(_records('rows_sources.dat',
                                              lambda r: (r[0], r[1], r[4] if r[0] == 'unit' else r[2])))
 """UNITS = {unit: (kind, n, ((l, coef), ..))}, the stage-B units of rows_sources.dat in table order, and SOURCES =
 {source: ((unit, kpow, coef), ..)}, the k-space sources (coef a Fraction)."""
-_require('rows_sources.dat', {u for lines in SOURCES.values() for u, _, _ in lines}, UNITS, 'units')
 
 
 def _rule_records():
@@ -184,13 +156,9 @@ def _rule_records():
         for line in fh:
             if line.startswith('rule '):
                 name, applies, action = (part.strip() for part in line[len('rule '):].split('|'))
-                if name in rules:
-                    raise ValueError(f'tables/lpt/rows_rules.dat repeats the rule {name}')
                 rules[name] = (applies, action)
             elif line.startswith('kspace '):
                 kspace.append(line.split()[1:])
-    if len({r[0] for r in kspace}) != len(kspace):
-        raise ValueError('tables/lpt/rows_rules.dat repeats a k-space row')
     return rules, kspace
 
 
@@ -203,18 +171,6 @@ SPECTRA = ('P', 'P_lt')
 """The linear spectra of the xi and M terms, P_lin and P_lin exp(-(k/k_IR)^2)."""
 
 
-def _refs(kinds):
-    """The refs of the recipe terms of the given kinds."""
-    return {ref for terms in RECIPES.values() for t in terms if t.kind in kinds for _, ref in t.refs}
-
-
-_require('rows_recipes.dat', {t.kind for ts in RECIPES.values() for t in ts}, RECIPE_KINDS + tuple(RULES), 'kinds')
-_require('rows_recipes.dat', _refs(('xi',)), SPECTRA, 'spectra')
-_require('rows_recipes.dat', _refs(('H',)), SOURCES, 'sources')
-_require('rows_recipes.dat', _refs(('M',)), SPECTRA + tuple(SOURCES), 'spectra or sources')
-_require('rows_recipes.dat', _refs(('row',)) | {ref for ref in _refs(tuple(RULES)) if not ref.startswith(('xi_', 'P^'))},
-         ROW_NAMES, 'rows')
-
 K_ROWS = tuple(row for row in ROW_NAMES if all(t.kind in RULES for t in RECIPES[row]))
 """The k-space rows (made by a rule of rows_rules.dat), after the q-space rows."""
 
@@ -226,16 +182,17 @@ def _linear(row, seen=()):
                for t in RECIPES[row])
 
 
+# the rows linear in P_lin are the leading block of rows_recipes.dat (the generator writes them first)
 _N_TREE = next(i for i, row in enumerate(ROW_NAMES) if not _linear(row))
-if any(_linear(row) for row in ROW_NAMES[_N_TREE:]):
-    raise ValueError('tables/lpt/rows_recipes.dat does not list the rows linear in P_lin first')
 TREE_ROWS = slice(0, _N_TREE)
 """The rows linear in P_lin (tree level), the leading block of PTTerms.rows."""
 
 # ---------------------------------------------------------------------------------------------------------------
 # components.dat
 
-_COMPONENT_LINES = _records('components.dat', lambda r: (r[0], r[1]))
+# records 'template name b1 b2 bG2 bGamma3' (or 'template name eft'), 'linear name row [row]' and
+# 'component name kind templates linear origin'
+_COMPONENT_LINES = _records('components.dat')
 _TEMPLATE_RECORDS = [r[1:] for r in _COMPONENT_LINES if r[0] == 'template']
 _LINEAR_RECORDS = [r[1:] for r in _COMPONENT_LINES if r[0] == 'linear']
 _COMPONENT_RECORDS = [r[1:] for r in _COMPONENT_LINES if r[0] == 'component']
@@ -248,10 +205,6 @@ LinearKind = _enum('LinearKind', [r[0] for r in _LINEAR_RECORDS], """Kind of a c
     ``_LINEAR_MATRIX`` (components.dat, ``LPT._linear_rows``).""")
 Component = _enum('Component', [r[0] for r in _COMPONENT_RECORDS], """The components of the final integrand, the
     columns of ``_TEMPLATE_MATRIX`` (components.dat, ``_COMPONENTS``).""")
-_require('components.dat', {t for r in _COMPONENT_RECORDS for t in r[2].split(',')}, Template.__members__,
-         'templates')
-_require('components.dat', {r[3] for r in _COMPONENT_RECORDS} - {'-'}, LinearKind.__members__, 'linear kinds')
-_require('components.dat', {row for r in _LINEAR_RECORDS for row in r[1:]}, ROW_NAMES, 'rows')
 # (component, templates, linear kind or None) of every component, in Component order
 _COMPONENTS = tuple((Component[r[0]], tuple(Template[t] for t in r[2].split(',')),
                      None if r[3] == '-' else LinearKind[r[3]]) for r in _COMPONENT_RECORDS)
@@ -263,8 +216,6 @@ _LINEAR_MATRIX = np.array([[1.0 if linear == kind else 0.0 for kind in LinearKin
 # the exponents of (b1, b2, bG2, bGamma3) of the bias templates (row t is template t), the EFT templates excluded
 _LPT_BIAS_DEGREES = np.array([[int(e) for e in r[1:]] for r in _TEMPLATE_RECORDS if r[1] != 'eft'], dtype=np.int32)
 
-_require('rows_rules.dat', {r[0] for r in _KSPACE_RECORDS}, K_ROWS, 'k-space rows')
-_require('rows_rules.dat', {r[1] for r in _KSPACE_RECORDS}, Component.__members__, 'components')
 # k-space rows of pt_terms added after the final transform (constants are read at k_min).  Columns: 'component' is the
 # component whose weight W[:, component] multiplies the row, 'row' the row of pt_terms.rows, 'factor' a fixed
 # multiplier.  'interpolated' rows are Hermite-interpolated in ln k at the true k, the others are constants.
@@ -277,27 +228,19 @@ _KSPACE_ROWS = tuple((Component[c], Row[row], float(_fraction(factor)), interp =
 
 
 def _rows_by_id(records):
-    """The row names of the basis_rows.dat records placed by their ids t, which must be 0 .. N_CT - 1 in any order."""
-    names = {int(t): tuple(rows) for t, *rows in records}
-    missing = sorted(set(range(len(names))) - set(names))
-    if missing:
-        raise ValueError(f'tables/lpt/basis_rows.dat lacks the row ids {missing} (the ids of its {len(names)} lines '
-                         f'must be 0 .. {len(names) - 1} in any order)')
-    return tuple(names[t] for t in range(len(names)))
+    """The row names of the basis_rows.dat records placed by their ids t (0 .. N_CT - 1, in any order)."""
+    names = [None] * len(records)
+    for t, *rows in records:
+        names[int(t)] = tuple(rows)
+    return tuple(names)
 
 
-CT_ROW_NAMES = _rows_by_id(_records('basis_rows.dat', lambda r: int(r[0])))     # R_t: () the row 1, else Row names
+CT_ROW_NAMES = _rows_by_id(_records('basis_rows.dat'))     # R_t: () the row 1, else Row names
 N_CT = len(CT_ROW_NAMES)
-_require('basis_rows.dat', {row for names in CT_ROW_NAMES for row in names}, ROW_NAMES, 'rows')
 CT_ROWS = tuple(tuple(int(Row[n]) for n in names) for names in CT_ROW_NAMES)    # basis rows R_t (Row indices)
 _CE = [(c, m, int(t), float(v), tuple(map(int, e))) for c, m, t, v, *e in _records(
     'component_entries.dat', lambda r: (r[0], r[1], int(r[2]), tuple(map(int, r[4:]))))]   # key (c, m, t, e)
 CT_ENTRY_NAMES = tuple(dict.fromkeys((c, m, t) for c, m, t, _, _ in _CE))         # (component, moment, row t)
-_UNKNOWN_ROWS = sorted({t for _, _, t, _, _ in _CE} - set(range(N_CT)))
-if _UNKNOWN_ROWS:   # a basis row dropped from the end of basis_rows.dat would otherwise pass the id check above
-    raise ValueError(f'tables/lpt/component_entries.dat uses the row ids {_UNKNOWN_ROWS} that basis_rows.dat lacks')
-_require('component_entries.dat', {c for c, _, _ in CT_ENTRY_NAMES}, Component.__members__, 'components')
-_require('component_entries.dat', {m for _, m, _ in CT_ENTRY_NAMES}, MOMENTS, 'moments')
 CT_MONO_EXP = tuple(sorted({e for *_, e in _CE}))                       # exponents of (k, mu, f, Kfac, K, Ksq)
 _S = {(e, (c, m, t)): v for c, m, t, v, e in _CE}
 CT_MONO_COEF = np.array([[_S.get((e, n), 0.0) for n in CT_ENTRY_NAMES] for e in CT_MONO_EXP])      # s_e = mono @ this
@@ -358,8 +301,6 @@ def psi_family(A, C, B, ir, coeffs, need):
     """``{(name, deriv): {(j, basis, shift): value}}`` for the (name, deriv) of ``need`` (see the module docstring)."""
     pows, cache, out = ([1.0, A], [1.0, C], [1.0, B], [1.0, ir]), {}, {}
     for name, deriv in sorted(frozenset(need)):
-        if (name, deriv) not in _PLANS:
-            raise ValueError(f'psi_family has no {deriv} of {name}')
         Kv, res = coeffs[name], {}
         for key, pieces, const in _PLANS[(name, deriv)]:
             acc = None
@@ -408,10 +349,9 @@ def scalar_dmonomials(c, s, A_mu, B_mu, x):
 
 
 def row_basis(rows):
-    """The basis rows R_t(q) of CT_ROWS (1, single rows, products of two rows), ``(N_CT, nq)``."""
+    """The basis rows R_t(q) of CT_ROWS (1, a row, or a product of rows), ``(N_CT, nq)``."""
     xp = _xp(rows)
-    return xp.stack([xp.ones_like(rows[0]) if len(t) == 0 else rows[t[0]] if len(t) == 1
-                     else rows[t[0]] * rows[t[1]] for t in CT_ROWS])
+    return xp.stack([reduce(operator.mul, (rows[i] for i in t)) if t else xp.ones_like(rows[0]) for t in CT_ROWS])
 
 
 def where_monomials(xs, E):

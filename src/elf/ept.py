@@ -149,11 +149,27 @@ class EPT(PowerSpectrum):
         self._m_22 = lnm_22[:, 2]
         self._lnm_13 = jnp.asarray(lnm_13)
 
-        ln_pairs = [[0,0], [0,-2], [1,-1], [2,0], [2,-2], [3,-1], [4,0]]
+        # the forward transforms xi_l^n are those of the (l, n) of the P22 and P13 blocks, by l and then by n
+        # descending, each in its own slot of _get_xi_ln_array (_xi_slot), not at the index [l, n] of a fixed array
+        ln_pairs = sorted({(int(l), int(n)) for l, n, _ in lnm_22} | {(int(l), int(n)) for l, n, _ in lnm_13},
+                          key=lambda ln: (ln[0], -ln[1]))
         self._ln_list = jnp.array(ln_pairs)
-        self._ln_list_static = tuple((int(l), int(n)) for l, n in ln_pairs)
-        lmax = jnp.max(self._ln_list[:, 0])
-        self._set_hankel(lmax)
+        self._ln_list_static = tuple(ln_pairs)
+        self._xi_slots = {ln: i for i, ln in enumerate(ln_pairs)}
+        self._slot_22 = jnp.asarray([self._xi_slot(l, n) for l, n, _ in lnm_22], dtype=jnp.int32)
+        self._slot_13 = jnp.asarray([self._xi_slot(l, n) for l, n, _ in lnm_13], dtype=jnp.int32)
+        # the highest order of the kernels: the forward rows land on q_padded[l] and the P13 blocks go back with u_m[l]
+        # (the l of the blocks, all in ln_pairs), the P22 blocks with u_m[0]
+        self._set_hankel(max(l for l, _ in ln_pairs))
+
+    def _xi_slot(self, l, n):
+        """The slot of xi_l^n in ``_get_xi_ln_array``.  ValueError for an order without a forward transform (not in
+        ``_ln_list_static``): it has no slot to read, rather than another order's or a zero array."""
+        slot = self._xi_slots.get((int(l), int(n)))
+        if slot is None:
+            raise ValueError(f'EPT has no forward transform xi_l^n of (l, n) = ({l}, {n}), its orders are '
+                             f'{list(self._xi_slots)}')
+        return slot
 
     def _set_hankel(self, lmax):
         """Grids and kernels of the chain ``P(k) -> xi_l^n(q) -> P22/P13(k)``.
@@ -377,15 +393,12 @@ class EPT(PowerSpectrum):
             self._idx_13_bias, jnp.einsum('tn,nj->tj', self.matrices_13_bias, p_q_bias))
 
     def _get_xi_ln_array(self, array):
-        """Forward transforms ``xi_ln[l, n]`` of ``array`` on ``q_padded[l]`` (upper padded band zeroed)."""
+        """Forward transforms of ``array``, ``(n_pairs, n_padded)``: the slot ``_xi_slot(l, n)`` holds xi_l^n on
+        ``q_padded[l]`` (upper padded band zeroed)."""
         fx = self._hankel.pad_input(array / (2 * jnp.pi**2))
         xis = self._xi_forward.apply(fx, self._hankel.grid)
         xis_n0 = self._xi_forward_n0.apply(fx, self._hankel.grid)
-        xis = jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * self._hankel.mask_xi
-        xi_ln = jnp.zeros((5, 3, xis.shape[-1]))
-        ls = self._ln_list[:, 0]
-        ns = self._ln_list[:, 1]
-        return xi_ln.at[ls, ns].set(xis)
+        return jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * self._hankel.mask_xi
 
     def _q_to_k(self, l, n, array):
         """Backward FFTlog of a source on ``q_padded[l]`` onto the core k grid."""
@@ -395,14 +408,13 @@ class EPT(PowerSpectrum):
                              self._hankel.u_m[l], self._hankel.npad, crop=True)
 
     def _get_p22_blocks(self, xi_ln):
-        """P22 blocks ``(nterms, nk)`` in ``coeff_info_22`` order.
+        """P22 blocks ``(nterms, nk)`` in ``coeff_info_22`` order, from ``xi_ln`` of ``_get_xi_ln_array`` (by slot).
 
         ``B(k) = 4 pi int dq q^2 (xi_l^n)^2 j_0(kq)``; block = ``k^m B`` for m > 0 and
         ``B - C`` for m = 0, ``C = 4 pi dln sum_j w_j q_j^3 (xi_l^n)_j^2``.
         """
-        def block(ln):
-            l, n = ln[0], ln[1]
-            xi = xi_ln[l, n]
+        def block(l, slot):
+            xi = xi_ln[slot]
             source = spline.interp1d(jnp.log(self._hankel.q_padded[0]),
                                      jnp.log(self._hankel.q_padded[l]), xi * xi)
             pk_ln = 4 * jnp.pi * self._q_to_k(0, 0, source)
@@ -410,15 +422,14 @@ class EPT(PowerSpectrum):
             c0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(source * self._hankel.w_xi, 3)
             return pk_ln, c0
 
-        pk_ln, c0 = jax.vmap(block)(self._ln_22)      # (nterms, nk), (nterms,)
+        pk_ln, c0 = jax.vmap(block)(self._ln_22[:, 0], self._slot_22)      # (nterms, nk), (nterms,)
         m = self._m_22[:, None]                        # static
         return jnp.where(m == 0, pk_ln - c0[:, None], self._k ** m * pk_ln)
 
     def _get_p13_kernel_blocks(self, xi_ln):
-        """P13 kernel blocks ``(nterms, nk)`` in ``_lnm_13`` order: ``k^m H_l[q^2 xi_l^n]``."""
+        """P13 kernel blocks ``(nterms, nk)`` in ``_lnm_13`` order: ``k^m H_l[q^2 xi_l^n]``, ``xi_ln`` by slot."""
 
-        def get_p13_kernel(term):
-            l, n, m = term
-            pk_ln = self._q_to_k(l, -1, xi_ln[l, n])  # (nk,)
+        def get_p13_kernel(l, slot, m):
+            pk_ln = self._q_to_k(l, -1, xi_ln[slot])  # (nk,)
             return (self._k ** m) * pk_ln
-        return jax.vmap(get_p13_kernel)(self._lnm_13)  # (nterms, nk)
+        return jax.vmap(get_p13_kernel)(self._lnm_13[:, 0], self._slot_13, self._lnm_13[:, 2])  # (nterms, nk)

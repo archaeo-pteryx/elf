@@ -181,7 +181,9 @@ def decomposition(name, part=''):
     equations = [sp.Eq(N[e], ROW_SYMBOLS[rows[rmap[i]]]) for i, e in enumerate(basis)]
     solution = sp.solve(equations, s, dict=True)
     assert len(solution) == 1 and set(solution[0]) == set(s), (name, solution)
-    return basis, tuple(sp.nsimplify(S[e].subs(solution[0])) for e in basis)
+    # the solution of the exact linear system is linear in the row symbols with rational coefficients: sp.expand is
+    # its exact canonical form (no numeric identification of the coefficients)
+    return basis, tuple(sp.expand(S[e].subs(solution[0])) for e in basis)
 
 
 def entry_fields(entry):

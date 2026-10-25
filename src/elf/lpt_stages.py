@@ -4,7 +4,8 @@
 ``pk_lin`` on the core k grid in one pass over the static plan built here from the tables.
 
   A  ``model._get_xi_ln`` transforms the spectra P and P_lt = P exp(-(k/k_IR)^2) for the (l, n) of ``STAGE_A`` (the
-     model's ln_list) and gives xi_l^n on the common padded q grid and on the own grid of each order.
+     model's ln_list) and gives xi_l^n on the common padded q grid and on the own grid of each order, both in the slot
+     ``model._xi_slot(l, n)`` (an order stage A lacks raises ValueError).
   B  the units of rows_sources.dat.  The 22 units, sum c (xi_l^n)^2 of P on the common grid, are stacked and
      transformed q -> k at once (j_0, end weights of [k_min, 2 k_max]).  The 13 units, xi_l^n of P on their own grids,
      are transformed at once with the kernel of each order and multiplied by P (end weights of [k_min, k_max]).  A
@@ -120,6 +121,11 @@ def _stage_c():
 
 
 STAGE_C = _stage_c()
+MAX_ORDER = max([l for l, _ in STAGE_A] + [l for l, _ in UNITS_13_LN]
+                + [l for transforms in STAGE_C.values() for t in transforms for l in t.orders])
+"""The highest order l of the kernels the stages use: stage A (its rows land on q_padded[l]), the 13 units of stage B
+(transformed back with u_m[l]) and the H terms of stage C (u_m_src[group, l]).  LPT._set_hankel builds the kernels of
+the orders 0 .. max(MAX_ORDER, lmax), lmax that of the final integral."""
 TRANSFORM_FACTORS = {(t.source, t.n): t.factor for transforms in STAGE_C.values() for t in transforms}
 """{(scaled source, n): the factor of the transform's input}, the coefficient of its first H term."""
 CONSTANTS = tuple(dict.fromkeys((scaled(t.refs)[1], t.n) for terms in RECIPES.values() for t in terms
@@ -177,7 +183,7 @@ def stage_b(model, xi_common, xi_own, pk_lin):
     units = {}
     integrands = []
     for u in UNITS_22:
-        terms = [_times(c, xi_common[l, UNITS[u][1]]**2) for l, c in UNITS[u][2]]
+        terms = [_times(c, xi_common[model._xi_slot(l, UNITS[u][1])]**2) for l, c in UNITS[u][2]]
         integrands.append(sum(terms[1:], terms[0]))
     res = fftlog.hankel(nu, st.four_pi_q3_padded * (jnp.stack(integrands) * hg.w_xi), model._q_padded, hg.k_padded,
                         st.u_m[0], hg.npad, crop=False) * st.end_weights_Q
@@ -230,11 +236,11 @@ def constants(model, source_arrays, spectra):
             for source, n in CONSTANTS}
 
 
-def product(xi, ref):
-    """The product of stage-A outputs ``ref`` ('xi_1_m1^2*xi_3_m1') of the arrays xi[l, n]."""
+def product(model, xi, ref):
+    """The product of stage-A outputs ``ref`` ('xi_1_m1^2*xi_3_m1') of the arrays xi[model._xi_slot(l, n)]."""
     total = None
     for l, n, power in xi_factors(ref):
-        factor = xi[l, n]**power if power > 1 else xi[l, n]
+        factor = xi[model._xi_slot(l, n)]**power if power > 1 else xi[model._xi_slot(l, n)]
         total = factor if total is None else total * factor
     return total
 
@@ -253,7 +259,7 @@ def m0_residual(model, coef, ref, ctx):
     """H_0[F](k) - C_q of F = coef ref (a product of stage-A outputs of P on the padded grid), C_q its k -> 0 limit,
     the end-weighted sum of the same samples."""
     hg, st = model._hankel, model._source_transform
-    source = _times(coef, product(ctx.xi_padded['P'], ref))
+    source = _times(coef, product(model, ctx.xi_padded['P'], ref))
     direct = fftlog.hankel(model.fftlog_settings.nu, st.four_pi_q3_padded * source * hg.w_xi, model._q_padded,
                            hg.k_padded, st.u_m[0], hg.npad, crop=True)
     return direct - 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
@@ -293,13 +299,13 @@ class _Context:
     def value(self, t):
         """The value of a q-space term without its coefficient and power of q (``_coefficient``, ``t.qpow``)."""
         if t.kind == 'xi':
-            return self.xi_core[t.refs[0][1]][t.l, t.n]
+            return self.xi_core[t.refs[0][1]][self.model._xi_slot(t.l, t.n)]
         if t.kind == 'H':
             return self.H[(scaled(t.refs)[1], t.n, t.l)]
         if t.kind == 'M':
             return self.M[(scaled(t.refs)[1], t.n)]
         if t.kind == 'prod':
-            return product(self.xi_core['P'], t.refs[0][1])
+            return product(self.model, self.xi_core['P'], t.refs[0][1])
         return self.row(t.refs[0][1])
 
     def rule(self, t):

@@ -1,25 +1,20 @@
-"""Numeric tables from the exact generator output, and their files in ``src/elf/tables``.
+"""The plain-text tables from the exact generator output, and their files in ``src/elf/tables``.
 
-Files (read by ``src/elf/pt_coeff.py`` and ``src/elf/pt_matrix.py``):
+Files (one record per line, whitespace-separated columns, names instead of indices, exact
+coefficients, and '#' header lines that state the purpose, the defining identity and conventions,
+the order, the counts and the columns; the headers name the generator version and carry no date,
+so regeneration is byte-exact):
 
-* ``ept_hankel_22.npz``, ``ept_hankel_13.npz``: ``names`` (block names ``<prefix>_l_n_m``,
-  sorted as strings), ``lnm`` (int64 ``(nblocks, 3)``), ``table`` (float64
-  ``(nblocks, nterms, 7)``: the powers of ``model.MONOMIAL_COLUMNS`` and the coefficient, rows
-  in ``model.TERM_ORDER`` order, zero-padded).
-* ``ept_matrix.npz``: for each of ``22`` and ``13``: ``names_<b>``, ``const_<b>`` (float64,
-  the rational constant of each block), ``factors_<b>`` (float64 integer coefficients
-  ``[i, j]`` of ``nu1^i nu2^j``, or ``[i]`` of ``nu1^i`` for 13, zero-padded),
-  ``factor_block_<b>`` (int64 block index of each factor) and ``factor_power_<b>`` (int64:
-  > 0 numerator, < 0 denominator); and ``uv`` (float64 ``(nterms, 7)`` rows of ``Z1 Z3_UV``
-  as in the Hankel tables, sorted by the powers of (mu, f, b1)).
+* ``ept/*.dat``: the EPT tables (read by ``src/elf/pt_coeff.py`` and ``src/elf/pt_matrix.py``),
+  ``hankel_22.dat``, ``hankel_13.dat`` (the Hankel blocks ``<prefix>_l_n_m``, a block line and
+  the rows of its polynomial in (mu, f, bias), :mod:`pt_autogen.ept_hankel`), ``matrix_22.dat``,
+  ``matrix_13.dat`` (the matrix-method blocks, the constant and the integer polynomial factors
+  of R, :mod:`pt_autogen.ept_matrix`) and ``matrix_uv.dat`` (the monomials of ``Z1 Z3_UV``).
 * ``lpt/*.dat``: the plain-text tables of the LPT chain, the row recipes (``rows_sources.dat``,
   ``rows_recipes.dat``, ``rows_rules.dat``, :mod:`pt_autogen.lpt_rows`), the components
   (``components.dat``, ``basis_rows.dat``, ``component_entries.dat``, :mod:`pt_autogen.lpt_components`)
   and the moments (``moments.dat``, ``psi_terms.dat``, ``scalar_layer.dat``,
-  :mod:`pt_autogen.lpt_angular`, :mod:`pt_autogen.lpt_moments`).  One record per line, whitespace-separated
-  columns, names instead of indices, exact coefficients, and '#' header lines that state the
-  defining identity, the order, the counts and the columns.  The headers name the generator
-  version and carry no date, so regeneration is byte-exact.
+  :mod:`pt_autogen.lpt_angular`, :mod:`pt_autogen.lpt_moments`).
 * ``manifest.json``: the generator version, the list of files, the results of the LPT verifications
   (``comparisons``) and ``info``, the derived facts worth keeping next to the tables (the dropped
   P13 zero-lag terms and the UV limits of Z3).  It records no date, source hash or timing (git holds the
@@ -31,7 +26,6 @@ import os
 from fractions import Fraction
 from string import Template
 
-import numpy as np
 import sympy as sp
 
 from . import GENERATOR_VERSION, kernels, model
@@ -39,9 +33,10 @@ from .vectors import mu
 
 nu1, nu2 = sp.symbols('nu1 nu2')
 
-HANKEL_FILES = {'22': 'ept_hankel_22.npz', '13': 'ept_hankel_13.npz'}
-MATRIX_FILE = 'ept_matrix.npz'
 MANIFEST_FILE = 'manifest.json'
+EPT_DIR = 'ept'
+EPT_FILES = tuple(EPT_DIR + '/' + name for name in (
+    'hankel_22.dat', 'hankel_13.dat', 'matrix_22.dat', 'matrix_13.dat', 'matrix_uv.dat'))
 LPT_DIR = 'lpt'
 LPT_FILES = tuple(LPT_DIR + '/' + name for name in (
     'rows_sources.dat', 'rows_recipes.dat', 'rows_rules.dat', 'components.dat', 'basis_rows.dat',
@@ -79,22 +74,6 @@ def block_rows(poly):
     return rows
 
 
-def hankel_table(blocks, prefix):
-    """``(names, lnm, table)`` of the exact blocks ``{(l, n, m): polynomial}``."""
-    keyed = {'%s_%d_%d_%d' % ((prefix,) + tuple(key)): key for key in blocks}
-    names = sorted(keyed)
-    rows = [block_rows(blocks[keyed[name]]) for name in names]
-    nterms = max(len(r) for r in rows)
-    ncol = len(model.MONOMIAL_COLUMNS)
-    table = np.zeros((len(names), nterms, ncol + 1), dtype=np.float64)
-    for i, block in enumerate(rows):
-        for j, (expo, c) in enumerate(block):
-            table[i, j, :ncol] = expo
-            table[i, j, ncol] = float(c)
-    lnm = np.array([keyed[name] for name in names], dtype=np.int64)
-    return names, lnm, table
-
-
 def factored(R, gens):
     """``(const, [(coefficients, power)])`` of the rational function ``R``.
 
@@ -127,65 +106,12 @@ def factored(R, gens):
     return const, factors
 
 
-def matrix_arrays(m22, m13, uv_rows):
-    """The arrays of ``ept_matrix.npz`` (module docstring) from the exact rational functions
-    ``{name: R}`` of the two block types and the rows of the UV term."""
-    arrays = {}
-    for prefix, blocks, gens in (('22', m22, (nu1, nu2)), ('13', m13, (nu1,))):
-        names = sorted(blocks)
-        consts, factors, factor_block, factor_power = [], [], [], []
-        for i, name in enumerate(names):
-            const, flist = factored(blocks[name], gens)
-            consts.append(float(const))
-            for terms, power in flist:
-                factors.append(terms)
-                factor_block.append(i)
-                factor_power.append(power)
-        shape = tuple(1 + max(expo[d] for terms in factors for expo in terms) for d in range(len(gens)))
-        table = np.zeros((len(factors),) + shape, dtype=np.float64)
-        for i, terms in enumerate(factors):
-            for expo, c in terms.items():
-                if abs(c) >= 2**53:
-                    raise ValueError('factor coefficient not exact in float64')
-                table[(i,) + expo] = c
-        arrays['names_' + prefix] = np.array(names)
-        arrays['const_' + prefix] = np.array(consts, dtype=np.float64)
-        arrays['factors_' + prefix] = table
-        arrays['factor_block_' + prefix] = np.array(factor_block, dtype=np.int64)
-        arrays['factor_power_' + prefix] = np.array(factor_power, dtype=np.int64)
-    ncol = len(model.MONOMIAL_COLUMNS)
-    uv = np.zeros((len(uv_rows), ncol + 1), dtype=np.float64)
-    for i, (powers, c) in enumerate(uv_rows):
-        uv[i, :ncol] = powers
-        uv[i, ncol] = float(c)
-    arrays['uv'] = uv
-    return arrays
-
-
-def write_npz(path, arrays):
-    np.savez(path, **arrays)
-
-
-def read_npz(path):
-    """All arrays of an npz file (no pickles)."""
-    with np.load(path, allow_pickle=False) as data:
-        return {key: data[key] for key in data.files}
-
-
-def arrays_equal(a, b):
-    """Exact equality of two dicts of arrays (keys, dtypes, shapes and values)."""
-    if set(a) != set(b):
-        return False
-    return all(a[key].dtype == b[key].dtype and a[key].shape == b[key].shape
-               and np.array_equal(a[key], b[key]) for key in a)
-
-
 def write_manifest(out_dir, comparisons, info):
     """Write ``manifest.json``: the generator version, the files, the ``comparisons`` and ``info``, the derived facts
     worth keeping next to the tables.  No date, source hash or timing is recorded (git has the sources and their
     history, and the timings are only printed)."""
     manifest = dict(generator=GENERATOR_VERSION,
-                    files=sorted(list(HANKEL_FILES.values()) + [MATRIX_FILE]) + list(LPT_FILES),
+                    files=list(EPT_FILES) + list(LPT_FILES),
                     comparisons=comparisons,
                     info=info)
     with open(os.path.join(out_dir, MANIFEST_FILE), 'w') as fh:
@@ -195,7 +121,7 @@ def write_manifest(out_dir, comparisons, info):
 
 
 # ---------------------------------------------------------------------------
-# plain-text tables (LPT)
+# plain-text tables
 
 GENERATED_BY = f'# Generated by tools/pt_autogen (python -m pt_autogen regenerate), {GENERATOR_VERSION}.'
 
@@ -335,11 +261,96 @@ $generated_by
 }
 """The '#' headers of the LPT text tables, with $-placeholders for the generator line, the reader and the counts."""
 
+EPT_HEADERS = {
+    'hankel_22.dat': """\
+# hankel_22.dat, the P22 blocks of the EPT Hankel method (read by pt_coeff.py, for ept.py).
+$generated_by
+# Identity: P22(k, mu) = sum over the blocks b = (l, n, m) of B_b(k) times the polynomial
+#   sum over the term lines of b of coef mu^mu f^f b1^b1 b2^b2 bG2^bG2 bGamma3^bGamma3 (each column is a power),
+#   B_b(k) = k^m 4 pi int dq q^2 j_0(kq) (xi_l^n(q))^2, xi_l^n = H_l^n[P] (for m = 0 minus the end-weighted grid moment
+#   of the same source, its k -> 0 constant: ept.EPT._get_p22_blocks).  The polynomials come from 2 Z2(p, k - p)^2
+#   averaged over the line of sight and symmetrised in p <-> q = k - p, a polynomial in k^2 / (p q) and phat.qhat:
+#   the entry of the block (l, n = -j, m = 2j) is (-1)^l times the coefficient of k^(2j) (p q)^(-j) L_l(phat.qhat),
+#   as 4 pi int dq q^2 j_0(kq) (xi_l^n)^2 = (-1)^l int_p p^n q^n L_l(phat.qhat) P(p) P(q)
+#   (tools/pt_autogen/ept_hankel.py).  The bias monomials have total degree <= 2 (utils.cross_bias_factor).
+# Order: the blocks by name as strings, each block line followed by its terms in descending lexicographic order of
+#   their powers of (b1, b2, bG2, bGamma3, f, mu).
+# Counts: $blocks blocks, $terms terms.
+# Coefficients: exact rationals.
+# columns: block name l n m nterms | term name mu f b1 b2 bG2 bGamma3 coef""",
+    'hankel_13.dat': """\
+# hankel_13.dat, the P13 blocks of the EPT Hankel method (read by pt_coeff.py, for ept.py).
+$generated_by
+# Identity: P13(k, mu) = P(k) sum over the blocks b = (l, n, m) of K_b(k) times the polynomial
+#   sum over the term lines of b of coef mu^mu f^f b1^b1 b2^b2 bG2^bG2 bGamma3^bGamma3 (each column is a power),
+#   K_b(k) = k^m int dq q j_l(kq) xi_l^n(q) = k^m int_p p^n L_l(khat.phat) P(p) / |k - p|^2, xi_l^n = H_l^n[P]
+#   (ept.EPT._get_p13_kernel_blocks).  The polynomials come from 6 Z1(k) Z3(k, p, -p) averaged over the line of sight
+#   and written as N / |k - p|^2 by partial fractions in x = khat.phat (the 1 / |k + p|^2 part flipped p -> -p), N
+#   expanded in L_l(x) with the powers p^n, n > 0, lowered by p^2 = |k - p|^2 - k^2 + 2 k p x, so -2 <= n <= 0 (no
+#   null-vector canonicalisation, the block (2, -2, 4) stays).  The entry is the coefficient.  The zero-lag pieces
+#   p^(n-2) L_l, without 1 / |k - p|^2, are dropped: they hold only the b2 terms and those of the renormalised
+#   operators b3, bdG2, bG3 (asserted, tools/pt_autogen/ept_hankel.py), so no b2 enters P13.
+# Order: the blocks by name as strings, each block line followed by its terms in descending lexicographic order of
+#   their powers of (b1, b2, bG2, bGamma3, f, mu).
+# Counts: $blocks blocks, $terms terms.
+# Coefficients: exact rationals.
+# columns: block name l n m nterms | term name mu f b1 b2 bG2 bGamma3 coef""",
+    'matrix_22.dat': """\
+# matrix_22.dat, the P22 blocks of the EPT matrix method (read by pt_matrix.py, for ept.py).
+$generated_by
+# Identity: a block is one monomial b1^i b2^j bG2^k f^l mu^m of 2 Z2(p, k - p)^2 averaged over the line of sight, its
+#   name 22=b1-i_b2-j_bG2-k_f-l_mu-m.  With the master integral, nu12 = nu1 + nu2,
+#     int_p p^(-2 nu1) |k - p|^(-2 nu2) = k^(3 - 2 nu12) I(nu1, nu2),
+#     I = Gamma(3/2 - nu1) Gamma(3/2 - nu2) Gamma(nu12 - 3/2) / (8 pi^(3/2) Gamma(nu1) Gamma(nu2) Gamma(3 - nu12)),
+#   its rational function is R(nu1, nu2) = sum over its terms c k^(2A) p^(2B) q^(2C) (q = |k - p|) of
+#   c I(nu1 - B, nu2 - C) / I(nu1, nu2): for P = sum_m c_m k^(-2 nu_m) the block adds its monomial times
+#   k^3 sum_(m1, m2) c_m1 c_m2 k^(-2 nu12) R I at (nu_m1, nu_m2) to P22 (tools/pt_autogen/ept_matrix.py), and
+#   pt_matrix.evaluate gives R I.
+#   R = const prod_f P_f^power_f, const the rational of the block line, P_f(nu1, nu2) = sum over the term lines of
+#   factor f of coef nu1^i nu2^j (integer coefficients), power_f > 0 in the numerator, < 0 in the denominator.
+# Order: the blocks by name as strings; each block line followed by its factors f = 0, 1, .. (the numerator first,
+#   then by total degree and coefficients), each factor line by its terms by increasing (i, j).  A factor shared by
+#   several blocks is written under each of them (the reader keeps one array per distinct factor).
+# Counts: $blocks blocks, $factors factor lines ($distinct distinct factors), $terms term lines.
+# Coefficients: the constants exact rationals, the factor coefficients integers (exact in float64).
+# columns: block name const | factor name f power | term name f i j coef""",
+    'matrix_13.dat': """\
+# matrix_13.dat, the P13 blocks of the EPT matrix method (read by pt_matrix.py, for ept.py).
+$generated_by
+# Identity: a block is one monomial b1^i bG2^j bGamma3^k f^l mu^m of 6 Z1(k) Z3(k, p, -p) averaged over the line of
+#   sight, its name 13=b1-i_bG2-j_bGamma3-k_f-l_mu-m.  Written as N / q^2 (q = |k - p|, the same N as in
+#   hankel_13.dat), its matrix is sum over the terms c k^(2A) p^(2B) q^(2C) of N of c I(nu1 - B, 1 - C), with the master
+#   integral I of matrix_22.dat, I(., <= 0) = 0 (scaleless) and I(nu1 - B, 1) = tan(pi nu1) / (8 pi (nu1 - B - 1)):
+#   the matrix is R(nu1) tan(pi nu1) / pi, which pt_matrix.evaluate gives (tools/pt_autogen/ept_matrix.py).  The b2
+#   terms and those of the renormalised operators are scaleless (asserted) and absent.
+#   R = const prod_f P_f^power_f, const the rational of the block line, P_f(nu1) = sum over the term lines of factor f
+#   of coef nu1^i (integer coefficients), power_f > 0 in the numerator, < 0 in the denominator.
+# Order: the blocks by name as strings; each block line followed by its factors f = 0, 1, .. (the numerator first,
+#   then by total degree and coefficients), each factor line by its terms by increasing i.  A factor shared by
+#   several blocks is written under each of them (the reader keeps one array per distinct factor).
+# Counts: $blocks blocks, $factors factor lines ($distinct distinct factors), $terms term lines.
+# Coefficients: the constants exact rationals, the factor coefficients integers (exact in float64).
+# columns: block name const | factor name f power | term name f i coef""",
+    'matrix_uv.dat': """\
+# matrix_uv.dat, the UV term of P13 in the EPT matrix method (read by pt_matrix.py, for ept.py).
+$generated_by
+# Identity: the matrix method adds k^2 P(k) pk_int Z1 Z3_UV, pk_int = int dk P(k) / (2 pi^2), to P13 (the last P13
+#   row of ept.EPT, which the blocks of matrix_13.dat do not contain); Z1 Z3_UV is the sum over the lines of
+#   coef mu^mu f^f b1^b1 b2^b2 bG2^bG2 bGamma3^bGamma3 (each column is a power), Z1 = b1 + f mu^2 and
+#   Z3_UV = 6 lim_(p -> inf) (p/k)^2 <Z3(k, p, -p)> over the directions of p, for the matter group (the monomials
+#   without b2, bG2, bGamma3, whose power-law integrals diverge in the UV; tools/pt_autogen/ept_matrix.py).
+# Order: by increasing powers of (mu, f, b1).
+# Counts: $terms terms.
+# Coefficients: exact rationals.
+# columns: term mu f b1 b2 bG2 bGamma3 coef""",
+}
+"""The '#' headers of the EPT text tables, with $-placeholders for the generator line and the counts."""
 
-def lpt_header(name, **counts):
-    """The header lines of the LPT table ``name`` with the generator line and ``counts`` filled in."""
-    return Template(LPT_HEADERS[name]).substitute(generated_by=GENERATED_BY, reader=RUNTIME_READER,
-                                                  **counts).splitlines()
+
+def table_header(name, **counts):
+    """The header lines of the EPT or LPT table ``name`` with the generator line and ``counts`` filled in."""
+    return Template({**EPT_HEADERS, **LPT_HEADERS}[name]).substitute(generated_by=GENERATED_BY, reader=RUNTIME_READER,
+                                                                     **counts).splitlines()
 
 
 def decimal(x):
@@ -372,14 +383,57 @@ def read_text_table(path):
         return [line.split() for line in fh if line.strip() and not line.startswith('#')]
 
 
+def ept_hankel_text(blocks, prefix):
+    """``{file: (header lines, rows)}`` of hankel_<prefix>.dat from the exact blocks ``{(l, n, m): polynomial}``: per
+    block (sorted by name) its block line and its rows (``block_rows``), coefficients exact."""
+    keyed = {'%s_%d_%d_%d' % ((prefix,) + tuple(key)): key for key in blocks}
+    width = max(len(name) for name in keyed)
+    lines, nterms = [], 0
+    for name in sorted(keyed):
+        rows = block_rows(blocks[keyed[name]])
+        l, n, m = keyed[name]
+        lines.append(f'block  {name:{width}s}  {l} {n:2d} {m}  {len(rows)}')
+        lines += [f'term   {name:{width}s}  ' + ' '.join(str(e) for e in expo) + f'  {rational(c)}' for expo, c in rows]
+        nterms += len(rows)
+    fname = f'hankel_{prefix}.dat'
+    return {EPT_DIR + '/' + fname: (table_header(fname, blocks=len(keyed), terms=nterms), lines)}
+
+
+def ept_matrix_text(m22, m13, uv_rows):
+    """``{file: (header lines, rows)}`` of matrix_22.dat and matrix_13.dat (the exact rational functions ``{name: R}``,
+    each written as its constant and its integer polynomial factors, ``factored``) and of matrix_uv.dat (``uv_rows``,
+    the rows of Z1 Z3_UV)."""
+    out = {}
+    for prefix, blocks, gens in (('22', m22, (nu1, nu2)), ('13', m13, (nu1,))):
+        width = max(len(name) for name in blocks)
+        lines, nfactors, nterms, distinct = [], 0, 0, set()
+        for name in sorted(blocks):
+            const, flist = factored(blocks[name], gens)
+            lines.append(f'block  {name:{width}s}  {rational(const)}')
+            for f, (terms, power) in enumerate(flist):
+                lines.append(f'factor {name:{width}s}  {f} {power:2d}')
+                for expo in sorted(terms):
+                    if abs(terms[expo]) >= 2**53:
+                        raise ValueError('factor coefficient not exact in float64')
+                    lines.append(f'term   {name:{width}s}  {f}  ' + ' '.join(str(e) for e in expo) + f'  {terms[expo]}')
+                nfactors, nterms = nfactors + 1, nterms + len(terms)
+                distinct.add(tuple(sorted(terms.items())))
+        fname = f'matrix_{prefix}.dat'
+        out[EPT_DIR + '/' + fname] = (table_header(fname, blocks=len(blocks), factors=nfactors, distinct=len(distinct),
+                                                   terms=nterms), lines)
+    uv = ['term  ' + ' '.join(str(e) for e in powers) + f'  {rational(c)}' for powers, c in uv_rows]
+    out[EPT_DIR + '/matrix_uv.dat'] = (table_header('matrix_uv.dat', terms=len(uv)), uv)
+    return out
+
+
 def lpt_psi_text(tables):
     """``{file: (header lines, rows)}`` of psi_terms.dat and scalar_layer.dat (``lpt_moments.make_tables``)."""
     n = tables['counts']
     psi = [f'{m:7s} {b:2s} {sh:2d} {t:3d}  {e[0]} {e[1]} {e[2]} {e[3]}  {decimal(v)}'
            for m, b, sh, t, e, v in tables['terms']]
     scalar = [f'{t:3d}  {e[0]} {e[1]} {e[2]} {e[3]}  {decimal(v)}' for t, e, v in tables['scalar']]
-    return {LPT_DIR + '/psi_terms.dat': (lpt_header('psi_terms.dat', **n), psi),
-            LPT_DIR + '/scalar_layer.dat': (lpt_header('scalar_layer.dat', last_t=n['K'] - 1, **n), scalar)}
+    return {LPT_DIR + '/psi_terms.dat': (table_header('psi_terms.dat', **n), psi),
+            LPT_DIR + '/scalar_layer.dat': (table_header('scalar_layer.dat', last_t=n['K'] - 1, **n), scalar)}
 
 
 def lpt_basis_text(basis):
@@ -388,9 +442,9 @@ def lpt_basis_text(basis):
     coef, mono = basis['coef'], basis['monomials']
     entries = [f'{c:6s} {j:7s} {t:2d}  {decimal(coef[m][e]):6s}  ' + ' '.join(str(x) for x in mono[m])
                for e, (c, j, t) in enumerate(basis['entries']) for m in range(len(mono)) if coef[m][e] != 0]
-    return {LPT_DIR + '/basis_rows.dat': (lpt_header('basis_rows.dat', rows=len(rows)), rows),
-            LPT_DIR + '/component_entries.dat': (lpt_header('component_entries.dat', entries=len(basis['entries']),
-                                                            lines=len(entries), monomials=len(mono)), entries)}
+    return {LPT_DIR + '/basis_rows.dat': (table_header('basis_rows.dat', rows=len(rows)), rows),
+            LPT_DIR + '/component_entries.dat': (table_header('component_entries.dat', entries=len(basis['entries']),
+                                                              lines=len(entries), monomials=len(mono)), entries)}
 
 
 def lpt_components_text(templates, kinds, comps):
@@ -402,7 +456,7 @@ def lpt_components_text(templates, kinds, comps):
               + '*'.join(c.origin) for c in comps]
     counts = dict(templates=len(templates), eft_templates=sum(1 for _, e in templates if e is None),
                   kinds=len(kinds), components=len(comps), eft_components=sum(1 for c in comps if c.kind == 'eft'))
-    return {LPT_DIR + '/components.dat': (lpt_header('components.dat', **counts), lines)}
+    return {LPT_DIR + '/components.dat': (table_header('components.dat', **counts), lines)}
 
 
 def lpt_moments_text(declaration, A_mu, B_mu):
@@ -414,7 +468,7 @@ def lpt_moments_text(declaration, A_mu, B_mu):
             (pAm, pBm), c = sp.Poly(sp.sympify(coef), A_mu, B_mu).terms()[0]
             assert sp.Poly(sp.sympify(coef), A_mu, B_mu).length() == 1 and sp.sympify(c).is_Integer, coef
             lines.append(f'{name:7s} {int(c):3d}  {pAm} {pBm}  {a} {b} {by}')
-    return {LPT_DIR + '/moments.dat': (lpt_header('moments.dat', moments=len(declaration), lines=len(lines)), lines)}
+    return {LPT_DIR + '/moments.dat': (table_header('moments.dat', moments=len(declaration), lines=len(lines)), lines)}
 
 
 TERM_COLUMNS = {'xi': 'lnq', 'H': 'lnq', 'M': 'n', 'prod': 'q', 'row': ''}
@@ -435,7 +489,7 @@ def lpt_rows_text(rows):
               for u in rows['unit_order'] for l, c in units[u][2]]
     slines = [f'source {s:9s} {u:9s} {kp:2d}  {rational(c)}' for s in sorted(sources)
               for u, c, kp in sorted(sources[s], key=lambda t: rows['unit_order'].index(t[0]))]
-    out = {LPT_DIR + '/rows_sources.dat': (lpt_header(
+    out = {LPT_DIR + '/rows_sources.dat': (table_header(
         'rows_sources.dat', units=len(units), units22=sum(1 for u in units.values() if u[0] == '22'),
         units13=sum(1 for u in units.values() if u[0] == '13'), sources=len(sources), source_lines=len(slines)),
         ulines + slines)}
@@ -448,7 +502,7 @@ def lpt_rows_text(rows):
             for ref, c in parts:
                 rlines.append(f'{row:13s} {i:2d}  {t.kind:12s} {l:>2s} {n:>3s} {qpow:>3s}  {rational(t.coef * c):12s} {ref}')
     krows = sum(1 for terms in rows['recipes'].values() if terms[0].kind not in ('xi', 'H', 'M', 'prod', 'row'))
-    out[LPT_DIR + '/rows_recipes.dat'] = (lpt_header(
+    out[LPT_DIR + '/rows_recipes.dat'] = (table_header(
         'rows_recipes.dat', rows=len(rows['recipes']), qrows=len(rows['recipes']) - krows, krows=krows,
         terms=nterms, lines=len(rlines)), rlines)
     lines = [f'rule    {r.name:17s} | {r.applies_to} | {r.action}' for r in rows['rules']]
@@ -456,7 +510,7 @@ def lpt_rows_text(rows):
     lines += [f'attach  {a.component:6s} {str(a.term).replace("**", "^"):12s} {a.rule}' for a in rows['attachments']]
     lines += [f'kspace  {row:13s} {comp:6s} {rational(f):3s} {"yes" if interp else "no":3s} {"yes" if k0 else "no"}'
               for row, comp, f, interp, k0 in rows['kspace']]
-    out[LPT_DIR + '/rows_rules.dat'] = (lpt_header(
+    out[LPT_DIR + '/rows_rules.dat'] = (table_header(
         'rows_rules.dat', rules=len(rows['rules']), attachments=len(rows['attachments']), kspace=len(rows['kspace'])),
         lines)
     return out

@@ -88,11 +88,18 @@ def recipe_terms(rec):
 
 
 def proportional(a, b):
-    """c with a = c b for two named-source dicts, else None."""
+    """c with a = c b exactly for two named-source dicts, else None.
+
+    The coefficients are exact sympy numbers.  The ratios are canonicalised exactly (sp.cancel, no numeric
+    identification: sympy's default nsimplify would turn -1648/18865 into radicals and take a ratio within 1e-30 of
+    1/3 for 1/3), and c is accepted only when a[s] - c b[s] is exactly zero for every source s."""
     if set(a) != set(b):
         return None
-    ratios = {sp.nsimplify(a[s] / b[s]) for s in a}
-    return ratios.pop() if len(ratios) == 1 else None
+    ratios = {sp.cancel(sp.sympify(a[s]) / b[s]) for s in a}
+    if len(ratios) != 1:
+        return None
+    c = ratios.pop()
+    return c if all(sp.cancel(a[s] - c * b[s]) == 0 for s in a) else None
 
 
 def _elementary(terms):
@@ -218,7 +225,8 @@ def units_of(sources):
         for (kind, n), combo in sorted(by_n.items(), key=lambda kv: (kv[0][0], -kv[0][1])):
             if kind == '22':
                 norm = combo[min(combo)]
-                key = ('22', n, tuple(sorted((l, sp.nsimplify(c / norm)) for l, c in combo.items())))
+                # exact ratios (sp.cancel of exact rationals): the unit lines are written as exact 'a/b'
+                key = ('22', n, tuple(sorted((l, sp.cancel(c / norm)) for l, c in combo.items())))
                 name = next((u for u, spec in units.items() if spec == key), None)
                 if name is None:
                     name = f'U22_{sum(1 for u in units if u.startswith("U22"))}'

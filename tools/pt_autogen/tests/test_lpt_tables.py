@@ -11,14 +11,12 @@
   l <= 10, their eight derivative kinds and G00 too.  Without the representation rule LEGACY_PARITY_A the kinds
   differ in representation only (equal as functions), the flat engine equals the transcription as functions, the
   struct and flat entry algebras agree (N = 4), and the Euler basis and the angular coefficients are the runtime's.
-* The runtime loader places the rows of basis_rows.dat by their ids (a copy with its lines permuted loads the same
-  values) and rejects a copy with a repeated or a missing row id, a copy of psi_terms.dat, scalar_layer.dat or
-  component_entries.dat with a repeated key (a coefficient split over two lines, the same sum), and copies whose names
-  do not resolve (a recipe with an unknown source, a component with an unknown template, an entry with an unknown
-  moment, a k-space row of an unknown component).
+* The runtime loader (the tables are byte-checked by ``check``, the loader does not re-verify their structure) places
+  the rows of basis_rows.dat by their ids (a copy with its lines permuted loads the same values), multiplies all the
+  factors of a basis row (a copy with a third factor works), and rejects a copy of psi_terms.dat, scalar_layer.dat or
+  component_entries.dat with a repeated key (a coefficient split over two lines, the same sum).
 """
 import importlib
-import importlib.util
 import os
 import re
 import shutil
@@ -44,12 +42,9 @@ LMAX = 10
 
 
 def runtime_table_module():
-    """The runtime table module (src/elf/lpt_tables.py) loaded from its file (numpy only, reads the committed tables)."""
-    path = os.path.join(emit.REPO_DIR, 'src', 'elf', lpt_moments.RUNTIME_TABLE_MODULE)
-    spec = importlib.util.spec_from_file_location('pt_autogen_test_lpt_tables', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The runtime table module (src/elf/lpt_tables.py with its reader table_text.py) loaded from src/elf without the
+    package elf (numpy only, reads the committed tables)."""
+    return lpt_moments.load_table_module(os.path.join(emit.REPO_DIR, 'src', 'elf'), 'pt_autogen_test_lpt_tables')
 
 
 # ---------------------------------------------------------------------------- the committed tables
@@ -357,20 +352,20 @@ def test_euler_basis_and_angular_coefficients():
 
 
 # ---------------------------------------------------------------------------- the runtime loader
-def table_module_from_copy(directory, name=None, edit=None):
+def table_module_from_copy(directory, name=None, edit=None, header_edit=None):
     """The runtime table module loaded from a copy in ``directory`` that reads a copy of the committed tables, the data
-    lines of the table ``name`` replaced by ``edit(data lines)`` (its header kept)."""
+    lines of the table ``name`` replaced by ``edit(data lines)`` (its header kept, or replaced by
+    ``header_edit(header lines)``)."""
     tables = directory / 'tables' / emit.LPT_DIR
     shutil.copytree(os.path.join(emit.TABLE_DIR, emit.LPT_DIR), tables)
-    shutil.copy(os.path.join(emit.REPO_DIR, 'src', 'elf', lpt_moments.RUNTIME_TABLE_MODULE), directory)
+    for module in (lpt_moments.RUNTIME_TABLE_MODULE, lpt_moments.RUNTIME_TABLE_READER):
+        shutil.copy(os.path.join(emit.REPO_DIR, 'src', 'elf', module), directory)
     if name is not None:
         lines = (tables / name).read_text().splitlines(keepends=True)
         header = [line for line in lines if line.startswith('#')]
+        header = header_edit(header) if header_edit else header
         (tables / name).write_text(''.join(header + edit([line for line in lines if not line.startswith('#')])))
-    spec = importlib.util.spec_from_file_location('pt_autogen_test_lpt_tables_copy', directory / lpt_moments.RUNTIME_TABLE_MODULE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return lpt_moments.load_table_module(directory, 'pt_autogen_test_lpt_tables_copy')
 
 
 def loaded_values(module):
@@ -389,22 +384,6 @@ def test_loader_places_basis_rows_by_id(tmp_path, permute):
     assert loaded_values(permuted) == loaded_values(reference)
 
 
-def test_loader_rejects_a_repeated_basis_row(tmp_path):
-    with pytest.raises(ValueError, match=r'tables/lpt/basis_rows\.dat line \d+ repeats the key 3 of line \d+'):
-        table_module_from_copy(tmp_path, 'basis_rows.dat', lambda lines: lines + lines[3:4])
-
-
-def test_loader_rejects_a_missing_basis_row(tmp_path):
-    with pytest.raises(ValueError, match=r'tables/lpt/basis_rows\.dat lacks the row ids \[5\]'):
-        table_module_from_copy(tmp_path, 'basis_rows.dat', lambda lines: lines[:5] + lines[6:])
-
-
-def test_loader_rejects_an_entry_without_its_basis_row(tmp_path):
-    """The last basis row dropped: the remaining ids are still 0 .. N_CT - 2, so only the entries' row ids catch it."""
-    with pytest.raises(ValueError, match=r'tables/lpt/component_entries\.dat uses the row ids \[34\] that basis_rows'):
-        table_module_from_copy(tmp_path, 'basis_rows.dat', lambda lines: lines[:-1])
-
-
 @pytest.mark.parametrize('name, column', [('psi_terms.dat', -1), ('scalar_layer.dat', -1),
                                           ('component_entries.dat', 3)])
 def test_loader_rejects_a_repeated_key(tmp_path, name, column):
@@ -417,16 +396,14 @@ def test_loader_rejects_a_repeated_key(tmp_path, name, column):
         table_module_from_copy(tmp_path, name, split)
 
 
-@pytest.mark.parametrize('name, old, new, message', [
-    ('rows_recipes.dat', ' Q1\n', ' Q9\n', r'rows_recipes\.dat uses the sources \[\'Q9\'\]'),
-    ('components.dat', 'B1_BG2      -   V12', 'B1_BG3      -   V12', r'components\.dat uses the templates \[\'B1_BG3\'\]'),
-    ('component_entries.dat', 'MQ2NQ1', 'MQ2NQ3', r'component_entries\.dat uses the moments \[\'MQ2NQ3\'\]'),
-    ('rows_rules.dat', 'THETA_BALL    THETA', 'THETA_BALL    THETA2', r'rows_rules\.dat uses the components \[\'THETA2\'\]'),
-], ids=['source', 'template', 'moment', 'component'])
-def test_loader_rejects_an_unknown_name(tmp_path, name, old, new, message):
-    """One name of a table replaced by a name its tables do not define (the first data line containing it)."""
-    def rename(lines):
-        i = next(n for n, line in enumerate(lines) if old in line)
-        return lines[:i] + [lines[i].replace(old, new)] + lines[i + 1:]
-    with pytest.raises(ValueError, match=message):
-        table_module_from_copy(tmp_path, name, rename)
+def test_loader_multiplies_every_factor_of_a_basis_row(tmp_path):
+    """The first product of two rows (t = 25) given a third factor X_LIN: row_basis multiplies all three."""
+    def third(lines):
+        i = next(n for n, line in enumerate(lines) if line.split()[0] == '25')
+        return lines[:i] + [lines[i].rstrip('\n') + ' X_LIN\n'] + lines[i + 1:]
+    module = table_module_from_copy(tmp_path, 'basis_rows.dat', third)
+    rows = np.arange(1.0, 1.0 + 40 * 3).reshape(40, 3)[:len(module.ROW_NAMES)]
+    got = module.row_basis(rows)[25]
+    first, second = module.CT_ROWS[25][:2]
+    assert len(module.CT_ROWS[25]) == 3
+    np.testing.assert_array_equal(got, rows[first] * rows[second] * rows[module.CT_ROWS[25][2]])

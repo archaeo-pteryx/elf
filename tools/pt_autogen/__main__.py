@@ -3,11 +3,12 @@
     PYTHONPATH=tools python -m pt_autogen regenerate [--out DIR]   (default DIR: src/elf/tables)
     PYTHONPATH=tools python -m pt_autogen check
 
-``regenerate`` writes the npz tables, the LPT text tables (``lpt/*.dat``) and ``manifest.json`` (the generator
-version, the file list, the LPT verification results and the derived facts ``info``, with no date, source hash
-or timing).
-``check`` regenerates into a temporary directory and compares with the committed tables (exact
-array equality for the npz files, byte equality for the text tables).  Both run the LPT
+``regenerate`` writes the plain-text tables, EPT (``ept/*.dat``) and LPT (``lpt/*.dat``), and ``manifest.json`` (the
+generator version, the file list, the LPT verification results and the derived facts ``info``, with no date, source
+hash or timing).  It writes and verifies them in a staging directory next to DIR and moves them into DIR only when every
+verification passed, so a failed derivation never replaces the tables the runtime reads.
+``check`` writes the tables into a temporary directory and compares with the committed tables (byte
+equality, the headers carry no date).  Both run the LPT
 verifications of ``compare_lpt`` (the tables against the derivation and the runtime, and the
 derivation against the references typed once in tools/pt_autogen/tests, ``pt_autogen.lpt_verify``) and print the
 generation times to stdout.
@@ -15,11 +16,10 @@ generation times to stdout.
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
-
-import numpy as np
 
 from . import (emit, ept_hankel, ept_matrix, lpt_components, lpt_cumulant, lpt_model, lpt_moments,
                lpt_rows, lpt_verify)
@@ -51,13 +51,11 @@ def generate(parts=('ept', 'lpt')):
 
 
 def tables(gen):
-    """``{file name: {array name: array}}`` of the generated tables."""
+    """``{file name relative to the table directory: (header lines, rows)}`` of the EPT text tables."""
     out = {}
     for prefix in ('22', '13'):
-        names, lnm, table = emit.hankel_table(gen['b' + prefix], prefix)
-        out[emit.HANKEL_FILES[prefix]] = dict(names=np.array(names), lnm=lnm, table=table)
-    out[emit.MATRIX_FILE] = emit.matrix_arrays(gen['m22'], gen['m13'],
-                                               ept_matrix.uv_rows(gen['z3_uv']))
+        out.update(emit.ept_hankel_text(gen['b' + prefix], prefix))
+    out.update(emit.ept_matrix_text(gen['m22'], gen['m13'], ept_matrix.uv_rows(gen['z3_uv'])))
     return out
 
 
@@ -88,7 +86,8 @@ def compare_lpt(gen, out_dir, timings=None):
         except AssertionError as err:
             res[key], res[key + '_error'] = False, str(err)
     worst = lpt_moments.moment_identity(out_dir)
-    res['moment_identity_max_rel'] = {str(lmax): float('%.2e' % w) for lmax, w in worst.items()}
+    # the per-lmax values depend on the JAX version (rounding), so they are printed, not recorded in the manifest
+    print('moment identity max rel:', {str(lmax): float('%.2e' % w) for lmax, w in worst.items()})
     res['moment_identity_below_1e-12'] = all(w < 1e-12 for w in worst.values())
     groups = (('kernels', lpt_verify.kernels),
               ('term_list', lambda: lpt_verify.term_list(gen['lpt_cumulants'])),
@@ -103,16 +102,14 @@ def compare_lpt(gen, out_dir, timings=None):
     return {'lpt': res}
 
 
-def regenerate(out_dir):
-    """Generate the tables into ``out_dir``; returns ``(arrays, texts, comparisons, timings)``.  The timings are for
-    printing only, ``manifest.json`` does not record them."""
+def write_and_verify(out_dir):
+    """Generate the tables, write them and ``manifest.json`` into ``out_dir`` and run the verifications of
+    ``compare_lpt`` on the written tables; returns ``(texts, comparisons, timings)``, ``texts`` the EPT and LPT tables
+    ``{file: (header lines, rows)}``.  The timings are for printing only, ``manifest.json`` does not record them."""
     gen, timings = generate()
-    arrays = tables(gen)
-    texts = text_tables(gen)
-    os.makedirs(os.path.join(out_dir, emit.LPT_DIR), exist_ok=True)
-    for fname, arr in arrays.items():
-        emit.write_npz(os.path.join(out_dir, fname), arr)
+    texts = {**tables(gen), **text_tables(gen)}
     for fname, (header, rows) in texts.items():
+        os.makedirs(os.path.dirname(os.path.join(out_dir, fname)), exist_ok=True)
         emit.write_text_table(os.path.join(out_dir, fname), header, rows)
     t0 = time.perf_counter()
     comparisons = compare_lpt(gen, out_dir, timings)
@@ -121,44 +118,62 @@ def regenerate(out_dir):
                 z3_uv_matter=str(gen['z3_uv']),
                 uv_limit_bias_group_unused=str(gen['z3_uv_bias']))
     emit.write_manifest(out_dir, comparisons, info)
-    return arrays, texts, comparisons, timings
+    return texts, comparisons, timings
 
 
-def _all_true(value):
+def _failures(value, path=''):
+    """The '/'-joined keys of the False results of the comparisons (with their recorded '_error' text)."""
     if isinstance(value, dict):
-        return all(_all_true(v) for v in value.values())
-    if isinstance(value, bool):
-        return value
-    return True                          # counts
+        out = []
+        for key, v in value.items():
+            out += _failures(v, f'{path}/{key}' if path else str(key))
+            if v is False and isinstance(value.get(f'{key}_error'), str):
+                out[-1] += f" ({value[f'{key}_error']})"
+        return out
+    return [path] if value is False else []
+
+
+def regenerate(out_dir):
+    """Generate and verify the tables in a staging directory next to ``out_dir``, then move them in; returns
+    ``(texts, comparisons, timings)``.  ``out_dir`` is touched only after every verification passed (the files are
+    moved with os.replace, ``manifest.json`` last).  A failed or raising verification or derivation leaves it
+    untouched, keeps the staging directory with its products and prints why."""
+    out_dir = os.path.abspath(out_dir)
+    os.makedirs(os.path.dirname(out_dir), exist_ok=True)
+    stage = tempfile.mkdtemp(prefix=os.path.basename(out_dir) + '.staging-', dir=os.path.dirname(out_dir))
+    try:
+        texts, comparisons, timings = write_and_verify(stage)
+    except Exception as err:
+        print(f'regenerate: {type(err).__name__}: {err}\n  {out_dir} is untouched, the products so far are in {stage}')
+        raise
+    failed = _failures(comparisons)
+    if failed:
+        print('regenerate: verification failed: ' + '; '.join(failed)
+              + f'\n  {out_dir} is untouched, the products are in {stage}')
+        return texts, comparisons, timings
+    for fname in [*texts, emit.MANIFEST_FILE]:
+        os.makedirs(os.path.dirname(os.path.join(out_dir, fname)), exist_ok=True)
+        os.replace(os.path.join(stage, fname), os.path.join(out_dir, fname))
+    shutil.rmtree(stage)
+    return texts, comparisons, timings
 
 
 def check():
-    """Regenerate into a temporary directory and compare with the committed tables; returns the exit status.
-    The committed ``manifest.json`` has to exist, it records nothing to compare (no hash)."""
-    ok = True
+    """Write the tables into a temporary directory and compare them byte for byte with the committed tables; returns
+    the exit status.  The committed ``manifest.json`` has to exist, it records nothing to compare."""
+    ok = os.path.exists(os.path.join(emit.TABLE_DIR, emit.MANIFEST_FILE))
     with tempfile.TemporaryDirectory() as tmp:
-        arrays, texts, comparisons, timings = regenerate(tmp)
+        texts, comparisons, timings = write_and_verify(tmp)
         print('generation times [s]:', json.dumps(timings))
-        for fname in list(arrays) + list(texts):
-            committed = os.path.join(emit.TABLE_DIR, fname)
-            if not os.path.exists(committed):
-                print(f'FAIL {fname}: no committed table')
-                ok = False
-                continue
-            if fname in arrays:
-                same = emit.arrays_equal(emit.read_npz(committed), emit.read_npz(os.path.join(tmp, fname)))
-            else:
-                with open(committed, 'rb') as a, open(os.path.join(tmp, fname), 'rb') as b:
-                    same = a.read() == b.read()
+        for fname in texts:
+            with open(os.path.join(emit.TABLE_DIR, fname), 'rb') as a, open(os.path.join(tmp, fname), 'rb') as b:
+                same = a.read() == b.read()
             print(('ok  ' if same else 'FAIL') + f' {fname}: regenerated == committed')
             ok &= same
     for key, value in comparisons.items():
-        good = _all_true(value)
+        good = not _failures(value)
         print(('ok  ' if good else 'FAIL') + f' {key}: {json.dumps(value)}')
         ok &= good
-    if not os.path.exists(os.path.join(emit.TABLE_DIR, emit.MANIFEST_FILE)):
-        print('FAIL manifest.json missing')
-        ok = False
     print('check ' + ('passed' if ok else 'FAILED'))
     return 0 if ok else 1
 
@@ -173,11 +188,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == 'regenerate':
         t0 = time.perf_counter()
-        _, _, comparisons, timings = regenerate(args.out)
-        print('wrote', args.out)
+        _, comparisons, timings = regenerate(args.out)
+        failed = _failures(comparisons)
+        print('did not write' if failed else 'wrote', args.out)
         print('generation times [s]:', json.dumps(timings), ' total %.1f' % (time.perf_counter() - t0))
         print('comparisons:', json.dumps(comparisons))
-        return 0 if _all_true(comparisons) else 1
+        return 1 if failed else 0
     return check()
 
 

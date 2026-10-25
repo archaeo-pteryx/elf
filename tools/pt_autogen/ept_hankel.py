@@ -16,11 +16,12 @@ P13: 6 Z1(k) Z3(k, p, -p)  --LOS average-->  S(k, p, x; mu), x = khat.phat
      table entry = coefficient (the code evaluates int r dr j_l(kr) xi_l^n
      = int_p p^n L_l(x) / D- P(p)).
 
-Table conventions (``src/elf/tables/ept_hankel_<22|13>.npz``, read by ``src/elf/pt_coeff.py``):
-block names ``'22_l_n_m'`` and ``'13_l_n_m'``, sorted as strings; the P13 blocks have
--2 <= n <= 0 (``reduction.lower_n``, the cosine rule; no null-vector canonicalisation, so the
-(2, -2, 4) block stays); the dropped zero-lag part of P13 holds only the b2, b3 and bdG2 terms
-(asserted) and is scaleless in the matrix method.
+Table conventions: the headers of ``src/elf/tables/ept/hankel_<22|13>.dat`` (written by
+``emit.ept_hankel_text``, read by ``src/elf/pt_coeff.py``) state them, the block names
+``'22_l_n_m'`` and ``'13_l_n_m'`` sorted as strings, the meaning and sign of an entry, the range
+-2 <= n <= 0 of the P13 blocks (``reduction.lower_n``, the cosine rule; no null-vector
+canonicalisation, so the (2, -2, 4) block stays) and the dropped zero-lag part of P13 (only the b2
+and renormalised-operator terms, asserted; scaleless in the matrix method).
 
 The blocks are exact: ``{(l, n, m): polynomial in (b1, b2, bG2, bGamma3, f, mu)}``.
 """

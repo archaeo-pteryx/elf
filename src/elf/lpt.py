@@ -174,19 +174,24 @@ class PTTerms(NamedTuple):
 class _XiTransform(NamedTuple):
     """The P -> xi_l^n transform (forward, k -> q; ``LPT._get_xi_ln``).
 
-    Stage A data, one entry per (l, n) row of ``LPT.ln_list``. Every row has the kernel bias
+    Stage A data, one slot per (l, n) of ``LPT.ln_list``: ``slots[(l, n)]`` is the row of
+    ``forward`` and ``log_q_rows`` and the index of xi_l^n in the outputs of ``_get_xi_ln``
+    (``LPT._xi_slot``).  The orders are stored by slot, not at the index [l, n] of a fixed
+    array, so any l >= 0 and integer n have their own place.  Every row has the kernel bias
     ``nu`` (the kernel ``HankelGrids.u_m[l]``) and the input bias ``nu - (n + 3)``, and lands
     on ``HankelGrids.q_padded[l]``.
     """
-    forward: fftlog.ForwardTransform  # the seven rows (nu_kernel = nu)
-    log_q_rows: jnp.ndarray         # (7, n_padded) ln of each row's output grid q_padded[l]
+    forward: fftlog.ForwardTransform  # one row per slot (nu_kernel = nu)
+    log_q_rows: jnp.ndarray         # (n_pairs, n_padded) ln of each row's output grid q_padded[l]
+    slots: dict                     # (l, n) -> slot
 
 
 class _SourceTransform(NamedTuple):
     """The Q/R sources (backward, q -> k) and their k -> q transforms to the correlator rows.
 
     Stage B (``lpt_stages.stage_b``) and stage C (``LPT._transform_sources``) data. The
-    order index l runs over 0 ... max(4, ``LPT.lmax``). ``u_m`` is ``(n_l, n_padded // 2 + 1)``,
+    order index l runs over 0 ... max(``lpt_stages.MAX_ORDER``, ``LPT.lmax``), the orders of
+    every stage and of the final integral. ``u_m`` is ``(n_l, n_padded // 2 + 1)``,
     and ``u_m[0]`` serves the Q sources and the b2^2 row. The end weights live on
     ``k_padded``. ``u_m_src`` and ``q_src_padded`` are indexed ``[group, l]``. Group 0
     has bias ``nu`` and group 1 has ``nu_n0`` (sources with n >= 0). Each kernel uses the
@@ -196,7 +201,7 @@ class _SourceTransform(NamedTuple):
     four_pi_q3_padded: jnp.ndarray  # 4 pi q^3 on _q_padded (with d ln q it gives 4 pi q^2 dq)
     end_weights_Q: jnp.ndarray      # support [k_min, 2 k_max]
     end_weights_R: jnp.ndarray      # support [k_min, k_max]
-    R_source_rows: jnp.ndarray      # ln_list rows of the 13 units of stage B, (l, n) = lpt_stages.UNITS_13_LN
+    R_source_rows: jnp.ndarray      # stage-A slots of the 13 units of stage B, (l, n) = lpt_stages.UNITS_13_LN
     R_source_ells: jnp.ndarray      # their orders l
     u_m_src: jnp.ndarray            # k -> q kernels [bias group (nu, nu_n0), l]
     q_src_padded: jnp.ndarray       # (2, n_l, n_padded) output q grids of u_m_src
@@ -208,11 +213,13 @@ class _FinalTransform(NamedTuple):
 
     q runs over the core q grid ``LPT._q`` (nq = nfft), k over the core k grid ``LPT._k``
     and l over 0 ... ``LPT.lmax``. Every order uses the kernel with the l = 0 phase, so
-    the integrand stays on the common q grid.
+    the integrand stays on the common q grid.  ``pk_select_kernel`` and ``pk_select_slopes``
+    are the one stored form of the kernel (8 L nfft^2 bytes each): the forward
+    (``_point_value``, spline.hermite) and the tangent rule (``lpt_rule.point_kernel``) read
+    them in place, no copy is kept.
     """
     pk_select_kernel: jnp.ndarray   # [l, k, j]: transform of the unit source at core node j, end weights folded in
     pk_select_slopes: jnp.ndarray   # ln k slopes of pk_select_kernel (axis 1) for spline.hermite
-    pk_select_nodes: jnp.ndarray    # [k, kind, l, j]: kind 0 pk_select_kernel, kind 1 pk_select_slopes (a copy)
     end_weights_q_core: jnp.ndarray # (nq,) trapezoid weights of the core q grid, 1/2 at both ends
     four_pi_q3: jnp.ndarray         # (nq,) 4 pi q^3
     ell_indices: jnp.ndarray        # (lmax + 1,) the orders l as floats
@@ -261,9 +268,9 @@ class LPT(PowerSpectrum):
         ``lambda_ir`` is the upper limit of the Sigma^2 integral of the counterterm base.
         ``bias_basis`` is 'bG2' or 'bs2'.
 
-        The attributes ``ln_list`` (the (l, n) of the forward transforms xi_l^n) and
-        ``G00_coeffs`` (the angular coefficients of ``utils_lpt.make_G00_coeffs``) are
-        internal tables.
+        The attributes ``ln_list`` (the (l, n) of the forward transforms xi_l^n, in slot
+        order) and ``G00_coeffs`` (the angular coefficients of ``utils_lpt.make_G00_coeffs``)
+        are internal tables.
         """
 
         if bias_basis not in ('bG2', 'bs2'):
@@ -284,8 +291,8 @@ class LPT(PowerSpectrum):
 
         self.G00_coeffs = make_G00_coeffs(self.lmax)
 
-        self.ln_list = jnp.array(lpt_stages.STAGE_A)       # the (l, n) of stage A the recipes need
-        self._set_hankel(max(int(jnp.max(self.ln_list[:, 0])), self.lmax))
+        # the kernels reach the highest order of every stage (lpt_stages.MAX_ORDER) and of the final integral
+        self._set_hankel(max(lpt_stages.MAX_ORDER, self.lmax))
 
     def _set_hankel(self, lmax):
         """Grids, kernels and static support weights of the four transforms.
@@ -294,7 +301,9 @@ class LPT(PowerSpectrum):
         per-order q grids. The stage data go to ``_xi_transform`` (A), ``_source_transform``
         (B and C) and ``_final_transform`` (the final integral). The common q grid
         ``_q_padded`` is the l = 0 output grid, and ``_q`` is its core. ``lmax`` is the
-        highest order needed, max(4, ``self.lmax``).
+        highest order needed, that of every stage (``lpt_stages.MAX_ORDER``: stage A, the 13
+        units of stage B, the H terms of stage C) and of the final integral (``self.lmax``).
+        Stage A is planned for the orders ``lpt_stages.STAGE_A`` (``_set_xi_transform``).
         """
         l_list = list(range(lmax + 1))
 
@@ -306,16 +315,13 @@ class LPT(PowerSpectrum):
         self._q = self._hankel.grid.crop(self._q_padded)
         self._log_q_padded = jnp.log(self._q_padded)
 
-        forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, self.ln_list[:, 0], self.ln_list[:, 1],
-                                           nu_kernel=self.fftlog_settings.nu)
-        self._xi_transform = _XiTransform(forward=forward, log_q_rows=jnp.log(forward.q))
+        self._set_xi_transform(lpt_stages.STAGE_A)
 
         u_m = jnp.array([
             fftlog.hankel_setup(l, self.fftlog_settings.nu, self._hankel.grid, lnxy=self._hankel.lnxy[0])[2] for l in l_list
         ])
         # the 13 units of stage B stay on their own grid q_padded[l]: the conjugate relation lands them on k_padded
         r_ln = lpt_stages.UNITS_13_LN
-        ln_np = _np.asarray(self.ln_list)
         k_ref = _np.asarray(self._hankel.k_padded)
         for l, _n in r_ln:
             k_back = _np.asarray(self._hankel.q_grids[l].conjugate(self._hankel.lnxy[l]).x)
@@ -330,9 +336,7 @@ class LPT(PowerSpectrum):
             four_pi_q3_padded=4.0 * jnp.pi * self._q_padded**3,
             end_weights_Q=fftlog.trapezoid_weights('core_to_2kmax', self._nfft, self._hankel.npad, dln),
             end_weights_R=fftlog.trapezoid_weights('core', self._nfft, self._hankel.npad, dln),
-            R_source_rows=jnp.asarray(
-                [int(_np.flatnonzero((ln_np[:, 0] == l) & (ln_np[:, 1] == n))[0])
-                 for l, n in r_ln], dtype=jnp.int32),
+            R_source_rows=jnp.asarray([self._xi_slot(l, n) for l, n in r_ln], dtype=jnp.int32),
             R_source_ells=jnp.asarray([l for l, _ in r_ln], dtype=jnp.int32),
             u_m_src=jnp.stack([self._hankel.u_m, jnp.array([s[2] for s in setups_n0])]),
             q_src_padded=q_src_padded,
@@ -352,15 +356,37 @@ class LPT(PowerSpectrum):
         self._final_transform = _FinalTransform(
             pk_select_kernel=pk_select_kernel,
             pk_select_slopes=pk_select_slopes,
-            # the Hermite nodes of the tangent rule's kernel (lpt_rule.point_kernel), ln k axis first: one gather takes
-            # the value and slope rows of two nodes (static copy; the forward reads pk_select_kernel / pk_select_slopes)
-            pk_select_nodes=jnp.stack([jnp.moveaxis(pk_select_kernel, 1, 0), jnp.moveaxis(pk_select_slopes, 1, 0)],
-                                      axis=1),
             end_weights_q_core=end_weights_q_core,
             four_pi_q3=4.0 * jnp.pi * self._q**3,
             ell_indices=ell_indices,
             q_inv_pows=self._q[None, :] ** (-ell_indices[:, None]),
         )
+
+    def _set_xi_transform(self, ln_list):
+        """Plan stage A for the orders ``ln_list`` ((l, n) pairs, each once): ``ln_list`` and ``_xi_transform``.
+
+        Slot i holds the order ``ln_list[i]`` (``_xi_slot``), whatever its l and n.
+        """
+        pairs = [(int(l), int(n)) for l, n in ln_list]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError(f'stage A lists an order twice: {pairs}')
+        self.ln_list = jnp.array(pairs)
+        forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, self.ln_list[:, 0],
+                                           self.ln_list[:, 1], nu_kernel=self.fftlog_settings.nu)
+        self._xi_transform = _XiTransform(forward=forward, log_q_rows=jnp.log(forward.q),
+                                          slots={ln: i for i, ln in enumerate(pairs)})
+
+    def _xi_slot(self, l, n):
+        """The slot of xi_l^n in the outputs of ``_get_xi_ln``.
+
+        ValueError for an order that stage A does not transform (not in ``ln_list``): it has
+        no slot to read, rather than another order's or a zero array.
+        """
+        slot = self._xi_transform.slots.get((int(l), int(n)))
+        if slot is None:
+            raise ValueError(f'stage A has no xi_l^n of (l, n) = ({l}, {n}), its orders (ln_list) are '
+                             f'{list(self._xi_transform.slots)}')
+        return slot
 
     # Chain: P -> xi_l^n (k -> q), xi products -> Q/R sources (q -> k), sources ->
     # correlator rows H_l^n[S] (k -> q).  Each transform uses the low-ringing phase of its
@@ -379,26 +405,19 @@ class LPT(PowerSpectrum):
         """P -> xi_l^n of ``arrays`` ``(n_arrays, nfft)``: ``(xi_ln_common, xi_ln_own_grid)``.
 
         Stage A. ``arrays`` are spectra on the core k grid (P and P_lt in ``get_pt_terms``),
-        transformed for the seven (l, n) of ``ln_list``.
-        ``xi_ln_common[i, l, n]`` is resampled onto ``_q_padded``; ``xi_ln_own_grid``
-        (rows of ``ln_list``) stays on ``q_padded[l]``.  Both carry the plain mask,
-        not ``w_xi``: the pointwise rows would be wrong with a halved q_max node.
-        ``xi_ln_common`` has shape ``(n_arrays, 5, 5, n_padded)``. n = -1, -2 sit at the
-        Python indices -1, -2, and the entries not in ``ln_list`` are zero.
+        transformed for the (l, n) of ``ln_list``.  Both outputs have the shape
+        ``(n_arrays, n_pairs, n_padded)`` and hold xi_l^n in the slot ``_xi_slot(l, n)``:
+        ``xi_ln_common`` resampled onto ``_q_padded``, ``xi_ln_own_grid`` on ``q_padded[l]``.
+        Both carry the plain mask, not ``w_xi``: the pointwise rows would be wrong with a
+        halved q_max node.
         """
         arrays = jnp.atleast_2d(jnp.asarray(arrays))
-        ells = self.ln_list[:, 0]
-        ns = self.ln_list[:, 1]
-
         fx = self._hankel.pad_input(arrays / (2 * jnp.pi**2))              # (n_arrays, n_padded)
-        raw = self._xi_transform.forward.apply(fx[:, None, :], self._hankel.grid)   # (n_arrays, n_ln, n_padded)
+        raw = self._xi_transform.forward.apply(fx[:, None, :], self._hankel.grid)   # (n_arrays, n_pairs, n_padded)
 
         log_q_rows = self._xi_transform.log_q_rows
         xis = jax.vmap(lambda row: self._resample_to_common_q_padded(log_q_rows, row))(raw)
-        xis = xis * self._hankel.mask_xi
-        raw = raw * self._hankel.mask_xi
-        xi_ln = jnp.zeros((arrays.shape[0], 5, 5, self._hankel.k_padded.shape[0]))
-        return xi_ln.at[:, ells, ns].set(xis), raw
+        return xis * self._hankel.mask_xi, raw * self._hankel.mask_xi
 
     def _transform_sources(self, sources, *, ells, ns):
         """``H_l^n[S](q) = int dk k^{n+2} S(k) j_l(kq) / (2 pi^2)`` of each source on the common padded q grid.
@@ -414,6 +433,10 @@ class LPT(PowerSpectrum):
         sources = jnp.stack(sources, axis=0)
         ells = _np.asarray(ells)
         ns = _np.asarray(ns)
+        n_l = self._source_transform.u_m_src.shape[1]
+        if ells.max() >= n_l:          # the gathers [group, ells] below would clip it to the last order
+            raise ValueError(f'_transform_sources has the kernels of the orders l <= {n_l - 1}, not '
+                             f'{sorted({int(l) for l in ells.flat if l >= n_l})}')
         group = (ns >= 0).astype(int)                 # bias group: 0 nu, 1 nu_n0
         nu = _np.where(group == 1, self.fftlog_settings.nu_n0, self.fftlog_settings.nu)
         fx = sources * self._hankel.k_padded[None, :] ** (jnp.asarray(ns)[:, None] + 3) / (2 * jnp.pi**2)

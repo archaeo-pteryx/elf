@@ -227,14 +227,16 @@ def fold_weights(k, mu, f, Kfac, W):
 
 def point_kernel(model, k, derivative):
     """``(KW, KW')``: KW ``(L, nq)`` = 4 pi q^3 kern_l(q) at ln k, KW' = dKW/dln k if ``derivative`` (else None), as
-    one contraction of spline.hermite's weights with one gather of the 4 nodes of pk_select_nodes (built once)."""
+    one contraction of spline.hermite's weights with the 4 nodes (value and slope at both ends of the interval) taken
+    from the forward's kernel arrays pk_select_kernel / pk_select_slopes ([l, k, q], read in place, no copy)."""
     ft, x, logk = model._final_transform, model._logk_fft, jnp.log(k)
     idx = spline._interval_index(x, logk)
     h_i = (x[1:] - x[:-1])[idx]
     t = (logk - x[idx]) / h_i
     w = jnp.stack(spline.hermite_weights(t, h_i))                        # weights of y0, m0, y1, m1
-    nodes = jnp.take(ft.pk_select_nodes, jnp.stack([idx, idx + 1]), axis=0, mode='clip')   # (2 nodes, 2 kinds, L, q)
-    nodes = nodes.reshape(4, model.lmax + 1, model._q.shape[0])          # order y0, m0, y1, m1
+    node = lambda a, i: jnp.take(a, i, axis=1, mode='clip')              # the (L, q) rows of node i
+    nodes = jnp.stack([node(ft.pk_select_kernel, idx), node(ft.pk_select_slopes, idx),
+                       node(ft.pk_select_kernel, idx + 1), node(ft.pk_select_slopes, idx + 1)])   # y0, m0, y1, m1
     if not derivative:
         return ft.four_pi_q3 * jnp.einsum('n,nlq->lq', w, nodes), None
     wp = jnp.stack(spline.hermite_weight_derivatives(t, h_i))            # d/d ln k of the weights

@@ -18,11 +18,12 @@ P13 block = sum_terms c I(nu1 - B, 1 - C)                   for each term
 UV term: ``Z3_UV = 6 lim_{p -> inf} (p/k)^2 <Z3(k, p, -p)>`` over the directions of p, for the
 matter group (``model.MATRIX_UV_TERM``); the table holds the monomials of ``Z1 Z3_UV``.
 
-Table conventions (``src/elf/tables/ept_matrix.npz``, read by ``src/elf/pt_matrix.py``): one block
-per (bias, f, mu) monomial, named ``'22=b1-i_b2-j_bG2-k_f-l_mu-m'`` and
-``'13=b1-i_bG2-j_bGamma3-k_f-l_mu-m'``, sorted as strings; the runtime multiplies a P22 block by
-I(nu1, nu2) and a P13 block by tan(pi nu1) / pi; R is stored as a constant times a product of
-integer polynomial factors (positive powers in the numerator, negative in the denominator).
+Table conventions: the headers of ``src/elf/tables/ept/matrix_<22|13|uv>.dat`` (written by
+``emit.ept_matrix_text``, read by ``src/elf/pt_matrix.py``) state them, one block per (bias, f, mu)
+monomial, named ``'22=b1-i_b2-j_bG2-k_f-l_mu-m'`` and ``'13=b1-i_bG2-j_bGamma3-k_f-l_mu-m'``,
+sorted as strings; the runtime multiplies a P22 block by I(nu1, nu2) and a P13 block by
+tan(pi nu1) / pi; R is stored as a constant times a product of integer polynomial factors
+(positive powers in the numerator, negative in the denominator).
 """
 import sympy as sp
 

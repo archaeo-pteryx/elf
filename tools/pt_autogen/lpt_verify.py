@@ -309,7 +309,8 @@ def rows(der, comps):
             assert rr.sources_equal(idn.named_sources()[name][1], A[name][1]), name
         for name, expected in ref.DEPENDENT_SOURCES.items():
             got = idn.decompose(A[name][1])
-            assert got == {s: sp.nsimplify(c) for s, c in expected.items()}, (name, got)
+            # exact comparison: the typed references are rationals (rational=True reads a typed decimal by its digits)
+            assert got == {s: sp.nsimplify(c, rational=True) for s, c in expected.items()}, (name, got)
 
     def rows_equal_the_paper():
         res = compare_with_paper(der)
