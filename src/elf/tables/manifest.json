@@ -1,5 +1,5 @@
 {
- "generator": "pt_autogen 1.6 (2026-11-10): matrix table headers",
+ "generator": "pt_autogen 2.1 (2026-11-10): matrix table headers",
  "files": [
   "ept/hankel_22.dat",
   "ept/hankel_13.dat",
@@ -13,16 +13,10 @@
   "lpt/basis_rows.dat",
   "lpt/component_entries.dat",
   "lpt/moments.dat",
-  "lpt/psi_terms.dat",
-  "lpt/scalar_layer.dat"
+  "lpt/angular.dat"
  ],
  "comparisons": {
   "lpt": {
-   "psi_entries_equal_sympy": true,
-   "psi_entries_equal_sympy_count": 351,
-   "tables_equal_derived_moments": true,
-   "tables_equal_derived_moments_count": 99,
-   "moment_identity_below_1e-12": true,
    "kernels": {
     "L2_closed_form": true,
     "L3_longitudinal_points": 12,
@@ -58,6 +52,12 @@
    },
    "moments_declaration": {
     "density_moments_are_MQa_NQb": 9
+   },
+   "angular": {
+    "addition_theorem_points": 81,
+    "band": 605,
+    "quadrature_max_rel": 1.3e-13,
+    "series_max_rel": 2.5e-13
    }
   }
  },

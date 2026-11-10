@@ -76,7 +76,7 @@ def stand_ins(monkeypatch):
     gen = dict(zero_lag={}, z3_uv=0, z3_uv_bias=0)
     monkeypatch.setattr(generator, 'generate', lambda parts=('ept', 'lpt'): (gen, {}))
     monkeypatch.setattr(generator, 'tables', lambda g: {'ept/hankel_22.dat': (['# probe ept'], ['new ept'])})
-    monkeypatch.setattr(generator, 'text_tables', lambda g: {'lpt/psi_terms.dat': (['# probe'], ['new'])})
+    monkeypatch.setattr(generator, 'text_tables', lambda g: {'lpt/angular.dat': (['# probe'], ['new'])})
     return monkeypatch
 
 
@@ -97,7 +97,7 @@ def test_failed_verification_leaves_the_tables_untouched(tmp_path, stand_ins, ca
     assert snapshot(out) == before                                    # bitwise unchanged, no file added
     assert snapshot(type(tmp_path)(emit.TABLE_DIR)) == committed
     staged = list(tmp_path.glob('tables.staging-*'))                  # the products are kept, and named
-    assert len(staged) == 1 and (staged[0] / 'lpt' / 'psi_terms.dat').read_text() == '# probe\nnew\n'
+    assert len(staged) == 1 and (staged[0] / 'lpt' / 'angular.dat').read_text() == '# probe\nnew\n'
     assert str(staged[0]) in capsys.readouterr().out
 
 
@@ -108,7 +108,7 @@ def test_passed_verification_moves_the_set_in(tmp_path, stand_ins):
     stand_ins.setattr(generator, 'compare_lpt', lambda gen, d, t=None: {'lpt': {'probe': True}})
     assert generator.main(['regenerate', '--out', str(out)]) == 0
     after = snapshot(out)
-    assert (out / 'lpt' / 'psi_terms.dat').read_text() == '# probe\nnew\n'
+    assert (out / 'lpt' / 'angular.dat').read_text() == '# probe\nnew\n'
     assert (out / 'ept' / 'hankel_22.dat').read_text() == '# probe ept\nnew ept\n'
     assert '"probe": true' in after['manifest.json'].decode()
     assert set(after) == set(before) and not list(tmp_path.glob('tables.staging-*'))

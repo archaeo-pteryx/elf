@@ -9,9 +9,9 @@ hash or timing).  It writes and verifies them in a staging directory next to DIR
 verification passed, so a failed derivation never replaces the tables the runtime reads.
 ``check`` writes the tables into a temporary directory and compares with the committed tables (byte
 equality, the headers carry no date).  Both run the LPT
-verifications of ``compare_lpt`` (the tables against the derivation and the runtime, and the
-derivation against the references typed once in tools/pt_autogen/tests, ``pt_autogen.lpt_verify``) and print the
-generation times to stdout.
+verifications of ``compare_lpt`` (the derivation against the references typed once in tools/pt_autogen/tests and
+the written Legendre table against its identities, ``pt_autogen.lpt_verify``) and print the generation times to
+stdout.
 """
 import argparse
 import json
@@ -21,13 +21,14 @@ import sys
 import tempfile
 import time
 
-from . import emit, ept_hankel, ept_matrix, lpt_components, lpt_cumulant, lpt_model, lpt_moments, lpt_rows, lpt_verify
+from . import (emit, ept_hankel, ept_matrix, lpt_components, lpt_cumulant, lpt_legendre, lpt_model, lpt_rows,
+               lpt_verify)
 
 
 def generate(parts=('ept', 'lpt')):
     """``(outputs, timings)`` of the parts 'ept' (the exact blocks, rational functions and UV term) and 'lpt' (the
-    cumulant expansion ``lpt_cumulants``, its components ``lpt_components``, the row recipes ``lpt_rows`` and the psi
-    family of the derived moments ``lpt_psi``)."""
+    cumulant expansion ``lpt_cumulants``, its components ``lpt_components``, the row recipes ``lpt_rows`` and the
+    exact table of the Legendre representation of the angular integrals of the declared moments ``lpt_angular``)."""
     out, timings = {}, {}
 
     def components():
@@ -40,7 +41,7 @@ def generate(parts=('ept', 'lpt')):
              'lpt': (('lpt_cumulants', lambda: {'lpt_cumulants': lpt_cumulant.derive()}),
                      ('lpt_components', lambda: {'lpt_components': components()}),
                      ('lpt_rows', lambda: {'lpt_rows': lpt_rows.derive()}),
-                     ('lpt_psi', lambda: {'lpt_psi': lpt_moments.derive()}))}
+                     ('lpt_angular', lambda: {'lpt_angular': lpt_legendre.table(lpt_model.DENSITY_MOMENTS)}))}
     steps = tuple(step for part in parts for step in steps[part])
     for name, step in steps:
         t0 = time.perf_counter()
@@ -66,33 +67,22 @@ def text_tables(gen):
     out.update(emit.lpt_components_text(lpt_components.templates(comps), lpt_model.LINEAR_KINDS, comps))
     out.update(emit.lpt_basis_text(lpt_components.component_basis(comps)))
     out.update(emit.lpt_moments_text(lpt_model.DENSITY_MOMENTS, lpt_model.A_mu, lpt_model.B_mu))
-    out.update(emit.lpt_psi_text(lpt_moments.make_tables(gen['lpt_psi'])))
+    out.update(emit.lpt_angular_text(gen['lpt_angular'], lpt_legendre.types_of(lpt_model.DENSITY_MOMENTS),
+                                     lpt_legendre.L_TABLE))
     return out
 
 
 def compare_lpt(gen, out_dir, timings=None):
-    """The LPT verifications.  The psi family of the tables written to ``out_dir`` (and its dA, dB, dC) against the
-    sympy derivation, the moments rebuilt from them against the derived moments (exact, l <= LMAX_CHECK), the moment
-    identity of the runtime code (JAX float64), and the groups of ``pt_autogen.lpt_verify`` (the derivation against the
-    references of tools/pt_autogen/tests)."""
-    tables = lpt_moments.read_tables(out_dir)
+    """The LPT verifications, the groups of ``pt_autogen.lpt_verify``: the derivation against the references of
+    tools/pt_autogen/tests, and the Legendre table angular.dat written to ``out_dir`` against the addition theorem, its
+    band, a direct angular quadrature and the plane-wave series."""
     res = {}
-    checks = (('psi_entries_equal_sympy', lambda: lpt_moments.verify_psi(gen['lpt_psi'], tables)),
-              ('tables_equal_derived_moments', lambda: lpt_moments.verify_moments(tables)))
-    for key, fn in checks:
-        try:
-            res[key], res[key + '_count'] = True, fn()
-        except AssertionError as err:
-            res[key], res[key + '_error'] = False, str(err)
-    worst = lpt_moments.moment_identity(out_dir)
-    # the per-lmax values depend on the JAX version (rounding), so they are printed, not recorded in the manifest
-    print('moment identity max rel:', {str(lmax): float('%.2e' % w) for lmax, w in worst.items()})
-    res['moment_identity_below_1e-12'] = all(w < 1e-12 for w in worst.values())
     groups = (('kernels', lpt_verify.kernels),
               ('term_list', lambda: lpt_verify.term_list(gen['lpt_cumulants'])),
               ('components', lambda: lpt_verify.components(gen['lpt_components'])),
               ('rows', lambda: lpt_verify.rows(gen['lpt_rows'], gen['lpt_components'])),
-              ('moments_declaration', lpt_verify.moments_declaration))
+              ('moments_declaration', lpt_verify.moments_declaration),
+              ('angular', lambda: lpt_verify.angular(lpt_legendre.read_table(out_dir))))
     for name, fn in groups:
         t0 = time.perf_counter()
         res[name] = fn()

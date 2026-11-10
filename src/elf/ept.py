@@ -126,6 +126,7 @@ class EPT(PowerSpectrum):
                  r_bao=110.0,
                  lambda_ir=0.2,
                  subtract_k0_const=False,
+                 k_cut=None,
                  do_irres=True,
                  method='hankel',
                  ):
@@ -137,6 +138,8 @@ class EPT(PowerSpectrum):
         ``do_irres`` switches the IR resummation of tree level and loop.
         ``method``: 'hankel' (FFTlog) or 'matrix' (the power-law decomposition with
         the master integral, valid only for k in [3e-3, 3] h/Mpc; module docstring).
+        With ``k_cut`` the matrix method decomposes the cut P (a sampled step) into power laws
+        without an end weight at the cut node; 'hankel' is the method for a band-limited input.
         """
 
         if method not in ('matrix', 'hankel'):
@@ -144,10 +147,13 @@ class EPT(PowerSpectrum):
         super().__init__(kmin_fft=kmin_fft, kmax_fft=kmax_fft, nfft=nfft, pad_mode=pad_mode,
                          fftlog_settings=fftlog_settings, ngauss=ngauss, ells=ells,
                          counterterm_base=counterterm_base, irres_method=irres_method,
-                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_const=subtract_k0_const)
+                         r_bao=r_bao, lambda_ir=lambda_ir, subtract_k0_const=subtract_k0_const,
+                         k_cut=k_cut)
         if self.counterterm_base == 'zeldovich':
             raise ValueError("EPT does not support counterterm_base='zeldovich'")
 
+        if do_irres and k_cut is not None and k_cut < lambda_ir:
+            raise ValueError("k_cut must be >= lambda_ir: Sigma^2 is that of the uncut no-wiggle table")
         self.do_irres = do_irres
         self.method = method
 
@@ -212,22 +218,19 @@ class EPT(PowerSpectrum):
 
         The padded grid and end weights of the input also serve both methods' ``pk_int2``,
         the matrix UV constant and the ``get_xi_ells`` transforms.  The forward chain
-        ``P(k) -> xi_l^n(q)`` (:func:`fftlog.forward_transform`) has the seven rows with the
-        kernel bias ``nu`` (the n = -2 rows ``nu_n2``), one rfft per row, and the low-ringing
-        phase of ``nu``, so row (l, n) lands on ``q_padded[l]``, the conjugate grid of the
-        backward kernel ``u_m[l]``.  ``_p22_resampling`` takes the sources of the P22 blocks from
+        ``P(k) -> xi_l^n(q)`` (:func:`fftlog.forward_transform`) has seven rows, one rfft per
+        row, each with the kernel bias ``nu`` on its low-ringing grid, so row (l, n) lands on
+        ``q_padded[l]``, the conjugate grid of the backward kernel ``u_m[l]``.
+        ``_p22_resampling`` takes the sources of the P22 blocks from
         ``q_padded[l]`` onto ``q_padded[0]`` with the fixed weights of ``spline.resampling`` (the
         cubic interpolation of ``spline.interp1d`` in ln q), weights ``(nterms, n_padded, width)``.
         """
-        self._hankel = fftlog.HankelGrids(self._k, self.fftlog_settings, self.pad_mode, lmax)
+        self._hankel = fftlog.HankelGrids(self._k, self.fftlog_settings, self.pad_mode, lmax, self._n_cut)
         self._set_xi_ells_transform()
 
-        fs = self.fftlog_settings
         ells = [l for l, _ in self._ln_list_static]
         ns = [n for _, n in self._ln_list_static]
-        # an exception to the bias rule, the n = -2 rows keep the kernel bias nu_n2 on the (l, nu) grid
-        self._xi_forward = fftlog.forward_transform(self._hankel.grid, fs.nu, ells, ns,
-                                                    nu_kernel=[fs.nu_n2 if n == -2 else fs.nu for n in ns])
+        self._xi_forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, ells, ns)
         log_q = _np.log(_np.asarray(self._hankel.q_padded))
         self._p22_resampling = spline.resampling(log_q[0], log_q[self._l_22])
 
@@ -308,8 +311,7 @@ class EPT(PowerSpectrum):
         ``h`` enters only the wiggle/no-wiggle split, computed when ``do_irres`` or the
         'linear_ir_resum' base needs it.  ``h=None`` works only without them.
         """
-        k = self._k
-        pk = self._pk_eval(self._prepare(pk_data), k)
+        pk = self._pk_core(self._prepare(pk_data))
         if self.do_irres or self.counterterm_base == 'linear_ir_resum':
             pk_nw_data, Sigma2, dSigma2 = self._get_ir_data(pk_data, h)
         else:
@@ -319,7 +321,7 @@ class EPT(PowerSpectrum):
             p22_nw = p13_kernel_nw = None
         else:
             # pk is rebuilt as pk_nw + pk_w on purpose: that sum is what the IR pipeline transforms
-            pk_nw = self._pk_eval(self._prepare(pk_nw_data), k)
+            pk_nw = self._pk_core(self._prepare(pk_nw_data))
             pk_w = pk - pk_nw
             pk = pk_nw + pk_w
             # the full and the no-wiggle spectrum through one chain

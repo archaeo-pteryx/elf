@@ -17,7 +17,7 @@
      ``model._transform_sources`` (one rfft per input, one irfft per order) takes the transforms with the same bias
      group (n < 0 or n >= 0, the rule bias_n0), the same number of orders and the same need of the 13 units.  The
      last key keeps an input made of 22 units only out of the calls that wait for the 13 units.  On the present
-     tables this gives the four calls of the hand-written stages, 10 rffts and 14 irffts.
+     tables this gives four calls, 10 rffts and 14 irffts.
   M  the zero-lag constants M_n[S], the grid moments of the end-weighted sources (or of the padded, end-weighted
      spectra), shared in the same way.
 Then ``_Context.row`` makes the rows from the products of stage-A outputs of P on the core q grid, the powers of q,
@@ -32,7 +32,7 @@ evaluated there.
 Why every row is materialized on its own.  ``pt_rows`` puts an optimization barrier on each row.  Without the barriers
 XLA fuses the arithmetic of the rows and the resampling of the stage-A and stage-C outputs into the per-point loops of
 the final integral (the forward, the tangent rule and its transpose), where it is repeated at every (k, mu).  One
-barrier on the whole array stops that too, but then every per-point loop waits for all of stage 1.  With one barrier
+barrier on the whole array stops that too, but then every per-point loop waits for all of step 1.  With one barrier
 per row a loop waits only for the rows it reads, and the calls of stage C follow the stage-B outputs they need, so that
 a row waits for no transform it does not use.  The factors in the inputs of stage C and the groups of terms keep the
 q-space arithmetic of a row short, and it runs once per call.
@@ -79,7 +79,7 @@ STAGE_A = _stage_a()
 UNITS_22 = tuple(u for u, (kind, _, _) in UNITS.items() if kind == '22')
 UNITS_13 = tuple(u for u, (kind, _, _) in UNITS.items() if kind == '13')
 UNITS_13_LN = tuple((UNITS[u][2][0][0], UNITS[u][1]) for u in UNITS_13)
-"""The (l, n) of the 13 units in table order (the rows of ln_list the model transforms back to k)."""
+"""The (l, n) of the 13 units in table order (the slots of ln_list the model transforms back to k)."""
 assert all(len(UNITS[u][2]) == 1 and UNITS[u][2][0][1] == 1 for u in UNITS_13), 'a 13 unit is one block'
 SOURCE_POWERS = {name: tuple((p, tuple((u, c) for u, kp, c in lines if kp == p))
                              for p in sorted({kp for _, kp, _ in lines})) for name, lines in SOURCES.items()}
@@ -94,6 +94,7 @@ def scaled(refs):
 
 
 class Transform(NamedTuple):
+    """One stage-C transform (module docstring, C), the H terms of one scaled source and n."""
     source: tuple        # a scaled source, ((name, Fraction), ..)
     n: int
     orders: tuple        # the orders l of the H terms of this source and n, ascending
@@ -123,11 +124,12 @@ def _stage_c():
 
 
 STAGE_C = _stage_c()
+"""{(bias group, number of orders, needs the 13 units): (Transform, ..)}, the calls of stage C (``_stage_c``)."""
 MAX_ORDER = max([l for l, _ in STAGE_A] + [l for l, _ in UNITS_13_LN]
                 + [l for transforms in STAGE_C.values() for t in transforms for l in t.orders])
 """The highest order l of the kernels the stages use: stage A (its rows land on q_padded[l]), the 13 units of stage B
 (transformed back with u_m[l]) and the H terms of stage C (u_m_src[group, l]).  LPT._set_hankel builds the kernels of
-the orders 0 .. max(MAX_ORDER, lmax), lmax that of the final integral."""
+the orders 0 .. MAX_ORDER, and the final transform builds its own up to the lmax of the final integral."""
 TRANSFORM_FACTORS = {(t.source, t.n): t.factor for transforms in STAGE_C.values() for t in transforms}
 """{(scaled source, n): the factor of the transform's input}, the coefficient of its first H term."""
 CONSTANTS = tuple(dict.fromkeys((scaled(t.refs)[1], t.n) for terms in RECIPES.values() for t in terms
@@ -180,14 +182,16 @@ def _combination(source, arrays):
 
 
 def stage_b(model, xi_common, xi_own, pk_lin):
-    """``{unit: (n_padded,) array}`` of rows_sources.dat on the padded k grid (module docstring, B)."""
+    """``{unit: (n_padded,) array}`` of rows_sources.dat on the padded k grid (module docstring, B).  ``xi_common`` and
+    ``xi_own`` are the stage-A outputs of P ``(n_slots, n_padded)`` on the common q grid and on the own grid of each
+    order, ``pk_lin`` the spectrum on the core k grid."""
     hg, st = model._hankel, model._source_transform
     units = {}
     integrands = []
     for u in UNITS_22:
         terms = [_times(c, xi_common[model._xi_slot(l, UNITS[u][1])]**2) for l, c in UNITS[u][2]]
         integrands.append(sum(terms[1:], terms[0]))
-    res = fftlog.hankel(st.four_pi_q3_padded * (jnp.stack(integrands) * hg.w_xi), hg.q_pow[0], st.u_m[0], hg.k_pow,
+    res = fftlog.hankel(st.four_pi_q3_padded * (jnp.stack(integrands) * hg.w_xi), hg.q_pow[0], hg.u_m[0], hg.k_pow,
                         hg.npad, crop=False) * st.end_weights_Q
     units.update(zip(UNITS_22, res))
     ells = st.R_source_ells
@@ -262,7 +266,7 @@ def m0_residual(model, coef, ref, ctx):
     the end-weighted sum of the same samples."""
     hg, st = model._hankel, model._source_transform
     source = _times(coef, product(model, ctx.xi_padded['P'], ref))
-    direct = fftlog.hankel(st.four_pi_q3_padded * source * hg.w_xi, hg.q_pow[0], st.u_m[0], hg.k_pow, hg.npad,
+    direct = fftlog.hankel(st.four_pi_q3_padded * source * hg.w_xi, hg.q_pow[0], hg.u_m[0], hg.k_pow, hg.npad,
                            crop=True)
     return direct - 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
 
@@ -294,7 +298,8 @@ class _Context:
     """The stage outputs of one call and the rows evaluated so far (``row`` resolves references on demand)."""
 
     def __init__(self, model, spectra, xi_padded, xi_core, H, M):
-        self.model, self.spectra, self.xi_padded, self.xi_core, self.H, self.M = model, spectra, xi_padded, xi_core, H, M
+        self.model, self.spectra, self.xi_padded, self.xi_core = model, spectra, xi_padded, xi_core
+        self.H, self.M = H, M
         self.q = model._q
         self.values = {}
 
@@ -316,6 +321,8 @@ class _Context:
         return RULE_HOOKS[t.kind](self.model, c, ref, self, **({} if t.n is None else {'n': t.n}))
 
     def row(self, name):
+        """The row ``name``, evaluated once and kept in ``values``.  A q-space row is the sum of its groups
+        (``ROW_GROUPS``) on the core q grid, a k-space row the sum of its rule terms on the core k grid."""
         if name not in self.values:
             terms = RECIPES[name]
             total = None
@@ -338,7 +345,9 @@ class _Context:
 def pt_rows(model, pk_lin):
     """PTTerms.rows ``(n_rows, nfft)`` of the linear spectrum ``pk_lin`` on the core k grid (module docstring)."""
     hg = model._hankel
-    spectra = {'P': pk_lin, 'P_lt': pk_lin * jnp.exp(-(model._k / model.k_IR)**2)}
+    # k_IR None makes no IR split.  A^lin stays whole in the exponent, P_lt = P, and the GT rows vanish identically.
+    pk_lt = pk_lin if model.k_IR is None else pk_lin * jnp.exp(-(model._k / model.k_IR)**2)
+    spectra = {'P': pk_lin, 'P_lt': pk_lt}
     xi_padded, xi_own = model._get_xi_ln(jnp.stack([spectra[s] for s in SPECTRA], axis=0))
     padded = {s: xi_padded[i] for i, s in enumerate(SPECTRA)}
     core = {s: hg.grid.crop(xi_padded[i]) for i, s in enumerate(SPECTRA)}
@@ -346,6 +355,5 @@ def pt_rows(model, pk_lin):
     ctx = _Context(model, spectra, padded, core, stage_c(model, source_arrays),
                    constants(model, source_arrays, spectra))
     # One barrier per row materializes the rows once (module docstring).  Without them XLA repeats the row
-    # arithmetic and the resampling in the per-point fusions of the final integral at every (k, mu), and
-    # get_pk_ells takes 1.2x and its chi2 gradient 1.3x the time (lmax 5).
+    # arithmetic and the resampling in the per-point fusions of the final integral at every (k, mu).
     return jnp.stack([jax.lax.optimization_barrier(ctx.row(name)) for name in ROW_NAMES], axis=0)

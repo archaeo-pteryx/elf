@@ -30,12 +30,12 @@ class FFTlogSettings:
 
     Every Hankel transform of both backends has the kernel bias ``nu`` and lands on the
     low-ringing grid of (l, nu), that is, it uses the kernels ``HankelGrids.u_m[l]`` and the
-    grids ``HankelGrids.q_padded[l]``.  A factor k^{n+3} of the integrand is folded into the
-    input bias ``nu - n - 3``.  The exceptions, each commented where it happens, are the LPT
-    theta row and ``get_xi_ells`` (``nu_n0``, each on its own low-ringing grid of
-    (l, nu_n0)), the EPT n = -2 forward rows (``nu_n2``, on the (l, nu) grid) and the LPT
-    final q -> k transform (every order on the l = 0 phase).  The ``nu_matrix_*`` are biases
-    of the power-law decomposition of EPT ``method='matrix'``, not of a Hankel transform.
+    grids ``HankelGrids.q_padded[l]``.  The comments of the backends call this the bias rule.
+    A factor k^{n+3} of the integrand is folded into the input bias ``nu - n - 3``.  The
+    exceptions, each commented where it happens, are the LPT theta row and ``get_xi_ells``
+    (``nu_n0``, each on its own low-ringing grid of (l, nu_n0)) and the LPT final q -> k
+    transform (every order on the l = 0 phase).  The ``nu_matrix_*`` are biases of the
+    power-law decomposition of EPT ``method='matrix'``, not of a Hankel transform.
     """
 
     nu: float = 1.1
@@ -46,10 +46,6 @@ class FFTlogSettings:
     ``theta``) and of the P_ell -> xi_ell rows of ``get_xi_ells``, each on its own
     low-ringing grid of (l, nu_n0).  It suppresses the periodic image ``e^{-nu L}`` of the
     q -> 0 plateau of the l = 0 rows."""
-
-    nu_n2: float = 0.7
-    """EPT only, the kernel bias of the n = -2 forward rows xi_0^{-2}, xi_2^{-2}, on the
-    (l, nu) grid ``q_padded[l]``."""
 
     nu_matrix_matter: float = -0.3
     """EPT matrix: decomposition bias of the matter P22 and P13 blocks."""
@@ -200,14 +196,14 @@ class ForwardTransform(NamedTuple):
     """Kernels of the forward transforms ``H_l^n[f](q) = int dk k^{n+2} f(k) j_l(kq) / (2 pi^2)``.
 
     Built by :func:`forward_transform`, one row per (l, n).  The input is ``f / (2 pi^2)`` on the
-    padded k grid with its padding and end weights already applied.  Row i has the kernel bias
-    ``nu_kernel_i``, the input bias ``nu_kernel_i - n - 3`` (one rfft per row) and the
-    low-ringing phase of ``(l, FFTlogSettings.nu)``, so row (l, n) lands on ``HankelGrids.q_padded[l]``.
+    padded k grid with its padding and end weights already applied.  Every row has the kernel bias
+    ``FFTlogSettings.nu`` and the input bias ``nu - n - 3`` (one rfft per row), and row (l, n) lands
+    on the low-ringing grid of (l, nu), ``HankelGrids.q_padded[l]``.
     The power factors of the input and output grids are precomputed (:func:`hankel`).
     """
-    x_pow: jnp.ndarray              # (n_rows, n) k^-(nu_kernel_i - n - 3), the input power of row i
+    x_pow: jnp.ndarray              # (n_rows, n) k^-(nu - n - 3), the input power of row i
     u_m: jnp.ndarray                # (n_rows, n // 2 + 1) kernels
-    y_pow: jnp.ndarray              # (n_rows, n) q^{-nu_kernel_i}
+    y_pow: jnp.ndarray              # (n_rows, n) q^-nu
     q: jnp.ndarray                  # (n_rows, n) output grids
 
     def apply(self, fx_padded):
@@ -216,48 +212,46 @@ class ForwardTransform(NamedTuple):
         return hankel(fx_padded, self.x_pow, self.u_m, self.y_pow, 0, crop=False)
 
 
-def forward_transform(grid, nu, ells, ns, nu_kernel):
+def forward_transform(grid, nu, ells, ns):
     """:class:`ForwardTransform` of the rows ``(ells[i], ns[i])`` on the padded grid ``grid``.
 
-    ``nu`` is the bias whose low-ringing phase fixes the output grid of each row.  ``nu_kernel``
-    is the kernel bias, one float for all rows or one per row, and row i has the input bias
-    ``nu_kernel_i - ns[i] - 3`` (one rfft per row), whose power of ``grid.x`` is computed here.
+    ``nu`` is the kernel bias of every row and fixes its low-ringing output grid.  Row i has the input bias
+    ``nu - ns[i] - 3`` (one rfft per row), whose power of ``grid.x`` is computed here.
     """
     ells = [int(l) for l in np.asarray(ells)]
     ns = [int(n) for n in np.asarray(ns)]
-    nu_kernel = [float(v) for v in np.broadcast_to(np.asarray(nu_kernel, dtype=np.float64), (len(ells),))]
-    u_ms, y_pows, qs = [], [], []
-    for l, nu_k in zip(ells, nu_kernel):
-        lnxy, q_grid, _ = hankel_setup(l, nu, grid)
-        u_ms.append(hankel_setup(l, nu_k, grid, lnxy=lnxy)[2])
-        y_pows.append(q_grid.x ** (-nu_k))
-        qs.append(q_grid.x)
-    nu_in = (jnp.asarray(nu_kernel) - (jnp.asarray(ns) + 3).astype(jnp.float64))[:, None]
-    return ForwardTransform(grid.x ** (-nu_in), jnp.stack(u_ms, axis=0), jnp.stack(y_pows, axis=0),
-                            jnp.stack(qs, axis=0))
+    setups = [hankel_setup(l, nu, grid) for l in ells]             # (lnxy, output grid, kernel) per row
+    q = jnp.stack([q_grid.x for _, q_grid, _ in setups], axis=0)
+    nu_in = (nu - (jnp.asarray(ns) + 3).astype(jnp.float64))[:, None]
+    return ForwardTransform(grid.x ** (-nu_in), jnp.stack([u_m for _, _, u_m in setups], axis=0), q ** (-nu), q)
 
 
 INPUT_SUPPORT = {'zero-pad': 'core', 'power-law': 'full'}
 
 
-def trapezoid_weights(support, n_core, n_pad, dln):
+def trapezoid_weights(support, n_core, n_pad, dln, n_cut=None):
     """Static weights on the padded grid: 1 inside ``support``, 1/2 on its end nodes, 0 outside.
 
     ``support``: 'core', 'full', 'lower_and_core' (forward outputs: q -> 0 plateau
-    kept, upper band zeroed) or 'core_to_2kmax' (mode-coupling integrals).
+    kept, upper band zeroed) or 'core_to_2kmax' (mode-coupling integrals).  ``n_cut``
+    (a band limit of the input inside the core, see ``base.PowerSpectrum``'s ``k_cut``)
+    ends the k supports at the core node ``n_cut - 1`` instead of the band edge: 'core'
+    and 'full' at the cut node, 'core_to_2kmax' at twice its k (the mode-coupling
+    integrals of an input band-limited at k_cut vanish above 2 k_cut).
     """
     n_pad = int(n_pad)
     n_core = int(n_core)
     idx = np.arange(n_core + 2 * n_pad)
+    n_top = n_core if n_cut is None else int(n_cut)
     if support == 'core':
-        on = (idx >= n_pad) & (idx < n_pad + n_core)
+        on = (idx >= n_pad) & (idx < n_pad + n_top)
     elif support == 'full':
-        on = idx >= 0
+        on = idx < n_pad + n_top if n_cut is not None else idx >= 0
     elif support == 'lower_and_core':
         on = idx < n_pad + n_core
     elif support == 'core_to_2kmax':
         n2 = int(round(np.log(2.0) / float(dln)))
-        on = (idx >= n_pad) & (idx < n_pad + n_core + n2)
+        on = (idx >= n_pad) & (idx < n_pad + n_top + n2)
     else:
         raise ValueError(f"unknown support: {support!r}")
     w = on.astype(np.float64)
@@ -272,11 +266,12 @@ class HankelGrids:
 
     ``u_m[l]`` maps ``k_padded`` onto ``q_padded[l]`` and back; ``w_input``/``w_xi`` are
     the end weights of the input model and of a forward output, ``mask_xi`` its support.
+    ``n_cut`` ends the input support at the core node ``n_cut - 1`` (``k_cut``).
     ``k_pow = k_padded^-nu`` ``(n,)`` and ``q_pow = q_padded^-nu`` ``(lmax + 1, n)`` are the power
     factors of the transforms with the kernel bias nu (:func:`hankel`).
     """
 
-    def __init__(self, k, settings, pad_mode, lmax):
+    def __init__(self, k, settings, pad_mode, lmax, n_cut=None):
         self.pad_mode = pad_mode
         self.npad = max(1, int(settings.npad_factor * k.shape[0]))
         self.grid = LogGrid.from_core(k, self.npad)
@@ -289,7 +284,7 @@ class HankelGrids:
         self.k_pow = self.k_padded ** (-settings.nu)
         self.q_pow = self.q_padded ** (-settings.nu)
         n_core, dln = self.grid.n_core, self.grid.dln
-        self.w_input = trapezoid_weights(INPUT_SUPPORT[pad_mode], n_core, self.npad, dln)
+        self.w_input = trapezoid_weights(INPUT_SUPPORT[pad_mode], n_core, self.npad, dln, n_cut)
         self.w_xi = trapezoid_weights('lower_and_core', n_core, self.npad, dln)
         self.mask_xi = jnp.where(self.w_xi > 0, 1.0, 0.0)
 

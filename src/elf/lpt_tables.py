@@ -1,4 +1,4 @@
-"""The LPT tables ``tables/lpt/*.dat`` (generated offline by tools/pt_autogen), loaded and checked, with their evaluators.
+"""The LPT tables ``tables/lpt/*.dat`` (generated offline by tools/pt_autogen), loaded, with their evaluators.
 
 The tables and what this module makes of them follow.  The module needs numpy and the shared reader ``table_text``
 only, so that the generator can load a copy of the two next to tables under test, and its evaluators use jax.numpy
@@ -13,25 +13,18 @@ when given JAX arrays.
 * ``components.dat``    :class:`Template`, :class:`LinearKind` and :class:`Component`, ``_COMPONENTS``, the template
   matrix ``_TEMPLATE_MATRIX`` (templates x components), ``_LINEAR_MATRIX`` (components x linear kinds) and the bias
   exponents of the templates ``_LPT_BIAS_DEGREES``.
-* ``basis_rows.dat``, ``component_entries.dat``  the component table c_j^c(q) = sum over the entries e = (c, j, t) of
-  s_e R_t(q) (``CT_ROWS``, ``CT_ENTRY_NAMES``, ``CT_MONO_EXP``, ``CT_MONO_COEF``, ``COMPONENT_ENTRIES``), evaluated by
-  ``row_basis`` (R_t) and ``entry_scalars`` (s_e).
-* ``moments.dat``       the moments in the order of utils_lpt.get_lpt_moments (``MOMENTS``) and their angular
-  polynomials (``MOMENT_POLYNOMIALS``).
-* ``psi_terms.dat``, ``scalar_layer.dat``  the psi family of the moments, evaluated by ``psi_family``.
+* ``basis_rows.dat``, ``component_entries.dat``  the component table (the prefix CT of the names, not a counterterm)
+  c_j^c(q) = sum over the entries e = (c, j, t) of s_e R_t(q) (``CT_ROWS``, ``CT_ENTRY_NAMES``, ``CT_MONO_EXP``,
+  ``CT_MONO_COEF``, ``COMPONENT_ENTRIES``), evaluated by ``row_basis`` (R_t) and ``entry_scalars`` (s_e).
+* ``moments.dat``       the moments of the final integral (``MOMENTS``) and their angular polynomials
+  (``MOMENT_POLYNOMIALS``), whose angular factors ``angular.AngularPlan`` builds from ``angular.dat`` (read by
+  ``angular``).
 
 The tables are generated and byte-checked by ``python -m pt_autogen check``, so the import does not re-verify their
 structure.  A repeated key raises ValueError naming the file and the lines where a duplicate would be summed silently
-(psi_terms.dat, scalar_layer.dat, component_entries.dat, rows_sources.dat, rows_recipes.dat), an undefined name is left
-to the KeyError or IndexError of its lookup.  The rows of basis_rows.dat are placed by their ids, ``row_basis``
-multiplies all the factors of a basis row.
-
-``psi_family(A, C, B, ir, coeffs, need) -> {(name, deriv): {(j, basis name, shift): value}}``: ``coeffs`` maps the names
-of COEFFS to (N_K,) vectors, K and K^x = scalar_dmonomials(c, s, A_mu, B_mu, x) @ SCALAR_MATRIX; ``need`` is a set of
-(name, deriv).  'psi': sum_t Kv[t] m_t (the terms without K for 'K' only; terms with K^x[t] identically 0 skipped);
-'dA', 'dB', 'dC' (name 'K'): the total derivatives at fixed B (resp. A, C), with d ir/dA = -A ir^3 (C likewise):
-    d(A^a C^c B^b ir^i)/dA = a A^(a-1) C^c B^b ir^i - i A^(a+1) C^c B^b ir^(i+2),   d(..)/dB = b A^a C^c B^(b-1) ir^i.
-Exact zeros are omitted, a constant value is a Python float; only + - * (JAX, numpy float64 / longdouble / object).
+(component_entries.dat, rows_sources.dat, rows_recipes.dat), an undefined name is left to the KeyError or IndexError of
+its lookup.  The rows of basis_rows.dat are placed by their ids, ``row_basis`` multiplies all the factors of a basis
+row.
 """
 import os
 from enum import IntEnum
@@ -64,36 +57,21 @@ def _enum(name, names, doc):
 
 _MOMENT_LINES = _records('moments.dat')
 MOMENTS = tuple(dict.fromkeys(m for m, *_ in _MOMENT_LINES))
-"""The moments in the order of utils_lpt.get_lpt_moments, MQa NQb = (Khat.qhat)^a (n.qhat)^b."""
+"""The moments in table order (the moment index j).  A name gives the powers of Khat.qhat (MQ) and of n.qhat (NQ), so
+MQ2NQ1 is (Khat.qhat)^2 (n.qhat), and MQ0 is 1."""
 MOMENT_POLYNOMIALS = {m: tuple((int(c), *map(int, e)) for mm, c, *e in _MOMENT_LINES if mm == m) for m in MOMENTS}
 """{moment: ((coef, pAm, pBm, a, b, by), ..)}, the terms coef A_mu^pAm B_mu^pBm mu_K^a mu_x^b mu_y^by (moments.dat)."""
-
-# ---------------------------------------------------------------------------------------------------------------
-# psi_terms.dat and scalar_layer.dat
-
-_TERMS = [(m, b, int(s), int(t), tuple(map(int, e)), float(v)) for m, b, s, t, *e, v in _records(
-    'psi_terms.dat', lambda r: (r[0], r[1], int(r[2]), int(r[3]), tuple(map(int, r[4:-1]))))]   # key (j, b, s, t, e)
-BASIS = tuple(dict.fromkeys(b for _, b, *_ in _TERMS))
-_KEYS = list(dict.fromkeys((MOMENTS.index(m), b, s) for m, b, s, *_ in _TERMS))   # the psi entries (j, basis, shift)
-PAIRS_OF = {j: tuple((b, s) for jj, b, s in _KEYS if jj == j) for j in range(len(MOMENTS))}
-PAIRS = tuple(sorted({p for ps in PAIRS_OF.values() for p in ps}, key=lambda p: (p[1], BASIS.index(p[0]))))
-_SCALAR = [(int(t), tuple(map(int, e)), float(v)) for t, *e, v in _records(
-    'scalar_layer.dat', lambda r: (int(r[0]), tuple(map(int, r[1:-1]))))]                   # key (t, exponents)
-# (a, b, e, g) of c^a s^b A_mu^e B_mu^g in the generator's order (degree, then decreasing exponents)
-SCALAR_MONOMIALS = tuple(sorted({e for _, e, _ in _SCALAR}, key=lambda e: (sum(e), tuple(-x for x in e))))
-N_K = 1 + max(t for t, _, _ in _SCALAR)
-_S = {(e, t): v for t, e, v in _SCALAR}
-SCALAR_MATRIX = np.array([[_S.get((e, t), 0.0) for t in range(N_K)] for e in SCALAR_MONOMIALS])   # K = mono @ this
-COEFFS = {'K': None, 'Kc': 'c', 'Ks': 's', 'KAm': 'Am', 'KBm': 'Bm'}   # name -> the variable x of K^x
-_X = {'c': 0, 's': 1, 'Am': 2, 'Bm': 3}                               # positions in (a, b, e, g)
 
 # ---------------------------------------------------------------------------------------------------------------
 # rows_recipes.dat, rows_sources.dat and rows_rules.dat
 
 
 class Term(NamedTuple):
-    """A term of a recipe (rows_recipes.dat): ``kind``, the ints l, n, qpow (None where the kind has none), and
-    ``refs``, ((coef, ref), ..) with one line per source of an H or M term and one line otherwise (coef a Fraction)."""
+    """A term of a recipe (rows_recipes.dat).  ``kind`` is 'xi' (a stage-A output xi_l^n of the spectrum ref), 'H' (a
+    stage-C transform H_l^n of a combination of sources), 'M' (a zero-lag constant M_n of a combination of sources or
+    of a spectrum), 'prod' (a product of stage-A outputs), 'row' (another row) or the name of a rule of rows_rules.dat
+    (a k-space row).  l, n and qpow are ints (None where the kind has none), and ``refs`` is ((coef, ref), ..) with one
+    line per source of an H or M term and one line otherwise (coef a Fraction)."""
     kind: str
     l: object
     n: object
@@ -123,8 +101,8 @@ _RECIPE_LINES = _records('rows_recipes.dat', lambda r: (r[0], int(r[1]), r[7])) 
 ROW_NAMES = tuple(dict.fromkeys(r[0] for r in _RECIPE_LINES))
 Row = _enum('Row', ROW_NAMES, """Rows of ``PTTerms.rows`` (tables/lpt/rows_recipes.dat, in its order).
 
-    The rows of ``TREE_ROWS`` and the one-loop rows live on the core q grid, the k-space rows (``K_ROWS``, made by the
-    rules of rows_rules.dat) on the core k grid.  lpt.PTTerms lists their definitions.""")
+    The rows of ``TREE_ROWS`` and the one-loop rows live on the core q grid, the k-space rows (made by the rules of
+    rows_rules.dat) on the core k grid.  lpt.PTTerms lists their definitions.""")
 RECIPES = _recipes(_RECIPE_LINES)
 """{row name: (Term, ..)}, the recipes of rows_recipes.dat."""
 
@@ -165,14 +143,8 @@ def _rule_records():
 RULES, _KSPACE_RECORDS = _rule_records()
 """RULES = {rule: (applies to, runtime action)} of rows_rules.dat."""
 
-RECIPE_KINDS = ('xi', 'H', 'M', 'prod', 'row')
-"""The kinds of the q-space terms, the k-space rows use the rules of RULES."""
 SPECTRA = ('P', 'P_lt')
 """The linear spectra of the xi and M terms, P_lin and P_lin exp(-(k/k_IR)^2)."""
-
-
-K_ROWS = tuple(row for row in ROW_NAMES if all(t.kind in RULES for t in RECIPES[row]))
-"""The k-space rows (made by a rule of rows_rules.dat), after the q-space rows."""
 
 
 def _linear(row, seen=()):
@@ -219,7 +191,7 @@ _LPT_BIAS_DEGREES = np.array([[int(e) for e in r[1:]] for r in _TEMPLATE_RECORDS
 # k-space rows of pt_terms added after the final transform (constants are read at k_min).  Columns: 'component' is the
 # component whose weight W[:, component] multiplies the row, 'row' the row of pt_terms.rows, 'factor' a fixed
 # multiplier.  'interpolated' rows are Hermite-interpolated in ln k at the true k, the others are constants.
-# 'k0_const' rows are skipped when subtract_k0_const=True.  Used by LPT._final_integral and lpt_rule.small_terms.
+# 'k0_const' rows are skipped when subtract_k0_const=True.  Used by LPT._kspace_tables and LPT._kspace_terms.
 _KSPACE_ROWS = tuple((Component[c], Row[row], float(_fraction(factor)), interp == 'yes', k0 == 'yes')
                      for row, c, factor, interp, k0 in _KSPACE_RECORDS)
 
@@ -252,100 +224,10 @@ COMPONENT_ENTRIES = tuple(tuple((MOMENTS.index(m), e, t) for e, (cc, m, t) in en
 # ---------------------------------------------------------------------------------------------------------------
 # evaluators
 
-def _dmono(e, deriv):
-    """``[(factor, exponents)]`` of d m_e / d deriv by the rule of the docstring (``m_e`` itself for 'psi')."""
-    if deriv == 'psi':
-        return [(1, e)]
-    v = {'dA': 0, 'dC': 1, 'dB': 2}[deriv]                # the ir^i factor (dA, dC): - i A^(a+1) .. ir^(i+2)
-    out = [(e[v], e[:v] + (e[v] - 1,) + e[v + 1:])] if e[v] else []
-    return out + ([(-e[3], e[:v] + (e[v] + 1,) + e[v + 1:3] + (e[3] + 2,))] if deriv != 'dB' and e[3] else [])
-
-
-def _plan(name, deriv):
-    """``[(key, [(coefficient, t, exponents)], constant)]`` of psi[name]_deriv: the terms in table order, the terms
-    without K and monomial (pure constants) summed into one float added last."""
-    x = COEFFS[name]
-    live = [x is None or any(SCALAR_MONOMIALS[n][_X[x]] for n in np.flatnonzero(SCALAR_MATRIX[:, t]))
-            for t in range(N_K)]
-    terms = {}
-    for m, b, s, t, e, v in _TERMS:
-        if x is None or (t >= 0 and live[t]):
-            for f, e2 in _dmono(e, deriv):
-                terms.setdefault((MOMENTS.index(m), b, s), []).append((v * f, t, e2))
-    plan = [(key, [(c, t, e) for c, t, e in terms.get(key, []) if t >= 0 or any(e)],
-             float(sum(c for c, t, e in terms.get(key, []) if t < 0 and not any(e)))) for key in _KEYS]
-    return [(key, pieces, const) for key, pieces, const in plan if pieces or const != 0.0]
-
-
-_PLANS = {nd: _plan(*nd) for nd in [(n, 'psi') for n in COEFFS] + [('K', d) for d in ('dA', 'dB', 'dC')]}
-
-
-def _power(pows, n):
-    """``x^n`` of the list ``[1.0, x, x*x, ...]``, extended by repeated multiplication (each power once)."""
-    while len(pows) <= n:
-        pows.append(pows[-1] * pows[1])
-    return pows[n]
-
-
-def _monomial(e, pows, cache):
-    """A^a C^c B^b ir^i (``e`` = (a, c, b, i), not all 0) as the left-to-right product of the powers; every distinct
-    monomial (and leading partial product) is built once per call."""
-    if e not in cache:
-        v = max(n for n in range(4) if e[n])
-        head, last = e[:v] + (0,) * (4 - v), _power(pows[v], e[v])
-        cache[e] = _monomial(head, pows, cache) * last if any(head) else last
-    return cache[e]
-
-
-def psi_family(A, C, B, ir, coeffs, need):
-    """``{(name, deriv): {(j, basis, shift): value}}`` for the (name, deriv) of ``need`` (see the module docstring)."""
-    pows, cache, out = ([1.0, A], [1.0, C], [1.0, B], [1.0, ir]), {}, {}
-    for name, deriv in sorted(frozenset(need)):
-        Kv, res = coeffs[name], {}
-        for key, pieces, const in _PLANS[(name, deriv)]:
-            acc = None
-            for c, t, e in pieces:
-                a = abs(c)
-                if t >= 0:                                    # (a Kv[t]) m, the factor folded in first
-                    val = Kv[t] if a == 1.0 else a * Kv[t]
-                    val = val * _monomial(e, pows, cache) if any(e) else val
-                else:
-                    val = _monomial(e, pows, cache) if a == 1.0 else a * _monomial(e, pows, cache)
-                acc = (-val if c < 0 else val) if acc is None else (acc - val if c < 0 else acc + val)
-            res[key] = const if acc is None else (acc + const if const != 0.0 else acc)
-        out[(name, deriv)] = res
-    return out
-
-
 def _xp(*xs):
     """jax.numpy if an argument is a JAX array or tracer, otherwise numpy."""
     import jax.numpy as jnp
     return jnp if any(type(x).__module__.split('.')[0] in ('jax', 'jaxlib') for x in xs) else np
-
-
-def _scalar_product(pows, e, one, factor=1.0):
-    """``factor`` times the powers of ``e`` = (c, s, A_mu, B_mu) exponents, left to right (``one``: empty product)."""
-    acc = None if factor == 1.0 else factor
-    for v, n in enumerate(e):
-        if n:
-            acc = _power(pows[v], n) if acc is None else acc * _power(pows[v], n)
-    return one if acc is None else (acc * one if isinstance(acc, float) else acc)
-
-
-def scalar_monomials(c, s, A_mu, B_mu):
-    """The (N_MONO,) stack of the monomials c^a s^b A_mu^e B_mu^g of SCALAR_MONOMIALS."""
-    xp = _xp(c, s, A_mu, B_mu)
-    pows, one = ([1.0, c], [1.0, s], [1.0, A_mu], [1.0, B_mu]), xp.ones_like(c)
-    return xp.stack([_scalar_product(pows, e, one) for e in SCALAR_MONOMIALS])
-
-
-def scalar_dmonomials(c, s, A_mu, B_mu, x):
-    """d scalar_monomials / dx for x in ('c', 's', 'Am', 'Bm') (the four are independent), (N_MONO,); exact zeros
-    where the exponent of x is 0."""
-    xp = _xp(c, s, A_mu, B_mu)
-    pows, v, zero, one = ([1.0, c], [1.0, s], [1.0, A_mu], [1.0, B_mu]), _X[x], xp.zeros_like(c), xp.ones_like(c)
-    return xp.stack([zero if e[v] == 0 else _scalar_product(pows, e[:v] + (e[v] - 1,) + e[v + 1:], one, float(e[v]))
-                     for e in SCALAR_MONOMIALS])
 
 
 def row_basis(rows):

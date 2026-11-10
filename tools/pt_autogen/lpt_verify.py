@@ -14,6 +14,8 @@ reports them, and the tests (tools/pt_autogen/tests/test_lpt_*.py) assert them.
   the finite-range kernels, the ladder), the product forms and the preferred route against the hand code, the stage-A
   list and the rules of the k-space rows.
 * ``moments_declaration``: the declared angular polynomials against MQ^a NQ^b with the declared line of sight.
+* ``angular``: the Legendre table angular.dat (:mod:`pt_autogen.lpt_legendre`, read back from the written file) against
+  the addition theorem behind it, its band, a direct angular quadrature of its coefficients and the plane-wave series.
 """
 import random
 
@@ -24,6 +26,7 @@ from . import lpt_components as co
 from . import lpt_cumulant as cu
 from . import lpt_identities as idn
 from . import lpt_kernels as kn
+from . import lpt_legendre as lg
 from . import lpt_model as model
 from . import lpt_reduce as rr
 from . import lpt_rows as rc
@@ -397,3 +400,20 @@ def moments_declaration():
         return len(model.DENSITY_MOMENTS)
 
     return _run(dict(density_moments_are_MQa_NQb=check))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# the Legendre table of the angular integrals
+
+def angular(table):
+    """The table ``table`` of angular.dat ({(a, b, r): {(L, i): Fraction}}) checked by :mod:`pt_autogen.lpt_legendre`,
+    the addition theorem for the declared (a, b) and L <= 8 (the number of (a, b, L) checked), the band (the number of
+    entries), the direct quadrature of C_L for L <= 8 at QUADRATURE_POINTS and the plane-wave series for L <= 24 at
+    SERIES_POINTS (their worst relative errors, two digits)."""
+    decl = model.DENSITY_MOMENTS
+    pairs = sorted({(a, b) for a, b, _ in lg.types_of(decl)})
+    return _run(dict(
+        addition_theorem_points=lambda: sum(lg.check_addition_theorem(a, b) for a, b in pairs),
+        band=lambda: lg.check_band(table),
+        quadrature_max_rel=lambda: float('%.1e' % lg.check_against_quadrature(decl, lg.QUADRATURE_POINTS, table)),
+        series_max_rel=lambda: float('%.1e' % lg.check_series(decl, lg.SERIES_POINTS, table))))

@@ -6,8 +6,7 @@ The chain derives, from these declarations only (as :mod:`pt_autogen.model` is f
   (:mod:`pt_autogen.lpt_cumulant`, :mod:`pt_autogen.lpt_tensors`, :mod:`pt_autogen.lpt_components`),
 * the recipes of the correlator rows of q and the rules of their discretisation (:mod:`pt_autogen.lpt_wick`,
   :mod:`pt_autogen.lpt_reduce`, :mod:`pt_autogen.lpt_identities`, :mod:`pt_autogen.lpt_rows`),
-* the angular moments M_j(l) of the final integral (:mod:`pt_autogen.lpt_angular`) and their factored psi tables
-  (:mod:`pt_autogen.lpt_moments`).
+* the Legendre table of the angular integrals of the moments of the final integral (:mod:`pt_autogen.lpt_legendre`).
 
 Every declaration below carries the reason it is declared rather than derived.  The sections are the fields and
 operators, the dynamics, the bias expansion and its renormalisation, the redshift-space sources and the frame, the
@@ -305,18 +304,14 @@ DENSITY_MOMENTS = {
     'MQ2NQ1': ((A_mu, 3, 0, 0), (-B_mu, 2, 1, 0)),
 }
 """The nine moments MQa NQb = (Khat.qhat)^a (n.qhat)^b of the density as angular polynomials, terms (coefficient, a,
-b, b_y) of coefficient mu_K^a mu_x^b mu_y^b_y, in the order of utils_lpt.get_lpt_moments.  Declared because the
+b, b_y) of coefficient mu_K^a mu_x^b mu_y^b_y, in the order of the runtime's moment index.  Declared because the
 observable fixes which moments the final integral needs (the derived component table uses exactly these (a, b))."""
 
 MOMENT_PHASE = """A moment of total degree n is reported real, M = (-i)^(n mod 2) <polynomial e^{i k.q} e^{B mu_K^2}>, so
 a term c (Khat.qhat)^a (n.qhat)^b of the integrand enters the component table with c i^{(a+b) mod 2}."""
-"""The phase convention shared by the moments (lpt_angular) and the component table (lpt_components).  Declared
-because it is the convention of utils_lpt.get_lpt_moments (mq1 = -G10, mq2 = -G20, mq3 = G30, mq4 = G40)."""
-
-LEGACY_PARITY_A = True
-"""Write the parity factor c of dG/dA as A ir (2 A ir^2 (...)), as utils_lpt does, instead of c ir.  Declared because
-the representation of the moments in the psi tables is a choice (the value is the same) and this one keeps the tables
-the runtime was verified with byte for byte."""
+"""The phase convention shared by the Legendre table of the angular integrals (lpt_legendre, angular.dat) and the
+component table (lpt_components).  Declared because a phase is a convention.  With this one the moments and the
+coefficients of the component table are real."""
 
 # ---------------------------------------------------------------------------------------------------------------
 # the row recipes, their sources, preferences of representation and discretisation rules
@@ -352,7 +347,7 @@ PREFERENCES = {
         'rows': {'Y_LIN': ('xi', 2, -2), 'Y_LIN_LT': ('xi', 2, -2), 'T': ('H', 3, -3), 'V1': ('H', 1, -3),
                  'V3': ('H', 1, -3)},
         'reason': 'a lower n weights the low-k end of the source more strongly, where the source is cut, and the '
-                  'error dominates at small q (10 to 3000 times smaller with the pair, experiments/lpt_rows_20261017)',
+                  'error dominates at small q (10 to 3000 times smaller with the pair)',
     },
     'product_route': {
         'rule': 'evaluate a separable 22 term as its q-space product of xi_l^n (no stage B or C)',
@@ -366,7 +361,7 @@ PREFERENCES = {
     },
 }
 """The representation preferences of class (c), identities that the generator proves but cannot choose between.
-Declared because the choice is one of discretisation accuracy (verified numerically by the L2 prototype)."""
+Declared because the choice is one of discretisation accuracy (verified numerically)."""
 
 PRODUCT_VARIABLES = ('xi_1^-1', 'xi_3^-1')
 """A q-space product form of the xi_2^-2 family is written in (xi_1^-1, xi_3^-1), phi = xi_2^-2 = q (xi_1^-1 +
@@ -444,14 +439,15 @@ KSPACE_ROWS = (
 )
 """The names of the k-space rows, the function each rule acts on and how the final integral reads them.  Declared
 because the names and the layout are the API (rows 28 .. 32), the attachment to the components is derived.  The two
-outside_core rows are constants in k but read as interpolated rows, as the runtime was verified with."""
+outside_core rows are constants in k that the final integral reads as interpolated rows."""
 
 # ---------------------------------------------------------------------------------------------------------------
 # conventions of the tables
 
 FACTOR_VARIABLES = ('k', 'mu', 'f', 'Kfac', 'K', 'Ksq')
 """The variables of the per-point factors s_e of component_entries.dat (K = k Kfac, Ksq = K^2).  Declared because
-they are the arguments of the runtime's lpt_rule.fold_weights."""
+they are the variables of the runtime's lpt_tables.entry_scalars, whose arguments are (k, mu, f, Kfac) and which forms
+K and Ksq from them."""
 
 SCALAR_FORM = 'elf'
 """How a per-point factor (a polynomial in k, mu, f, Kfac) is written in FACTOR_VARIABLES.  'elf' writes every
@@ -463,11 +459,8 @@ ENTRY_ORDER = """component_entries.dat lists the components in COMPONENT_NAMES o
 a component the moments by total degree a + b and then by b, within a moment the basis rows in descending lex order of
 their exponents over ROW_ORDER, within an entry the monomials in increasing exponent order.  basis_rows.dat lists the
 constant row, the single rows in ROW_ORDER and then the products."""
-"""Declared because the order is the summation order of the runtime (forward and tangent rule)."""
-
-HORNER_BASIS = ('S0', 'T1', 'T2', 'T3', 'T4')
-"""The basis of the moments M_j(l) in l, S0 = V[0] and T_d = S_d / s^2 of utils_lpt.lpt_horner_poly.  Declared
-because it is the basis the runtime evaluates (pure A derivatives are written in S, the others in T)."""
+"""Declared because the order is a representation (the runtime's static entry index follows it, the order of the
+scatter-add sums of lpt_rule.fold_weights) and this one keeps component_entries.dat byte for byte."""
 
 
 def moment_name(a, b):

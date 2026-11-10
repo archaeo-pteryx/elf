@@ -13,10 +13,8 @@ class _RSDGeometry(NamedTuple):
     Kfac: jnp.ndarray               # |K| / k
     c: jnp.ndarray                  # cosine of the angle between K and k
     s: jnp.ndarray                  # sine of that angle
-    c2: jnp.ndarray                 # c^2
-    s2: jnp.ndarray                 # s^2
-    A_mu: jnp.ndarray               # (1 + f) mu / Kfac, the line of sight along K
-    B_mu: jnp.ndarray               # sqrt(1 - mu^2) / Kfac, the line of sight across K
+    A_mu: jnp.ndarray               # n.Khat = (1 + f) mu / Kfac, the line of sight n along K
+    B_mu: jnp.ndarray               # -n.e_x = sqrt(1 - mu^2) / Kfac, with e_x = (khat - c Khat) / s across K
 
 
 def _rsd_geometry(f, mu, sin_mu):
@@ -24,5 +22,4 @@ def _rsd_geometry(f, mu, sin_mu):
     Kfac = jnp.sqrt(1 + f * (2 + f) * mu**2)
     c = (1 + f * mu**2) / Kfac
     s = f * mu * sin_mu / Kfac
-    return _RSDGeometry(Kfac=Kfac, c=c, s=s, c2=c**2, s2=s**2,
-                        A_mu=(1 + f) * mu / Kfac, B_mu=sin_mu / Kfac)
+    return _RSDGeometry(Kfac=Kfac, c=c, s=s, A_mu=(1 + f) * mu / Kfac, B_mu=sin_mu / Kfac)

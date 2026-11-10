@@ -42,6 +42,7 @@ class PowerSpectrum(ABC):
                  r_bao=110.0,
                  lambda_ir=0.2,
                  subtract_k0_const=False,
+                 k_cut=None,
                  ):
         """Options shared by the EPT and LPT backends.
 
@@ -60,6 +61,24 @@ class PowerSpectrum(ABC):
             integral of the BAO damping.  ``lambda_ir`` is not LPT's ``k_IR``, the
             split ``P_lt = P e^{-(k/k_IR)^2}`` inside the LPT body.
         subtract_k0_const: drop the k -> 0 constant of the b2^2 term.
+        k_cut [h/Mpc]: a sharp band limit of the linear input, ``kmin_fft < k_cut <= kmax_fft``
+            (None: no cut).  P_lin is zero above ``k_cut`` everywhere it enters: the FFTlog input on
+            the core and padded grid, the grid moments (tree and b2^2 constants), and P_lin and
+            P_nw at the true k (tree level, counterterm base, the EPT P13 external P, the LPT
+            linear add-back).  It is the zero-pad band-limited model with the band edge inside the
+            grid: the cut node carries the trapezoid end weight 1/2 (as a weight, so that P^2 gets
+            it once) and its value stays P(k_cut).  P at the true k is kept up to this node.  The
+            cut is placed on a core node by adjusting the spacing: ``J = round(ln(k_cut /
+            kmin_fft) / dlnk)`` with ``dlnk = ln(kmax_fft / kmin_fft) / (nfft - 1)`` the spacing
+            of the requested grid, ``dlnk' = ln(k_cut / kmin_fft) / J``, the grid ``kmin_fft
+            e^{j dlnk'}``; the upper end of the grid moves with the spacing, by at most
+            ``(nfft - 1) / (2 J)`` spacings, and is the attribute ``kmax_fft`` (``k_cut`` is stored
+            too).  The FFTlog grids still run to ``kmax_fft``, so the q grid keeps its q_min ~
+            1 / kmax_fft.  The no-wiggle split is made from the uncut table (the DST needs P > 0)
+            and P_nw is cut like P, so the wiggle part vanishes above ``k_cut`` too.  Sigma^2 and
+            dSigma^2 are those of the uncut P_nw, whose integral stops at ``lambda_ir``, so
+            ``k_cut >= lambda_ir`` is required with the 'linear_ir_resum' counterterm base and with
+            the EPT IR resummation.
         """
         if nfft % 2:
             raise ValueError(
@@ -82,10 +101,26 @@ class PowerSpectrum(ABC):
         self.ells = tuple(int(ell) for ell in ells)
 
         self._kmin = kmin_fft
-        self._kmax = kmax_fft
         self._nfft = nfft
         self.fftlog_settings = fftlog.FFTlogSettings() if fftlog_settings is None else fftlog_settings
         self.pad_mode = pad_mode
+        self.k_cut = k_cut
+        self._n_cut = None              # number of core nodes up to the cut node (None: no cut)
+        self._cut_mask = None           # (nfft,) 1 up to the cut node, 0 above
+        if k_cut is not None:
+            if not kmin_fft < k_cut <= kmax_fft:
+                raise ValueError("k_cut must satisfy kmin_fft < k_cut <= kmax_fft")
+            if counterterm_base == 'linear_ir_resum' and k_cut < lambda_ir:
+                raise ValueError("k_cut must be >= lambda_ir: Sigma^2 is that of the uncut no-wiggle table")
+            # the cut on core node J: the spacing adjusted, the upper end of the grid moves with it
+            ln_cut = np.log(k_cut / kmin_fft)
+            J = int(round(ln_cut / (np.log(kmax_fft / kmin_fft) / (nfft - 1))))
+            J = min(max(J, 1), nfft - 1)
+            kmax_fft = k_cut if J == nfft - 1 else float(kmin_fft * np.exp(ln_cut * (nfft - 1) / J))
+            self._n_cut = J + 1
+            self._cut_mask = jnp.asarray((np.arange(nfft) <= J).astype(np.float64))
+        self._kmax = kmax_fft
+        self.kmax_fft = kmax_fft
         self._k = jnp.geomspace(kmin_fft, kmax_fft, nfft)
         self._logk_fft = jnp.log(self._k)
 
@@ -128,6 +163,16 @@ class PowerSpectrum(ABC):
         """The prepared table ``table`` (:meth:`_prepare`) at ``k``."""
         return eval_pk(table, k)
 
+    def _pk_core(self, table):
+        """The prepared table at the core k nodes, zero above the cut node (``k_cut``)."""
+        pk = self._pk_eval(table, self._k)
+        return pk if self._cut_mask is None else pk * self._cut_mask
+
+    def _pk_true(self, table, k):
+        """The prepared table at the true ``k``, zero above the cut node (``k_cut``)."""
+        pk = self._pk_eval(table, k)
+        return pk if self._n_cut is None else jnp.where(k <= self._k[self._n_cut - 1], pk, 0.0)
+
     @staticmethod
     def _true_coordinates(k, mu, alpha_perp, alpha_para):
         """AP map: ``(k_true (nk, nmu), |mu_true|, sin_true)`` (the spectra are even in mu)."""
@@ -144,12 +189,12 @@ class PowerSpectrum(ABC):
         """``(pk, pk_nw, pk_w, damp_exponent)`` at ``k_true`` (the last three None without no-wiggle data).
 
         ``table`` is the prepared input (:meth:`_prepare`).  ``damp_exponent`` is ``k^2 Sigma^2_s`` of
-        :func:`ir_resum.damping_exponent`.
+        :func:`ir_resum.damping_exponent`.  P and P_nw are zero above ``k_cut``.
         """
-        pk = self._pk_eval(table, k_true)
+        pk = self._pk_true(table, k_true)
         if pt_terms.pk_nw_data is None:
             return pk, None, None, None
-        pk_nw = self._pk_eval(self._prepare(pt_terms.pk_nw_data), k_true)
+        pk_nw = self._pk_true(self._prepare(pt_terms.pk_nw_data), k_true)
         mu = jnp.broadcast_to(mu_true, k_true.shape)
         damp_exponent = ir_resum.damping_exponent(k_true, mu, f, pt_terms.Sigma2, pt_terms.dSigma2)
         return pk, pk_nw, pk - pk_nw, damp_exponent
@@ -158,7 +203,8 @@ class PowerSpectrum(ABC):
         """Kernels ``_xi_ells_u_m`` ``(nells, n // 2 + 1)`` and output grids ``_xi_ells_r`` ``(nells, n)`` of the
         P_ell -> xi_ell transforms, each order ell on its own low-ringing grid of (ell, nu_n0), and their power
         factors (``fftlog.hankel``), ``_xi_ells_k_pow = k_padded^(3 - nu_n0)`` ``(n,)`` (the k^3 of the integrand
-        folded in) and ``_xi_ells_r_pow = _xi_ells_r^-nu_n0`` ``(nells, n)``."""
+        folded in) and ``_xi_ells_r_pow = _xi_ells_r^-nu_n0`` ``(nells, n)``.  The backend calls it after it has built
+        ``self._hankel``."""
         # an exception to the bias rule, the kernel bias nu_n0 against the periodic image of the xi_0 plateau
         nu_n0 = self.fftlog_settings.nu_n0
         setups = [fftlog.hankel_setup(ell, nu_n0, self._hankel.grid) for ell in self.ells]
@@ -216,10 +262,10 @@ class PowerSpectrum(ABC):
         return self.get_pk_ells_from_pt_terms(k, pt_terms, pk_data, params, alpha_perp, alpha_para)
 
     def _xi_ells_nkeep(self, kmax):
-        """Number of core k nodes with ``k <= kmax`` (``None``: ``kmax_fft / 3``)."""
-        if kmax is None:
-            kmax = self._kmax / 3
+        """Number of core k nodes with ``k <= kmax`` (``None``: ``kmax_fft / 3``, at most the cut node of ``k_cut``)."""
         k = np.asarray(self._k)
+        if kmax is None:
+            kmax = self._kmax / 3 if self._n_cut is None else min(self._kmax / 3, float(k[self._n_cut - 1]))
         n_keep = int(np.count_nonzero(k <= float(kmax) * (1.0 + 1e-12)))
         if n_keep < 2:
             raise ValueError("kmax must keep at least two nodes of the internal k grid")
@@ -256,6 +302,8 @@ class PowerSpectrum(ABC):
         zero above.  ``kmax`` is this cut on ``P_ell``, applied before the transform.  It is
         unrelated to the FFTlog band ``kmax_fft``, and small r depends on it.  The default
         ``kmax_fft / 3`` keeps out the high-k end, where the one-loop spectra are inaccurate.
+        With ``k_cut`` the default is at most the cut node, above which every term proportional
+        to P_lin(k) is zero.
         """
         pt_terms = self.get_pt_terms(pk_data, params.h)
         return self._get_xi_ells_from_pt_terms(r, pt_terms, pk_data, params, alpha_perp, alpha_para, kmax)
