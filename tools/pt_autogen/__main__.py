@@ -21,8 +21,7 @@ import sys
 import tempfile
 import time
 
-from . import (emit, ept_hankel, ept_matrix, lpt_components, lpt_cumulant, lpt_model, lpt_moments,
-               lpt_rows, lpt_verify)
+from . import emit, ept_hankel, ept_matrix, lpt_components, lpt_cumulant, lpt_model, lpt_moments, lpt_rows, lpt_verify
 
 
 def generate(parts=('ept', 'lpt')):

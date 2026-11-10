@@ -304,8 +304,8 @@ $generated_by
 #     I = Gamma(3/2 - nu1) Gamma(3/2 - nu2) Gamma(nu12 - 3/2) / (8 pi^(3/2) Gamma(nu1) Gamma(nu2) Gamma(3 - nu12)),
 #   its rational function is R(nu1, nu2) = sum over its terms c k^(2A) p^(2B) q^(2C) (q = |k - p|) of
 #   c I(nu1 - B, nu2 - C) / I(nu1, nu2): for P = sum_m c_m k^(-2 nu_m) the block adds its monomial times
-#   k^3 sum_(m1, m2) c_m1 c_m2 k^(-2 nu12) R I at (nu_m1, nu_m2) to P22 (tools/pt_autogen/ept_matrix.py), and
-#   pt_matrix.evaluate gives R I.
+#   k^3 sum_(m1, m2) c_m1 c_m2 k^(-2 nu12) R I at (nu_m1, nu_m2) to P22 (tools/pt_autogen/ept_matrix.py).
+#   pt_matrix.p22_separable_form reads R and pt_matrix.master_g, master_h are the factors of I.
 #   R = const prod_f P_f^power_f, const the rational of the block line, P_f(nu1, nu2) = sum over the term lines of
 #   factor f of coef nu1^i nu2^j (integer coefficients), power_f > 0 in the numerator, < 0 in the denominator.
 # Order: the blocks by name as strings; each block line followed by its factors f = 0, 1, .. (the numerator first,
@@ -321,7 +321,7 @@ $generated_by
 #   sight, its name 13=b1-i_bG2-j_bGamma3-k_f-l_mu-m.  Written as N / q^2 (q = |k - p|, the same N as in
 #   hankel_13.dat), its matrix is sum over the terms c k^(2A) p^(2B) q^(2C) of N of c I(nu1 - B, 1 - C), with the master
 #   integral I of matrix_22.dat, I(., <= 0) = 0 (scaleless) and I(nu1 - B, 1) = tan(pi nu1) / (8 pi (nu1 - B - 1)):
-#   the matrix is R(nu1) tan(pi nu1) / pi, which pt_matrix.evaluate gives (tools/pt_autogen/ept_matrix.py).  The b2
+#   the matrix is R(nu1) tan(pi nu1) / pi, which pt_matrix.p13_matrix gives (tools/pt_autogen/ept_matrix.py).  The b2
 #   terms and those of the renormalised operators are scaleless (asserted) and absent.
 #   R = const prod_f P_f^power_f, const the rational of the block line, P_f(nu1) = sum over the term lines of factor f
 #   of coef nu1^i (integer coefficients), power_f > 0 in the numerator, < 0 in the denominator.

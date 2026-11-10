@@ -1,16 +1,49 @@
+from typing import NamedTuple
+
 import jax.numpy as jnp
 import numpy as np
 
 from . import spline
 
+
+class PkTable(NamedTuple):
+    """An input table ``pk_data``, the ``(2, n)`` array with k in row 0 and P in row 1, prepared for evaluation by
+    :func:`prepare_pk`."""
+    ln_k: jnp.ndarray       # ln k of the nodes, the table's own nodes and the continuation nodes
+    pk: jnp.ndarray         # P at the nodes
+    slopes: jnp.ndarray     # d P / d ln k at the nodes (spline.slopes)
+
+
+def prepare_pk(pk_data, kmin=1e-4, kmax=1e4):
+    """The :class:`PkTable` of ``pk_data``, the ``(2, n)`` array with k in row 0 and P in row 1, continued by its end
+    log-slopes to ``[kmin, kmax]``.
+
+    The node slopes of the cubic interpolation in ln k are computed here once, so a table evaluated many times by
+    :func:`eval_pk` is prepared once.
+    """
+    k, pk = pk_data[0], pk_data[1]
+    k_low, k_high = _log_extrap_nodes(k, kmin, kmax)
+    pk_low, pk_high = get_log_extrap(k, pk, k_low, k_high)
+    ln_k = jnp.log(jnp.concatenate([k_low, k, k_high], axis=0))
+    pk = jnp.concatenate([pk_low, pk, pk_high], axis=0)
+    return PkTable(ln_k, pk, spline.slopes(ln_k, pk))
+
+
+def eval_pk(table, k, ascending=False):
+    """The prepared table ``table`` (:func:`prepare_pk`) at ``k``, cubic Hermite in ln k.
+
+    ``ascending`` declares a 1-D ``k`` in ascending order (the cheaper interval search of :func:`spline.hermite`).
+    """
+    return spline.hermite(jnp.log(k), table.ln_k, table.pk, table.slopes, ascending=ascending)
+
+
 def get_pk(k, pk_data, kmin=1e-4, kmax=1e4):
-    x, y = pk_data[0], pk_data[1]
-    x_low, x_high = _log_extrap_nodes(x, kmin, kmax)
-    y_low, y_high = get_log_extrap(x, y, x_low, x_high)
-    k_extrap = jnp.concatenate([x_low, x, x_high], axis=0)
-    pk_extrap = jnp.concatenate([y_low, y, y_high], axis=0)
-    pk = spline.interp1d(jnp.log(k), jnp.log(k_extrap), pk_extrap)
-    return pk
+    """``pk_data``, the ``(2, n)`` array with k in row 0 and P in row 1, at ``k``, continued by its end log-slopes to
+    ``[kmin, kmax]``.
+
+    :func:`eval_pk` of :func:`prepare_pk`.  A table evaluated many times is better prepared once.
+    """
+    return eval_pk(prepare_pk(pk_data, kmin, kmax), k)
 
 def get_log_extrap(x, y, x_low, x_high):
     """``(y_low, y_high)``: ``y`` continued to ``x_low``/``x_high`` by its end log-slopes.

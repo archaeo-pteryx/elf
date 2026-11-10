@@ -29,16 +29,18 @@ coefficient form one group, c q^p (v_1 +- v_2 +- ..) with c the coefficient of i
 array.  The values of the terms are taken in recipe order before the groups are summed, a referenced row being
 evaluated there.
 
-Why the factors sit in the inputs and the terms in groups.  XLA fuses the arithmetic of the rows, and the resampling
-of the stage-C outputs of one order, into the per-point loops of the final integral (the forward, the tangent rule and
-its transpose), where it is repeated at every (k, mu).  A multiplication in k space before stage C is made once per
-call, one in q space once per point.  The calls follow the stage-B outputs they need for the same reason, the rows
-and with them the final integral wait for no transform they do not use.  The hand-written stages had both
-properties, and the timing of the full model is sensitive to them.
+Why every row is materialized on its own.  ``pt_rows`` puts an optimization barrier on each row.  Without the barriers
+XLA fuses the arithmetic of the rows and the resampling of the stage-A and stage-C outputs into the per-point loops of
+the final integral (the forward, the tangent rule and its transpose), where it is repeated at every (k, mu).  One
+barrier on the whole array stops that too, but then every per-point loop waits for all of stage 1.  With one barrier
+per row a loop waits only for the rows it reads, and the calls of stage C follow the stage-B outputs they need, so that
+a row waits for no transform it does not use.  The factors in the inputs of stage C and the groups of terms keep the
+q-space arithmetic of a row short, and it runs once per call.
 """
 from collections import defaultdict
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 from . import fftlog
@@ -179,19 +181,19 @@ def _combination(source, arrays):
 
 def stage_b(model, xi_common, xi_own, pk_lin):
     """``{unit: (n_padded,) array}`` of rows_sources.dat on the padded k grid (module docstring, B)."""
-    hg, st, nu = model._hankel, model._source_transform, model.fftlog_settings.nu
+    hg, st = model._hankel, model._source_transform
     units = {}
     integrands = []
     for u in UNITS_22:
         terms = [_times(c, xi_common[model._xi_slot(l, UNITS[u][1])]**2) for l, c in UNITS[u][2]]
         integrands.append(sum(terms[1:], terms[0]))
-    res = fftlog.hankel(nu, st.four_pi_q3_padded * (jnp.stack(integrands) * hg.w_xi), model._q_padded, hg.k_padded,
-                        st.u_m[0], hg.npad, crop=False) * st.end_weights_Q
+    res = fftlog.hankel(st.four_pi_q3_padded * (jnp.stack(integrands) * hg.w_xi), hg.q_pow[0], st.u_m[0], hg.k_pow,
+                        hg.npad, crop=False) * st.end_weights_Q
     units.update(zip(UNITS_22, res))
     ells = st.R_source_ells
     q_l = hg.q_padded[ells]
     xis = xi_own[st.R_source_rows] * hg.w_xi
-    res = fftlog.hankel(nu, q_l**2 * xis, q_l, hg.k_padded, hg.u_m[ells], hg.npad, crop=False) * (
+    res = fftlog.hankel(q_l**2 * xis, hg.q_pow[ells], hg.u_m[ells], hg.k_pow, hg.npad, crop=False) * (
         fftlog.pad(pk_lin, hg.grid, 'zero-pad') * st.end_weights_R)
     units.update(zip(UNITS_13, res))
     return units
@@ -260,8 +262,8 @@ def m0_residual(model, coef, ref, ctx):
     the end-weighted sum of the same samples."""
     hg, st = model._hankel, model._source_transform
     source = _times(coef, product(model, ctx.xi_padded['P'], ref))
-    direct = fftlog.hankel(model.fftlog_settings.nu, st.four_pi_q3_padded * source * hg.w_xi, model._q_padded,
-                           hg.k_padded, st.u_m[0], hg.npad, crop=True)
+    direct = fftlog.hankel(st.four_pi_q3_padded * source * hg.w_xi, hg.q_pow[0], st.u_m[0], hg.k_pow, hg.npad,
+                           crop=True)
     return direct - 4 * jnp.pi * hg.q_grids[0].moment(source * hg.w_xi, 3)
 
 
@@ -343,4 +345,7 @@ def pt_rows(model, pk_lin):
     source_arrays = sources(model, stage_b(model, padded['P'], xi_own[SPECTRA.index('P')], pk_lin))
     ctx = _Context(model, spectra, padded, core, stage_c(model, source_arrays),
                    constants(model, source_arrays, spectra))
-    return jnp.stack([ctx.row(name) for name in ROW_NAMES], axis=0)
+    # One barrier per row materializes the rows once (module docstring).  Without them XLA repeats the row
+    # arithmetic and the resampling in the per-point fusions of the final integral at every (k, mu), and
+    # get_pk_ells takes 1.2x and its chi2 gradient 1.3x the time (lmax 5).
+    return jnp.stack([jax.lax.optimization_barrier(ctx.row(name)) for name in ROW_NAMES], axis=0)

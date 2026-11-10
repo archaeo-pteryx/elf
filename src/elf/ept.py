@@ -1,3 +1,35 @@
+"""One-loop Eulerian PT galaxy power spectrum in redshift space, :class:`EPT`.
+
+The loop is a sum of blocks, a monomial of (mu, f, bias) times a function of k on the core grid (the P22 blocks and
+the P13 kernels, the P13 blocks divided by P(k)), interpolated in ln k at the true k.  Two methods give the blocks:
+
+'hankel' (default)
+    the FFTlog chain P(k) -> xi_l^n(q) -> blocks of the tables ``tables/ept/hankel_<22|13>.dat``.
+
+'matrix' (valid for k in [3e-3, 3] h/Mpc)
+    the power-law decomposition of P on the N nodes k_j = k_0 e^(j dln) of the core grid,
+    P(k_j) = k_j^nu sum_m a_m e^(2 pi i m j / N), m = -N/2 .. N/2 - 1 (:func:`fftlog.power_law_coefficients`, one bias
+    nu per group of blocks, ``FFTlogSettings.nu_matrix_*``), with the kernels of ``tables/ept/matrix_<22|13|uv>.dat``
+    (:mod:`pt_matrix`).  With nu_m = -(nu + i eta_m) / 2, eta_m = 2 pi m / (N dln), a P22 block is
+
+        k_j^(3 + 2 nu) Re sum_(m1, m2) M(nu_m1, nu_m2) a_m1 a_m2 e^(2 pi i (m1 + m2) j / N),   M = R I.
+
+    The master integral factorizes, I(nu1, nu2) = g(nu1) g(nu2) h(nu1 + nu2), and the rational factor of every block
+    separates, R = const u(nu1) u(nu2) sum_b s_b(nu1 + nu2) (nu1 nu2)^b with b = 0, 1 (``pt_matrix``).  nu1 + nu2 is
+    fixed on the anti-diagonal m1 + m2 = s, so the sum over it is
+
+        D_s = const h(nu12) sum_b s_b(nu12) (G_b * G_b)(s),   G_b(m) = a_m g(nu_m) u(nu_m) nu_m^b,
+
+    '*' the linear convolution, by FFTs of length 2N, one per (decomposition, u, b) and shared by the blocks.  The
+    phase e^(2 pi i s j / N) depends only on s mod N: the fold D_r + D_(r + N) and one inverse FFT per block give the
+    block on the grid (an identity on the N nodes, not an extrapolation in k).  A P13 kernel is
+    k_j^(3 + nu) Re sum_m M(nu_m) a_m e^(2 pi i m j / N), M = R(nu) tan(pi nu) / pi, one inverse FFT per block; the UV
+    term k^2 P(k) pk_int Z1 Z3_UV is one more P13 row (pk_int = (1/2 pi^2) int dk P, its k^2 applied at the true k).
+    Rounding: an FFT convolution has the error ~eps max|G_b * G_b| at every s, while |G_b(m)| falls by ~9 decades
+    over m at N = 512; in the three blocks whose two b-terms cancel 50-150x (f^4 mu^6, b1 f^3 mu^4, b1^2 f^2 mu^2)
+    this reaches ~1e-10 of the block near k ~ 2.3 and ~2e-12 of the P_ell peaks.  The floor grows about 3.5x per
+    doubling of N and reaches ~2e-5 of a block outside the valid range of k.
+"""
 import re
 from typing import NamedTuple, Optional
 import numpy as _np
@@ -64,9 +96,9 @@ class PTTerms(NamedTuple):
     last row is the UV constant ``(1/2 pi^2) int dk P`` with p = 2).
     ``pk_int2 = (1/2 pi^2) int dk k^2 P^2`` is the b2^2 constant.  ``*_nw`` are the same
     for the no-wiggle spectrum (None without ``do_irres``).  The no-wiggle data
-    ``pk_nw_data``, ``Sigma2``, ``dSigma2`` (as in the LPT ``PTTerms``) are present
-    whenever the IR resummation or the 'linear_ir_resum' counterterm base needs them,
-    and None otherwise.
+    ``pk_nw_data`` (the ``(2, n)`` no-wiggle table, k in row 0 and P_nw in row 1),
+    ``Sigma2``, ``dSigma2`` (as in the LPT ``PTTerms``) are present whenever the IR
+    resummation or the 'linear_ir_resum' counterterm base needs them, and None otherwise.
     """
 
     p22: jnp.ndarray
@@ -103,8 +135,8 @@ class EPT(PowerSpectrum):
         :class:`base.PowerSpectrum` (``counterterm_base`` 'linear_ir_resum' or
         'linear'; ``subtract_k0_const`` drops the b2^2 k -> 0 constant).
         ``do_irres`` switches the IR resummation of tree level and loop.
-        ``method``: 'hankel' (FFTlog) or 'matrix' (power-law-decomposition
-        matrices, valid only for k in [3e-3, 3] h/Mpc).
+        ``method``: 'hankel' (FFTlog) or 'matrix' (the power-law decomposition with
+        the master integral, valid only for k in [3e-3, 3] h/Mpc; module docstring).
         """
 
         if method not in ('matrix', 'hankel'):
@@ -145,15 +177,19 @@ class EPT(PowerSpectrum):
         _, lnm_22, self.coeff_info_22 = _read_coeff_tables('22')
         self.pkmu_coeff_names_13, lnm_13, self.coeff_info_13 = _read_coeff_tables('13')
         # m stays a static numpy array: it selects the m = 0 residual branch at trace time.
-        self._ln_22 = jnp.asarray(lnm_22[:, :2], dtype=jnp.int32)
         self._m_22 = lnm_22[:, 2]
-        self._lnm_13 = jnp.asarray(lnm_13)
+        # the static orders l of the P22 blocks, for their resampling onto q_padded[0] (_set_hankel)
+        self._l_22 = lnm_22[:, 0].astype(int)
+        # the static orders l of the P13 blocks, the kernels u_m[l] of their backward transforms (_q_to_k)
+        self._l_13 = lnm_13[:, 0].astype(int)
+        # the powers k^m of the blocks, computed once here because XLA does not fold a power of constants
+        self._k_pow_22 = self._k[None, :] ** self._m_22[:, None]
+        self._k_pow_13 = self._k[None, :] ** lnm_13[:, 2][:, None]
 
         # the forward transforms xi_l^n are those of the (l, n) of the P22 and P13 blocks, by l and then by n
         # descending, each in its own slot of _get_xi_ln_array (_xi_slot), not at the index [l, n] of a fixed array
         ln_pairs = sorted({(int(l), int(n)) for l, n, _ in lnm_22} | {(int(l), int(n)) for l, n, _ in lnm_13},
                           key=lambda ln: (ln[0], -ln[1]))
-        self._ln_list = jnp.array(ln_pairs)
         self._ln_list_static = tuple(ln_pairs)
         self._xi_slots = {ln: i for i, ln in enumerate(ln_pairs)}
         self._slot_22 = jnp.asarray([self._xi_slot(l, n) for l, n, _ in lnm_22], dtype=jnp.int32)
@@ -176,137 +212,142 @@ class EPT(PowerSpectrum):
 
         The padded grid and end weights of the input also serve both methods' ``pk_int2``,
         the matrix UV constant and the ``get_xi_ells`` transforms.  The forward chain
-        ``P(k) -> xi_l^n(q)`` (:func:`fftlog.forward_transform`) has all seven rows with
-        the input bias ``nu_xi`` and again with ``nu_xi_n0``, each one rfft shared by the
-        rows, kernel ``g_l`` at ``nu_in + n + 3`` with the low-ringing phase of ``nu``, so
-        row (l, n) lands on ``q_padded[l]``, the conjugate grid of the backward kernel
-        ``u_m[l]``.  The n = 0 rows take the ``nu_xi_n0`` result.
+        ``P(k) -> xi_l^n(q)`` (:func:`fftlog.forward_transform`) has the seven rows with the
+        kernel bias ``nu`` (the n = -2 rows ``nu_n2``), one rfft per row, and the low-ringing
+        phase of ``nu``, so row (l, n) lands on ``q_padded[l]``, the conjugate grid of the
+        backward kernel ``u_m[l]``.  ``_p22_resampling`` takes the sources of the P22 blocks from
+        ``q_padded[l]`` onto ``q_padded[0]`` with the fixed weights of ``spline.resampling`` (the
+        cubic interpolation of ``spline.interp1d`` in ln q), weights ``(nterms, n_padded, width)``.
         """
         self._hankel = fftlog.HankelGrids(self._k, self.fftlog_settings, self.pad_mode, lmax)
         self._set_xi_ells_transform()
 
+        fs = self.fftlog_settings
         ells = [l for l, _ in self._ln_list_static]
         ns = [n for _, n in self._ln_list_static]
-        self._xi_forward = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, ells, ns, nu_in=self.fftlog_settings.nu_xi)
-        self._xi_forward_n0 = fftlog.forward_transform(self._hankel.grid, self.fftlog_settings.nu, ells, ns, nu_in=self.fftlog_settings.nu_xi_n0)
-        self._xi_n0_mask = jnp.array(
-            [n == 0 for _, n in self._ln_list_static], dtype=bool
-        )
+        # an exception to the bias rule, the n = -2 rows keep the kernel bias nu_n2 on the (l, nu) grid
+        self._xi_forward = fftlog.forward_transform(self._hankel.grid, fs.nu, ells, ns,
+                                                    nu_kernel=[fs.nu_n2 if n == -2 else fs.nu for n in ns])
+        log_q = _np.log(_np.asarray(self._hankel.q_padded))
+        self._p22_resampling = spline.resampling(log_q[0], log_q[self._l_22])
 
     def _initialize_loop_matrix(self):
-        """Matrices and monomial degrees of the ``pt_matrix`` blocks, one (mu, f, bias) monomial per block."""
-        self.matrix_block_names_22 = pt_matrix.block_names('22')
-        self.matrix_block_names_13 = pt_matrix.block_names('13')
+        """The matrix method (module docstring): block names, monomial degrees and the constants of the sums.
 
-        is_matter_22 = [not _is_bias_block(name) for name in self.matrix_block_names_22]
-        is_matter_13 = [not _is_bias_block(name) for name in self.matrix_block_names_13]
+        Each block uses the decomposition of its group, ``_nu_decomposition`` = (matter, P22 and P13 bias-operator
+        blocks; the P22 bias blocks have nu > -3/2 on purpose: they come out as I(k) - I(0) by analytic continuation).
+        The frequencies m are in the centered order -N/2 .. N/2 - 1.  P22: ``_conv_factor`` (n_conv, N) is
+        g(nu_m) u(nu_m) nu_m^b of each (decomposition ``_conv_decomposition``, u, b) in use; block t sums the
+        convolutions ``_conv_index[t, b]`` with the weights ``_conv_weight[t, b]`` = const h(nu12) s_b(nu12) at the
+        anti-diagonals p = m1 + m2 + N (zero for a b the block does not have).  P13: ``_matrix_13`` (n13, N) = M(nu_m)
+        of decomposition ``_group_13``.
+        """
+        names_22 = self.matrix_block_names_22 = pt_matrix.block_names('22')
+        names_13 = self.matrix_block_names_13 = pt_matrix.block_names('13')
 
-        matrix = self._set_matrix(self.matrix_block_names_22 + self.matrix_block_names_13)
-
-        self.matrices_22 = jnp.array([matrix[name] for name in self.matrix_block_names_22])
-        self.matrices_13 = jnp.array([matrix[name] for name in self.matrix_block_names_13])
-
-        self._idx_22_matter = jnp.array([i for i, m in enumerate(is_matter_22) if m], dtype=jnp.int32)
-        self._idx_22_bias = jnp.array([i for i, m in enumerate(is_matter_22) if not m], dtype=jnp.int32)
-        self._idx_13_matter = jnp.array([i for i, m in enumerate(is_matter_13) if m], dtype=jnp.int32)
-        self._idx_13_bias = jnp.array([i for i, m in enumerate(is_matter_13) if not m], dtype=jnp.int32)
-
-        self.matrices_22_matter = self.matrices_22[self._idx_22_matter]
-        self.matrices_22_bias = self.matrices_22[self._idx_22_bias]
-        self.matrices_13_matter = self.matrices_13[self._idx_13_matter]
-        self.matrices_13_bias = self.matrices_13[self._idx_13_bias]
-
-        def get_degree_vector(name):
+        def degree_vector(name, prefix):
             d = get_degree_dict(name)
-            if name in self.matrix_block_names_22:
-                return [d['mu'], d['f'], d['b1'], d['b2'], d['bG2'], 0]
-            else:
-                return [d['mu'], d['f'], d['b1'], 0, d['bG2'], d['bGamma3']]
-
-        self.degrees_22 = jnp.array([get_degree_vector(name) for name in self.matrix_block_names_22])
-        self.degrees_13 = jnp.array([get_degree_vector(name) for name in self.matrix_block_names_13])
-
-    def _set_matrix(self, names):
-        """PT matrices of the given blocks at the decomposition bias of their group (numpy)."""
-        eta_m = _np.asarray(fftlog.LogGrid(self._k, 0).eta_full)
-        groups = {}
-        for name in names:
-            if not name.startswith(('22', '13')):
-                raise KeyError('PT kernel name %s is invalid.' % (name))
-            if not _is_bias_block(name):
-                nu = self.fftlog_settings.nu_matrix_matter
-            elif name in self.matrix_block_names_22:
-                nu = self.fftlog_settings.nu_matrix_p22_bias
-            else:
-                nu = self.fftlog_settings.nu_matrix_p13_bias
-            groups.setdefault((name[:2], nu), []).append(name)
-
-        matrix = {}
-        for (prefix, nu), group in groups.items():
-            nu_m = -0.5 * (nu + eta_m * 1j)
             if prefix == '22':
-                nu_m1, nu_m2 = _np.meshgrid(nu_m, nu_m)
-                values = [m.T for m in pt_matrix.evaluate('22', group, nu_m1, nu_m2)]
-            else:
-                values = pt_matrix.evaluate('13', group, nu_m)
-            matrix.update(zip(group, values))
+                return [d['mu'], d['f'], d['b1'], d['b2'], d['bG2'], 0]
+            return [d['mu'], d['f'], d['b1'], 0, d['bG2'], d['bGamma3']]
 
-        return matrix
+        self.degrees_22 = jnp.array([degree_vector(name, '22') for name in names_22])
+        self.degrees_13 = jnp.array([degree_vector(name, '13') for name in names_13])
+
+        fs = self.fftlog_settings
+        self._nu_decomposition = (fs.nu_matrix_matter, fs.nu_matrix_p22_bias, fs.nu_matrix_p13_bias)
+        nu_decomposition = _np.array(self._nu_decomposition)
+        group_22 = [1 if _is_bias_block(name) else 0 for name in names_22]
+        group_13 = [2 if _is_bias_block(name) else 0 for name in names_13]
+        n = self._nfft
+        grid = fftlog.LogGrid(self._k, 0)
+
+        def nu_m(group):
+            """nu_m = -(nu + i eta_m) / 2 of the decomposition ``group``."""
+            return -0.5 * (nu_decomposition[group] + 1j * _np.asarray(grid.eta_full))
+
+        def nu12(group):
+            """nu_m1 + nu_m2 on the anti-diagonals p = m1 + m2 + N = 0 .. 2N - 1."""
+            return -nu_decomposition[group] - 1j * _np.pi * (_np.arange(2 * n) - n) / (n * float(grid.dln))
+
+        rows, conv_factor, conv_decomposition = {}, [], []
+        forms = [pt_matrix.p22_separable_form(name) for name in names_22]
+        conv_index = _np.zeros((len(names_22), max(len(form.s) for form in forms)), dtype=int)
+        conv_weight = _np.zeros(conv_index.shape + (2 * n,), dtype=complex)
+        for t, (group, form) in enumerate(zip(group_22, forms)):
+            nu, nu_pair = nu_m(group), nu12(group)
+            for b in range(len(form.s)):
+                key = (group, form.u, b)
+                if key not in rows:
+                    rows[key] = len(conv_factor)
+                    conv_factor.append(pt_matrix.master_g(nu) * form.u_at(nu) * nu**b)
+                    conv_decomposition.append(group)
+                conv_index[t, b] = rows[key]
+                conv_weight[t, b] = form.const * pt_matrix.master_h(nu_pair) * form.s_at(b, nu_pair)
+        # p = 2N - 1 is the sum of no two indices m + N/2 < N: its convolution is rounding noise
+        conv_weight[..., -1] = 0.0
+        matrix_13 = _np.array([pt_matrix.p13_matrix(name, nu_m(group)) for name, group in zip(names_13, group_13)])
+        if not all(_np.all(_np.isfinite(x)) for x in (conv_factor, conv_weight, matrix_13)):
+            raise ValueError('a matrix-method kernel has a pole on the frequency grid (FFTlogSettings.nu_matrix_*)')
+
+        k = _np.asarray(self._k)
+        self._conv_factor = jnp.asarray(_np.array(conv_factor))
+        self._conv_decomposition = _np.array(conv_decomposition)
+        self._conv_index = conv_index
+        self._conv_weight = jnp.asarray(conv_weight)
+        self._k_factor_22 = jnp.asarray(k[None, :] ** (3 + 2 * nu_decomposition[group_22, None]))
+        self._matrix_13 = jnp.asarray(matrix_13)
+        self._group_13 = _np.array(group_13)
+        self._k_factor_13 = jnp.asarray(k[None, :] ** (3 + nu_decomposition[group_13, None]))
 
     @partial(jit, static_argnames=['self'])
     def get_pt_terms(self, pk_data, h):
-        """The :class:`PTTerms` of ``pk_data``.
+        """The :class:`PTTerms` of ``pk_data`` (the ``(2, n)`` array of the input table, k [h/Mpc] in row 0 and P_lin
+        in row 1).
 
         ``h`` enters only the wiggle/no-wiggle split, computed when ``do_irres`` or the
         'linear_ir_resum' base needs it.  ``h=None`` works only without them.
         """
         k = self._k
-        pk = self._pk_at(k, pk_data)
+        pk = self._pk_eval(self._prepare(pk_data), k)
         if self.do_irres or self.counterterm_base == 'linear_ir_resum':
             pk_nw_data, Sigma2, dSigma2 = self._get_ir_data(pk_data, h)
         else:
             pk_nw_data = Sigma2 = dSigma2 = None
-        if self.do_irres:
+        if not self.do_irres:
+            p22, p13_kernel = self._get_blocks(pk)
+            p22_nw = p13_kernel_nw = None
+        else:
             # pk is rebuilt as pk_nw + pk_w on purpose: that sum is what the IR pipeline transforms
-            pk_nw = self._pk_at(k, pk_nw_data)
+            pk_nw = self._pk_eval(self._prepare(pk_nw_data), k)
             pk_w = pk - pk_nw
             pk = pk_nw + pk_w
-        p22, p13_kernel = self._get_blocks(pk)
+            # the full and the no-wiggle spectrum through one chain
+            (p22, p22_nw), (p13_kernel, p13_kernel_nw) = self._get_blocks(jnp.stack([pk, pk_nw]))
         # the end weight multiplies P^2 once
         pk_int2 = self._hankel.grid.moment(
             self._hankel.w_input * fftlog.pad(pk, self._hankel.grid, self._hankel.pad_mode)**2, 3) / (2 * jnp.pi**2)
-        if self.do_irres:
-            p22_nw, p13_kernel_nw = self._get_blocks(pk_nw)
-        else:
-            p22_nw = p13_kernel_nw = None
         return PTTerms(p22=p22, p13_kernel=p13_kernel, pk_int2=pk_int2,
                        p22_nw=p22_nw, p13_kernel_nw=p13_kernel_nw,
                        pk_nw_data=pk_nw_data, Sigma2=Sigma2, dSigma2=dSigma2)
 
     def _get_blocks(self, pk):
-        """``(p22, p13_kernel)`` of one spectrum on the core k grid for ``self.method``.
+        """``(p22, p13_kernel)`` of the spectra ``pk`` on the core k grid for ``self.method``.
 
-        hankel: P13 kernel = ``k^m H_l[q^2 xi_l^n]``.  matrix: power-law decomposition,
-        and the last P13 row is the UV constant ``pk_int``.
+        ``pk`` is ``(nfft,)`` or ``(n_spectra, nfft)``, transformed together, and the blocks have the same leading
+        axis.  With 'hankel' the P13 kernel is ``k^m H_l[q^2 xi_l^n]``; with 'matrix' (:meth:`_matrix_blocks`) the last
+        P13 row is the UV constant ``pk_int``.
         """
         if self.method == 'matrix':
-            p_q_matter = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_matter)
-            # nu > -3/2 on purpose: the P22 bias blocks come out as I(k) - I(0) by analytic continuation
-            p_q_p22_bias = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_p22_bias)
-            p_q_p13_bias = fftlog.power_law_decomposition(pk, self._k, self.fftlog_settings.nu_matrix_p13_bias)
-            p22 = self._matrix_p22_blocks(p_q_matter, p_q_p22_bias)
-            p13_kernel = self._matrix_p13_kernels(p_q_matter, p_q_p13_bias)
-            pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk), 1) / (2 * jnp.pi**2)
-            # UV block: a row constant in k, its k^2 is applied at the true k (_k_power_13)
-            uv = jnp.broadcast_to(pk_int, (1, self._nfft))
-            return p22, jnp.concatenate([p13_kernel, uv], axis=0)
+            return self._matrix_blocks(pk)
 
         xi_ln = self._get_xi_ln_array(pk)
-        p22 = self._get_p22_blocks(xi_ln)
-        p13_kernel = self._get_p13_kernel_blocks(xi_ln)
-        return p22, p13_kernel
+        p22_blocks, p13_kernel_blocks = self._get_p22_blocks, self._get_p13_kernel_blocks
+        if pk.ndim == 2:
+            p22_blocks, p13_kernel_blocks = jax.vmap(p22_blocks), jax.vmap(p13_kernel_blocks)
+        return p22_blocks(xi_ln), p13_kernel_blocks(xi_ln)
 
-    def _pkmu_true(self, k_true, mu_true, sin_true, pt_terms, pk_data, params):
+    def _pkmu_true(self, k_true, mu_true, sin_true, pt_terms, linear, params):
         """Tree level plus one loop at the true (k, mu) (``sin_true`` unused).
 
         ``L[P] = sum_b p22_b C22_b(mu) + P sum_b k^{p_b} p13_kernel_b C13_b(mu)`` (``p_b`` =
@@ -315,12 +356,13 @@ class EPT(PowerSpectrum):
         ``D = k^2 Sigma^2_s`` (``damp_exponent``).  The b2^2 constant ``b2 b2'/2 pk_int2`` is
         added after, undamped.  Primes denote the second tracer ``params.bias_b``.
 
-        The blocks are interpolated in ln k at the true k.
+        The blocks are interpolated in ln k at the true k.  ``linear`` is the tuple of
+        ``_linear_at``.
         """
         f = params.f
         bias_a = params.bias_a
         bias_b = params.bias_b
-        pk, pk_nw, pk_w, damp_exponent = self._linear_at(k_true, mu_true, f, pt_terms, pk_data)   # (nk, nmu)
+        pk, pk_nw, pk_w, damp_exponent = linear                       # (nk, nmu)
 
         # mu powers as products: mu ** p with p = 0 has a NaN derivative at mu = 0.
         mu_pows = [jnp.ones_like(mu_true)]
@@ -372,64 +414,58 @@ class EPT(PowerSpectrum):
             pkmu = pkmu + (bias_a[1] * bias_b[1]) / 2. * pt_terms.pk_int2
         return pkmu
 
-    def _merge_groups(self, idx_matter, blocks_matter, idx_bias, blocks_bias):
-        """``k^3 Re[blocks]`` with the matter/bias group rows put back at ``idx_matter``/``idx_bias``."""
-        out = jnp.zeros((idx_matter.shape[0] + idx_bias.shape[0], self._nfft), dtype=blocks_matter.dtype)
-        out = out.at[idx_matter].set(blocks_matter).at[idx_bias].set(blocks_bias)
-        return (self._k**3)[None, :] * jnp.real(out)
-
-    def _matrix_p22_blocks(self, p_q_matter, p_q_bias):
-        """Matrix-path P22 blocks from the decompositions of the matter and bias groups."""
-        return self._merge_groups(
-            self._idx_22_matter,
-            jnp.einsum('tnm,nj,mj->tj', self.matrices_22_matter, p_q_matter, p_q_matter),
-            self._idx_22_bias,
-            jnp.einsum('tnm,nj,mj->tj', self.matrices_22_bias, p_q_bias, p_q_bias))
-
-    def _matrix_p13_kernels(self, p_q_matter, p_q_bias):
-        """Matrix-path P13 kernels (blocks without their outer P(k)) from the matter and bias decompositions."""
-        return self._merge_groups(
-            self._idx_13_matter, jnp.einsum('tn,nj->tj', self.matrices_13_matter, p_q_matter),
-            self._idx_13_bias, jnp.einsum('tn,nj->tj', self.matrices_13_bias, p_q_bias))
+    def _matrix_blocks(self, pk):
+        """``(p22, p13_kernel)`` of the matrix method (module docstring) for the spectra ``pk`` ``(..., nfft)``."""
+        n = self._nfft
+        a = jnp.stack([fftlog.power_law_coefficients(pk, self._k, nu) for nu in self._nu_decomposition], axis=-2)
+        # P22: G_b(m) = a_m g u nu_m^b, G_b * G_b at p = m1 + m2 + N (FFTs of length 2N), the weighted sum over b and
+        # the fold s = p - N -> s mod N, one inverse FFT per block
+        g = a[..., self._conv_decomposition, :] * self._conv_factor
+        fg = jnp.fft.fft(g, n=2 * n)
+        conv = jnp.fft.ifft(fg * fg)
+        d = jnp.sum(conv[..., self._conv_index, :] * self._conv_weight, axis=-2)
+        d = d[..., :n] + d[..., n:]
+        p22 = self._k_factor_22 * jnp.real(jnp.fft.ifft(d, norm='forward'))
+        # P13: M(nu_m) a_m in frequency order (m mod N), one inverse FFT per block
+        x = jnp.fft.ifftshift(a[..., self._group_13, :] * self._matrix_13, axes=-1)
+        p13_kernel = self._k_factor_13 * jnp.real(jnp.fft.ifft(x, norm='forward'))
+        pk_int = self._hankel.grid.moment(self._hankel.pad_input(pk), 1) / (2 * jnp.pi**2)
+        # UV block: a row constant in k, its k^2 is applied at the true k (_k_power_13)
+        uv = jnp.broadcast_to(pk_int[..., None, None], pk.shape[:-1] + (1, n))
+        return p22, jnp.concatenate([p13_kernel, uv], axis=-2)
 
     def _get_xi_ln_array(self, array):
-        """Forward transforms of ``array``, ``(n_pairs, n_padded)``: the slot ``_xi_slot(l, n)`` holds xi_l^n on
-        ``q_padded[l]`` (upper padded band zeroed)."""
+        """Forward transforms of the spectra ``array`` ``(..., nfft)``, shape ``(..., n_pairs, n_padded)``.  The slot
+        ``_xi_slot(l, n)`` holds xi_l^n on ``q_padded[l]`` (upper padded band zeroed)."""
         fx = self._hankel.pad_input(array / (2 * jnp.pi**2))
-        xis = self._xi_forward.apply(fx, self._hankel.grid)
-        xis_n0 = self._xi_forward_n0.apply(fx, self._hankel.grid)
-        return jnp.where(self._xi_n0_mask[:, None], xis_n0, xis) * self._hankel.mask_xi
+        return self._xi_forward.apply(fx[..., None, :]) * self._hankel.mask_xi
 
     def _q_to_k(self, l, n, array):
-        """Backward FFTlog of a source on ``q_padded[l]`` onto the core k grid."""
+        """Backward FFTlog of a source on ``q_padded[l]`` onto the core k grid.
+
+        ``l`` is a Python int or a static numpy array of orders (then ``array`` is ``(n_rows, n)``, row i on
+        ``q_padded[l[i]]``), ``n`` a Python int.
+        """
+        hg = self._hankel
         # w_xi: end weight 1/2 at the support edge (FFTlog's m = 0 coefficient is the node sum)
-        fx = array * self._hankel.q_padded[l]**(n + 3) * self._hankel.w_xi
-        return fftlog.hankel(self.fftlog_settings.nu, fx, self._hankel.q_padded[l], self._hankel.k_padded,
-                             self._hankel.u_m[l], self._hankel.npad, crop=True)
+        fx = array * hg.q_padded[l]**(n + 3) * hg.w_xi
+        return fftlog.hankel(fx, hg.q_pow[l], hg.u_m[l], hg.k_pow, hg.npad, crop=True)
 
     def _get_p22_blocks(self, xi_ln):
         """P22 blocks ``(nterms, nk)`` in ``coeff_info_22`` order, from ``xi_ln`` of ``_get_xi_ln_array`` (by slot).
 
         ``B(k) = 4 pi int dq q^2 (xi_l^n)^2 j_0(kq)``; block = ``k^m B`` for m > 0 and
-        ``B - C`` for m = 0, ``C = 4 pi dln sum_j w_j q_j^3 (xi_l^n)_j^2``.
+        ``B - C`` for m = 0, ``C = 4 pi dln sum_j w_j q_j^3 (xi_l^n)_j^2``.  The sources (xi_l^n)^2 are
+        resampled from ``q_padded[l]`` onto ``q_padded[0]`` with the fixed weights ``_p22_resampling``.
         """
-        def block(l, slot):
-            xi = xi_ln[slot]
-            source = spline.interp1d(jnp.log(self._hankel.q_padded[0]),
-                                     jnp.log(self._hankel.q_padded[l]), xi * xi)
-            pk_ln = 4 * jnp.pi * self._q_to_k(0, 0, source)
-            # end-weighted node sum of the same source, not B(k_min), which carries the output edge error
-            c0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(source * self._hankel.w_xi, 3)
-            return pk_ln, c0
-
-        pk_ln, c0 = jax.vmap(block)(self._ln_22[:, 0], self._slot_22)      # (nterms, nk), (nterms,)
+        sources = spline.resample(self._p22_resampling, xi_ln[self._slot_22]**2)      # (nterms, n) on q_padded[0]
+        pk_ln = 4 * jnp.pi * self._q_to_k(0, 0, sources)
+        # end-weighted node sum of the same source, not B(k_min), which carries the output edge error
+        c0 = 4 * jnp.pi * self._hankel.q_grids[0].moment(sources * self._hankel.w_xi, 3)
         m = self._m_22[:, None]                        # static
-        return jnp.where(m == 0, pk_ln - c0[:, None], self._k ** m * pk_ln)
+        return jnp.where(m == 0, pk_ln - c0[:, None], self._k_pow_22 * pk_ln)
 
     def _get_p13_kernel_blocks(self, xi_ln):
-        """P13 kernel blocks ``(nterms, nk)`` in ``_lnm_13`` order: ``k^m H_l[q^2 xi_l^n]``, ``xi_ln`` by slot."""
-
-        def get_p13_kernel(l, slot, m):
-            pk_ln = self._q_to_k(l, -1, xi_ln[slot])  # (nk,)
-            return (self._k ** m) * pk_ln
-        return jax.vmap(get_p13_kernel)(self._lnm_13[:, 0], self._slot_13, self._lnm_13[:, 2])  # (nterms, nk)
+        """P13 kernel blocks ``(nterms, nk)`` in the block order of ``tables/ept/hankel_13.dat``:
+        ``k^m H_l[q^2 xi_l^n]``, ``xi_ln`` by slot."""
+        return self._k_pow_13 * self._q_to_k(self._l_13, -1, xi_ln[self._slot_13])

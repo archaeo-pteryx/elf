@@ -5,7 +5,8 @@
 * the runtime (``elf.pt_coeff``, ``elf.pt_matrix``) decodes the committed tables into the exact
   generator output: the Hankel rows and the matrix constants, factors and UV rows are the floats
   of the exact rationals;
-* its matrices agree with the exact rational functions.
+* its kernels (the separable form of the P22 blocks, the master integral and the P13 matrices) agree
+  with the exact functions.
 """
 import os
 import sys
@@ -73,27 +74,36 @@ def test_runtime_reads_matrix_tables(generated):
 
 
 def test_runtime_matrices_match_exact_rationals(generated):
-    """``pt_matrix.evaluate`` (numpy, from the committed tables) against the exact
-    rational functions evaluated with mpmath at a few complex points."""
+    """The kernels of ``pt_matrix`` (numpy, from the committed tables) against the exact rational
+    functions evaluated with mpmath at a few complex points: the separable form
+    ``const u(nu1) u(nu2) sum_b s_b(nu1 + nu2) (nu1 nu2)^b`` of R of the P22 blocks, the master
+    integral ``g(nu1) g(nu2) h(nu1 + nu2)`` and ``R(nu) tan(pi nu) / pi`` of the P13 blocks."""
     from elf import pt_matrix
     gen = generated
     nu1, nu2 = sp.symbols('nu1 nu2')
     mp.mp.dps = 30
     points = np.array([0.15 + 0.7j, 0.15 - 3.1j, 0.5 + 9.3j, -0.4 + 0.2j])
     a, b = np.meshgrid(points, points[::-1])
+    mpc = lambda z: mp.mpc(z.real, z.imag)
     worst = 0.0
     for prefix in ('22', '13'):
         names = pt_matrix.block_names(prefix)
         assert names == sorted(gen['m' + prefix])
-        if prefix == '22':
-            values = pt_matrix.evaluate('22', names, a, b)
-            outer = pt_matrix.get_I(a, b)
-        else:
-            values = pt_matrix.evaluate('13', names, points)
-            outer = np.tan(np.pi * points) / np.pi
-        for name, value in zip(names, values):
+        for name in names:
+            if prefix == '22':
+                form = pt_matrix.p22_separable_form(name)
+                value = form.const * form.u_at(a) * form.u_at(b) * sum(
+                    form.s_at(i, a + b) * (a * b)**i for i in range(len(form.s)))
+                args = (a, b)
+            else:
+                value = pt_matrix.p13_matrix(name, points) / (np.tan(np.pi * points) / np.pi)
+                args = (points,)
             R = sp.lambdify((nu1, nu2) if prefix == '22' else (nu1,), gen['m' + prefix][name], 'mpmath')
-            args = (a, b) if prefix == '22' else (points,)
-            exact = np.vectorize(lambda *z: complex(R(*[mp.mpc(v.real, v.imag) for v in z])))(*args)
-            worst = max(worst, np.max(np.abs(value / outer - exact) / np.abs(exact)))
+            exact = np.vectorize(lambda *z: complex(R(*[mpc(v) for v in z])))(*args)
+            worst = max(worst, np.max(np.abs(value - exact) / np.abs(exact)))
+    master = pt_matrix.master_g(a) * pt_matrix.master_g(b) * pt_matrix.master_h(a + b)
+    exact = np.vectorize(lambda x, y: complex(
+        mp.gamma(1.5 - mpc(x)) * mp.gamma(1.5 - mpc(y)) * mp.gamma(mpc(x) + mpc(y) - 1.5)
+        / (8 * mp.pi**1.5 * mp.gamma(mpc(x)) * mp.gamma(mpc(y)) * mp.gamma(3 - mpc(x) - mpc(y)))))(a, b)
+    worst = max(worst, np.max(np.abs(master - exact) / np.abs(exact)))
     assert worst < 1e-13, worst

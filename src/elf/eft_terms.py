@@ -37,16 +37,16 @@ class Counterterms:
                 f"'zeldovich', got {self.base!r}"
             )
 
-    def kspace_base_pk(self, linear_at):
+    def kspace_base_pk(self, linear):
         """Base spectrum of the k-space counterterms, None for 'zeldovich'.
 
-        ``linear_at()`` returns ``(pk, pk_nw, pk_w, damp_exponent)`` at the true k
-        (``base.PowerSpectrum._linear_at``) and is called only for the k-space bases.
+        ``linear`` is ``(pk, pk_nw, pk_w, damp_exponent)`` at the true k
+        (``base.PowerSpectrum._linear_at``).
         'linear' gives ``pk`` and 'linear_ir_resum' ``pk_nw + exp(-damp_exponent) pk_w``.
         """
         if self.base == "zeldovich":
             return None
-        pk, pk_nw, pk_w, damp_exponent = linear_at()
+        pk, pk_nw, pk_w, damp_exponent = linear
         if self.base == "linear":
             return pk
         return pk_nw + jnp.exp(-damp_exponent) * pk_w

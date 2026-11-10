@@ -4,4 +4,4 @@ Not installed with elf; sympy is its dependency only.  Run it from the repositor
 ``PYTHONPATH=tools python -m pt_autogen regenerate|check``.
 """
 
-GENERATOR_VERSION = 'pt_autogen 1.3 (2026-10-24): EPT text tables'
+GENERATOR_VERSION = 'pt_autogen 1.6 (2026-11-10): matrix table headers'

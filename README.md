@@ -87,7 +87,8 @@ pk_ab = model.get_pk_ells(k, pk_data, params_ab)
 | `subtract_k0_const` | `False` | drop the constant `b2^2` term of `P_22` |
 | `method` (`EPT`) | `'hankel'` | `'hankel'` or `'matrix'` (the latter valid for `k` in `[3e-3, 3]` h/Mpc) |
 | `do_irres` (`EPT`) | `True` | IR resummation of the BAO |
-| `lmax` (`LPT`) | `5` | order of the angular expansion of the LPT integral; increase for accuracy at high `k` |
+| `lmax` (`LPT`) | `5` | order of the series in `j_l` of the angular integrals of the LPT integral|
+| `tangent_rule` (`LPT`) | `True` | derivatives of the LPT integral by its tangent rule (`False`: plain autodiff of the same loop, slow on CPU) |
 
 ### Authors
 

@@ -1,9 +1,9 @@
 """FFTlog / Mellin primitives shared by the EPT and LPT backends.
 
 Two discrete models share the Mellin coefficients ``c_m = rfft(f(x) x^{-nu})``
-on a geometric grid: the power-law decomposition (EPT ``method='matrix'``;
-unpadded grid, ``norm='forward'``, full symmetric frequencies with phase origin
-``x[0]``, ``f = Re sum_m c_m x^{nu + i eta_m}``) and the Hankel transform
+on a geometric grid: the power-law decomposition (EPT ``method='matrix'``,
+:func:`power_law_coefficients`; unpadded grid, ``norm='forward'``, ordered as the full
+symmetric frequencies, ``f = sum_m a_m x^nu (x / x[0])^{i eta_m}``) and the Hankel transform
 (:func:`hankel`; padded grid, half spectrum times the kernel of
 :func:`hankel_setup`).  Their coefficients are not interchangeable.  Only the
 input P(k) is padded; later transforms take the padded output of the previous
@@ -26,25 +26,30 @@ from .utils import get_log_extrap
 
 @dataclass(frozen=True)
 class FFTlogSettings:
-    """Numerical constants of the FFTlog pipelines (for convergence studies, not tuning)."""
+    """Numerical constants of the FFTlog pipelines (for convergence studies, not tuning).
+
+    Every Hankel transform of both backends has the kernel bias ``nu`` and lands on the
+    low-ringing grid of (l, nu), that is, it uses the kernels ``HankelGrids.u_m[l]`` and the
+    grids ``HankelGrids.q_padded[l]``.  A factor k^{n+3} of the integrand is folded into the
+    input bias ``nu - n - 3``.  The exceptions, each commented where it happens, are the LPT
+    theta row and ``get_xi_ells`` (``nu_n0``, each on its own low-ringing grid of
+    (l, nu_n0)), the EPT n = -2 forward rows (``nu_n2``, on the (l, nu) grid) and the LPT
+    final q -> k transform (every order on the l = 0 phase).  The ``nu_matrix_*`` are biases
+    of the power-law decomposition of EPT ``method='matrix'``, not of a Hankel transform.
+    """
 
     nu: float = 1.1
-    """Bias of the ordinary Hankel transforms of both backends.  Its low-ringing phase fixes
-    the output grids ``q_padded[l]`` of every forward transform (:func:`forward_transform`),
-    and it is the kernel bias of the LPT P -> xi_l^n rows."""
+    """Kernel bias of every Hankel transform but the exceptions above."""
 
     nu_n0: float = 1.5
-    """LPT: bias of the source -> correlator transforms with ``n >= 0``, at any order l
-    (currently only ``theta``).  It suppresses the periodic image ``e^{-nu L}`` of their
-    q -> 0 plateau."""
+    """Kernel bias of the LPT source -> correlator rows with ``n >= 0`` (currently only
+    ``theta``) and of the P_ell -> xi_ell rows of ``get_xi_ells``, each on its own
+    low-ringing grid of (l, nu_n0).  It suppresses the periodic image ``e^{-nu L}`` of the
+    q -> 0 plateau of the l = 0 rows."""
 
-    nu_xi: float = -0.3
-    """EPT: input bias of the P -> xi_l^n transforms with ``n != 0`` (one rfft shared by
-    those rows, the kernel of row (l, n) has the bias ``nu_xi + n + 3``)."""
-
-    nu_xi_n0: float = -1.5
-    """The same for the ``n = 0`` rows of EPT and for the P_ell -> xi_ell transforms of
-    ``get_xi_ells`` (both backends)."""
+    nu_n2: float = 0.7
+    """EPT only, the kernel bias of the n = -2 forward rows xi_0^{-2}, xi_2^{-2}, on the
+    (l, nu) grid ``q_padded[l]``."""
 
     nu_matrix_matter: float = -0.3
     """EPT matrix: decomposition bias of the matter P22 and P13 blocks."""
@@ -140,18 +145,13 @@ def pad(array, grid, mode):
     raise ValueError(f"unknown pad mode: {mode!r}")
 
 
-def power_law_basis(x, nu):
-    """The table ``x^{nu_m}``, ``nu_m = nu + i eta_full``, shape ``(n, n)``."""
-    nu_m = nu + 1j * LogGrid(x, 0).eta_full
-    return x[None, :] ** nu_m[:, None]
-
-
-def power_law_decomposition(fx, x, nu):
-    """Terms ``c_m x^{nu_m}`` (rows) of ``fx = Re sum_m c_m x^{nu_m}`` on the unpadded grid."""
+def power_law_coefficients(fx, x, nu):
+    """The coefficients ``a_m`` (last axis, m = -N/2 .. N/2 - 1) of the power-law decomposition
+    ``fx_j = x_j^nu sum_m a_m e^{2 pi i m j / N} = sum_m a_m x_j^nu (x_j / x_0)^{i eta_m}`` on the unpadded grid of
+    ``N`` nodes (``eta_m``: ``LogGrid.eta_full``), the DFT of ``fx x^-nu`` with ``norm='forward'``; ``fx`` is
+    ``(..., N)``."""
     c_half = jnp.fft.rfft(fx * x ** (-nu), norm='forward')
-    eta = LogGrid(x, 0).eta_full
-    c_m = x[0] ** (-1j * eta) * jnp.concatenate([c_half[::-1][:-1].conj(), c_half[:-1]], axis=0)
-    return c_m[:, None] * power_law_basis(x, nu)
+    return jnp.concatenate([c_half[..., :0:-1].conj(), c_half[..., :-1]], axis=-1)
 
 
 def _mellin_g(ell, z, eps=1e-15):
@@ -179,16 +179,17 @@ def hankel_setup(ell, nu, grid, lnxy=None):
     return lnxy, grid.conjugate(lnxy), u_m
 
 
-def hankel(nu, fx_padded, x, y, u_m, n_pad, crop=True, y_pow=None):
-    """One FFTlog pass: ``irfft(conj(rfft(fx_padded x^{-nu}) u_m)) y^{-nu}``.
+def hankel(fx_padded, x_pow, u_m, y_pow, n_pad, crop=True):
+    """One FFTlog pass ``irfft(conj(rfft(fx_padded x_pow) u_m)) y_pow`` with ``x_pow = x^-nu`` and ``y_pow = y^-nu``,
+    the powers of the input and output grids for the bias nu of the kernel ``u_m``.
 
-    Leading batch axes broadcast (one source against many kernels uses one rfft).
-    ``y_pow`` replaces ``y^{-nu}`` (then ``y`` may be None); ``crop=False`` keeps
-    the padded output for the next transform of a chain.
+    The callers pass the powers precomputed (``HankelGrids.k_pow``, ``HankelGrids.q_pow``, the fields of the transform
+    containers) because XLA does not fold a power of constants, which written here as ``x ** (-nu)`` would be
+    evaluated at every call.  Leading batch axes broadcast (one source against many kernels uses one rfft).
+    ``crop=False`` keeps the padded output for the next transform of a chain.
     """
-    c_half = jnp.fft.rfft(fx_padded * x ** (-nu))
-    res = jnp.fft.irfft(jnp.conj(c_half * u_m))
-    res = res * (y ** (-nu) if y_pow is None else y_pow)
+    c_half = jnp.fft.rfft(fx_padded * x_pow)
+    res = jnp.fft.irfft(jnp.conj(c_half * u_m)) * y_pow
     if not crop:
         return res
     n_out = res.shape[-1]
@@ -199,48 +200,40 @@ class ForwardTransform(NamedTuple):
     """Kernels of the forward transforms ``H_l^n[f](q) = int dk k^{n+2} f(k) j_l(kq) / (2 pi^2)``.
 
     Built by :func:`forward_transform`, one row per (l, n).  The input is ``f / (2 pi^2)`` on the
-    padded k grid with its padding and end weights already applied.  ``nu_in`` is the bias of its
-    rfft, and the kernel of a row has the bias ``nu_in + n + 3`` and the low-ringing phase of
-    ``(l, FFTlogSettings.nu)``, so row (l, n) lands on ``HankelGrids.q_padded[l]``.
+    padded k grid with its padding and end weights already applied.  Row i has the kernel bias
+    ``nu_kernel_i``, the input bias ``nu_kernel_i - n - 3`` (one rfft per row) and the
+    low-ringing phase of ``(l, FFTlogSettings.nu)``, so row (l, n) lands on ``HankelGrids.q_padded[l]``.
+    The power factors of the input and output grids are precomputed (:func:`hankel`).
     """
-    nu_in: object                   # float (one rfft shared by the rows) or (n_rows, 1) array (one per row)
+    x_pow: jnp.ndarray              # (n_rows, n) k^-(nu_kernel_i - n - 3), the input power of row i
     u_m: jnp.ndarray                # (n_rows, n // 2 + 1) kernels
-    y_pow: jnp.ndarray              # (n_rows, n) q^{-(nu_in + n + 3)}
+    y_pow: jnp.ndarray              # (n_rows, n) q^{-nu_kernel_i}
     q: jnp.ndarray                  # (n_rows, n) output grids
 
-    def row(self, i):
-        """The transform of row ``i`` alone (arrays without the row axis)."""
-        nu_in = self.nu_in if np.ndim(self.nu_in) == 0 else self.nu_in[i]
-        return ForwardTransform(nu_in, self.u_m[i], self.y_pow[i], self.q[i])
-
-    def apply(self, fx_padded, grid):
-        """The rows of ``fx_padded`` on ``grid`` (leading batch axes broadcast as in :func:`hankel`), uncropped."""
-        return hankel(self.nu_in, fx_padded, grid.x, None, self.u_m, grid.n_pad,
-                      crop=False, y_pow=self.y_pow)
+    def apply(self, fx_padded):
+        """The rows of ``fx_padded`` on the padded k grid of :func:`forward_transform` (leading batch axes broadcast
+        as in :func:`hankel`), uncropped."""
+        return hankel(fx_padded, self.x_pow, self.u_m, self.y_pow, 0, crop=False)
 
 
-def forward_transform(grid, nu, ells, ns, nu_in=None, nu_kernel=None):
+def forward_transform(grid, nu, ells, ns, nu_kernel):
     """:class:`ForwardTransform` of the rows ``(ells[i], ns[i])`` on the padded grid ``grid``.
 
-    ``nu`` is the ordinary bias whose low-ringing phase fixes the output grids.  Exactly one of
-    ``nu_in`` and ``nu_kernel`` is given.  ``nu_in`` (EPT, ``get_xi_ells``) is one input bias for
-    all rows, with kernels at ``nu_in + n + 3``.  ``nu_kernel`` (LPT) is one kernel bias for all
-    rows, with the input bias ``nu_kernel - n - 3`` of each row (one rfft per row).
+    ``nu`` is the bias whose low-ringing phase fixes the output grid of each row.  ``nu_kernel``
+    is the kernel bias, one float for all rows or one per row, and row i has the input bias
+    ``nu_kernel_i - ns[i] - 3`` (one rfft per row), whose power of ``grid.x`` is computed here.
     """
-    if (nu_in is None) == (nu_kernel is None):
-        raise ValueError("give exactly one of nu_in and nu_kernel")
     ells = [int(l) for l in np.asarray(ells)]
     ns = [int(n) for n in np.asarray(ns)]
+    nu_kernel = [float(v) for v in np.broadcast_to(np.asarray(nu_kernel, dtype=np.float64), (len(ells),))]
     u_ms, y_pows, qs = [], [], []
-    for l, n in zip(ells, ns):
+    for l, nu_k in zip(ells, nu_kernel):
         lnxy, q_grid, _ = hankel_setup(l, nu, grid)
-        nu_eff = nu_kernel if nu_in is None else nu_in + n + 3
-        u_ms.append(hankel_setup(l, nu_eff, grid, lnxy=lnxy)[2])
-        y_pows.append(q_grid.x ** (-nu_eff))
+        u_ms.append(hankel_setup(l, nu_k, grid, lnxy=lnxy)[2])
+        y_pows.append(q_grid.x ** (-nu_k))
         qs.append(q_grid.x)
-    if nu_in is None:
-        nu_in = (nu_kernel - (jnp.asarray(ns) + 3).astype(jnp.float64))[:, None]
-    return ForwardTransform(nu_in, jnp.stack(u_ms, axis=0), jnp.stack(y_pows, axis=0),
+    nu_in = (jnp.asarray(nu_kernel) - (jnp.asarray(ns) + 3).astype(jnp.float64))[:, None]
+    return ForwardTransform(grid.x ** (-nu_in), jnp.stack(u_ms, axis=0), jnp.stack(y_pows, axis=0),
                             jnp.stack(qs, axis=0))
 
 
@@ -279,6 +272,8 @@ class HankelGrids:
 
     ``u_m[l]`` maps ``k_padded`` onto ``q_padded[l]`` and back; ``w_input``/``w_xi`` are
     the end weights of the input model and of a forward output, ``mask_xi`` its support.
+    ``k_pow = k_padded^-nu`` ``(n,)`` and ``q_pow = q_padded^-nu`` ``(lmax + 1, n)`` are the power
+    factors of the transforms with the kernel bias nu (:func:`hankel`).
     """
 
     def __init__(self, k, settings, pad_mode, lmax):
@@ -291,6 +286,8 @@ class HankelGrids:
         self.q_grids = tuple(s[1] for s in setups)
         self.q_padded = jnp.array([g.x for g in self.q_grids])
         self.u_m = jnp.array([s[2] for s in setups])
+        self.k_pow = self.k_padded ** (-settings.nu)
+        self.q_pow = self.q_padded ** (-settings.nu)
         n_core, dln = self.grid.n_core, self.grid.dln
         self.w_input = trapezoid_weights(INPUT_SUPPORT[pad_mode], n_core, self.npad, dln)
         self.w_xi = trapezoid_weights('lower_and_core', n_core, self.npad, dln)
